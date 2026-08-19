@@ -2471,6 +2471,15 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(body.tools?.[4]?.function?.description).toContain("只返回当前扮演角色姓名或别名出现过的段落");
       expect(body.tools?.[5]?.function?.description).toContain("attachmentId");
       expect(body.tools?.[6]?.function?.description).toContain("纯计算工具");
+      expect(body.tools?.[6]?.function?.parameters).toEqual({
+        type: "object",
+        properties: {
+          startDate: { type: "string", pattern: "^-?\\d{4}-\\d{2}-\\d{2}$", description: "起始日期，格式 YYYY-MM-DD；公元前年份可在年份前加 -" },
+          endDate: { type: "string", pattern: "^-?\\d{4}-\\d{2}-\\d{2}$", description: "结束日期，格式 YYYY-MM-DD；公元前年份可在年份前加 -" }
+        },
+        required: ["startDate", "endDate"],
+        additionalProperties: false
+      });
       expect(JSON.stringify(body.tools)).not.toContain("characterId");
       expect(JSON.stringify(body.tools)).not.toContain("otherCharacter");
       if (completionCount === 1) {
@@ -2482,7 +2491,7 @@ describe("AI 供应商、模型与建议 API", () => {
           { id: "known-world", type: "function", function: { name: "recall_known", arguments: "{}" } },
           { id: "story-memory", type: "function", function: { name: "recall_story", arguments: JSON.stringify({ keyword: "飞船" }) } },
           { id: "secret-memory", type: "function", function: { name: "recall_story", arguments: JSON.stringify({ keyword: "密钥" }) } },
-          { id: "date-calculation", type: "function", function: { name: "calculate_time", arguments: JSON.stringify({ operation: "diff", startYear: 2025, startMonth: 1, startDay: 1, endYear: 2025, endMonth: 1, endDay: 8 }) } },
+          { id: "date-calculation", type: "function", function: { name: "calculate_time", arguments: JSON.stringify({ startDate: "2025-01-01", endDate: "2025-01-08" }) } },
           { id: "forbidden-index", type: "function", function: { name: "story_index", arguments: "{}" } },
           { id: "forbidden-grep", type: "function", function: { name: "grep", arguments: JSON.stringify({ keyword: "密钥" }) } }
         ] } }] }), { status: 200 });

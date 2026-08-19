@@ -1060,17 +1060,11 @@ const recallKnownArguments = z.object({
   categories: z.array(z.enum(["setting", "race", "organization"])).max(3).default([]),
   cursor: agentToolCursor
 }).strict();
+const CALCULATE_TIME_DATE_PATTERN = /^(-?\d{4})-(\d{2})-(\d{2})$/u;
+const calculateTimeDate = z.string().regex(CALCULATE_TIME_DATE_PATTERN, "日期必须使用 YYYY-MM-DD 格式");
 const calculateTimeArguments = z.object({
-  operation: z.enum(["diff", "add"]),
-  startYear: z.number().int().min(-9999).max(9999),
-  startMonth: z.number().int().min(1).max(12),
-  startDay: z.number().int().min(1).max(31),
-  endYear: z.number().int().min(-9999).max(9999).optional(),
-  endMonth: z.number().int().min(1).max(12).optional(),
-  endDay: z.number().int().min(1).max(31).optional(),
-  addYears: z.number().int().min(-9999).max(9999).optional(),
-  addMonths: z.number().int().min(-9999).max(9999).optional(),
-  addDays: z.number().int().min(-999999).max(999999).optional()
+  startDate: calculateTimeDate,
+  endDate: calculateTimeDate
 }).strict();
 const agentToolCursorParameter = {
   type: "integer",
@@ -1195,8 +1189,8 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "calculate_time",
-      description: "纯计算工具，用于计算两个日期之间的天数差（diff 模式），或从一个日期推算另一个日期（add 模式）。所有计算仅使用 JavaScript Date 对象，不涉及任何外部资源、数据库或文件系统访问。diff 模式需要 startYear/startMonth/startDay 和 endYear/endMonth/endDay；add 模式需要 startYear/startMonth/startDay，以及可选的 addYears/addMonths/addDays。返回结果包含总天数差或推算后的日期，以及中间经过的闰年列表。",
-      parameters: { type: "object", properties: { operation: { type: "string", enum: ["diff", "add"] }, startYear: { type: "integer", minimum: -9999, maximum: 9999 }, startMonth: { type: "integer", minimum: 1, maximum: 12 }, startDay: { type: "integer", minimum: 1, maximum: 31 }, endYear: { type: "integer", minimum: -9999, maximum: 9999 }, endMonth: { type: "integer", minimum: 1, maximum: 12 }, endDay: { type: "integer", minimum: 1, maximum: 31 }, addYears: { type: "integer", minimum: -9999, maximum: 9999 }, addMonths: { type: "integer", minimum: -9999, maximum: 9999 }, addDays: { type: "integer", minimum: -999999, maximum: 999999 } }, required: ["operation", "startYear", "startMonth", "startDay"], additionalProperties: false }
+      description: "纯计算工具，用于计算两个 YYYY-MM-DD 日期之间的天数差。所有计算仅使用 JavaScript Date 对象，不涉及任何外部资源、数据库或文件系统访问。返回总天数差、方向、日历分解和中间经过的闰年列表。",
+      parameters: { type: "object", properties: { startDate: { type: "string", pattern: "^-?\\d{4}-\\d{2}-\\d{2}$", description: "起始日期，格式 YYYY-MM-DD；公元前年份可在年份前加 -" }, endDate: { type: "string", pattern: "^-?\\d{4}-\\d{2}-\\d{2}$", description: "结束日期，格式 YYYY-MM-DD；公元前年份可在年份前加 -" } }, required: ["startDate", "endDate"], additionalProperties: false }
     }
   }
 };
@@ -6152,7 +6146,7 @@ export class AiManager {
       ? [
           `当前可用的内部能力是：${enabledToolIds.join("、")}。不要向用户提及工具、调用过程、资料库或检索结果。`,
           ...directImageToolGuidance,
-          ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
+          ...(enabledToolIds.includes("calculate_time") ? ["涉及两个日期之间的天数差时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当回应涉及角色自身的身份、经历、所见所闻或记忆，而角色卡与对话历史不足以确定时，使用 recall_self 回忆；它不能指定或查询其他角色。",
           ...(enabledToolIds.includes("recall_relationship") ? ["当回应涉及当前角色与其他角色的关系、关系类型、状态或相处经历，而角色卡与对话历史不足以确定时，使用 recall_relationship；先不传 characters 获取有关系的角色列表，再传入 characters 数组获取一个或多个指定角色的关系详情。它只能查询当前角色参与的关系，不能查询两个其他角色之间的关系。"] : []),
           ...(enabledToolIds.includes("recall_other") ? ["当需要确认其他角色的公开身份、生死、简介或当前可见状态，而角色卡与对话历史不足以确定时，使用 recall_other；它只能查询自己通过人物关系、同一组织或共同参与的已确认时间线事件而认识的角色，不会返回对方私密档案。"] : []),
@@ -6165,7 +6159,7 @@ export class AiManager {
       ? [
           `${enabledToolIds.includes("calculate_time") ? "当前可用作品查询和计算工具" : "当前可用作品查询工具"}：${enabledToolIds.join("、")}。`,
           ...directImageToolGuidance,
-          ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
+          ...(enabledToolIds.includes("calculate_time") ? ["涉及两个日期之间的天数差时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
           "整体介绍、作品基本信息、目录、最新剧情、情节先后或章节定位优先调用 story_index，并严格按返回的 storyOrdering 与 storyOrder 判断顺序；story_index.latestChaptersByStructure 是不受当前分页影响的结构最新章节，若要遍历完整目录则在 nextOffset 非空时用该值作为 offset 继续调用。按关键字定位正文段落时调用 grep；以 grep.latestOccurrences.byStructure 判断关键词的结构最后出现位置，以 grep.latestOccurrences.byTimelineTrack 中同一 trackId 的最大 timeSort 判断倒叙时间，不能跨轨道比较。已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
@@ -7674,113 +7668,58 @@ export class AiManager {
     calledAt: string,
     args: z.infer<typeof calculateTimeArguments>
   ): AgentToolCallResult {
-    const operation = args.operation;
-    const startYear = args.startYear;
-    const startMonth = args.startMonth;
-    const startDay = args.startDay;
+    const startParts = this.parseCalculateTimeDate(args.startDate);
+    const endParts = this.parseCalculateTimeDate(args.endDate);
+    const startDate = this.createUtcDate(startParts.year, startParts.month, startParts.day);
+    const endDate = this.createUtcDate(endParts.year, endParts.month, endParts.day);
+    const diffMs = endDate.getTime() - startDate.getTime();
+    const totalDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
-    // 验证起始日期有效性
-    this.validateDate(startYear, startMonth, startDay);
+    // 计算中间经过的闰年
+    const leapYears = this.getLeapYearsInRange(
+      Math.min(startParts.year, endParts.year),
+      Math.max(startParts.year, endParts.year)
+    );
 
-    if (operation === "diff") {
-      const endYear = args.endYear ?? startYear;
-      const endMonth = args.endMonth ?? startMonth;
-      const endDay = args.endDay ?? startDay;
-
-      // 验证结束日期有效性
-      this.validateDate(endYear, endMonth, endDay);
-
-      const startDate = this.createUtcDate(startYear, startMonth, startDay);
-      const endDate = this.createUtcDate(endYear, endMonth, endDay);
-
-      const diffMs = endDate.getTime() - startDate.getTime();
-      const totalDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-      // 计算中间经过的闰年
-      const leapYears = this.getLeapYearsInRange(
-        Math.min(startYear, endYear),
-        Math.max(startYear, endYear)
-      );
-
-      // 计算精确的年/月/日差值
-      const { years, months, days } = this.calculateYMDDiff(startDate, endDate);
-
-      return {
-        id: toolCall.id,
-        name: toolCall.function.name,
-        calledAt,
-        arguments: { operation, startYear, startMonth, startDay, endYear, endMonth, endDay },
-        status: "completed",
-        result: {
-          ok: true,
-          data: {
-            operation: "diff",
-            startDate: `${startYear}年${startMonth}月${startDay}日`,
-            endDate: `${endYear}年${endMonth}月${endDay}日`,
-            totalDays,
-            direction: totalDays >= 0 ? "forward" : "backward",
-            absoluteDays: Math.abs(totalDays),
-            ymdBreakdown: {
-              years,
-              months,
-              days
-            },
-            leapYears: leapYears.length > 0 ? leapYears : undefined,
-            note: totalDays === 0 ? "两个日期相同" : `相差 ${Math.abs(totalDays)} 天`
-          }
-        }
-      };
-    }
-
-    // add 模式：从起始日期推算未来/过去日期
-    const addYears = args.addYears ?? 0;
-    const addMonths = args.addMonths ?? 0;
-    const addDaysVal = args.addDays ?? 0;
-
-    // 验证结果日期不会超出范围
-    const resultYear = startYear + addYears;
-    if (resultYear < -9999 || resultYear > 9999) {
-      throw new AppError(400, "DATE_RANGE_EXCEEDED", `推算结果年份 ${resultYear} 超出允许范围 [-9999, 9999]`);
-    }
-
-    // 使用 JavaScript Date 进行日期推算，手动处理月末边界（如 1月31日 + 1个月 = 2月28/29日）
-    // 先计算目标年月，再将日期截断到该月的最大天数
-    const totalMonths = (startYear + addYears) * 12 + (startMonth - 1) + addMonths;
-    let rYear = Math.floor(totalMonths / 12);
-    let rMonth = totalMonths - rYear * 12 + 1;
-    // 目标月份的最大天数（用于月末边界截断）
-    const maxDayInTargetMonth = this.getDaysInMonth(rYear, rMonth);
-    // 将起始日期截断到目标月份的最大天数（处理月末边界）
-    const resultDate = this.createUtcDate(rYear, rMonth, Math.min(startDay, maxDayInTargetMonth));
-    // 让 Date 正确处理 addDays 的跨月和跨年进位/借位
-    resultDate.setUTCDate(resultDate.getUTCDate() + addDaysVal);
-    rYear = resultDate.getUTCFullYear();
-    rMonth = resultDate.getUTCMonth() + 1;
-    const rDay = resultDate.getUTCDate();
-
-    // 验证结果日期有效性
-    if (rYear < -9999 || rYear > 9999) {
-      throw new AppError(400, "DATE_RANGE_EXCEEDED", `推算结果年份 ${rYear} 超出允许范围 [-9999, 9999]`);
-    }
+    // 计算精确的年/月/日差值
+    const { years, months, days } = this.calculateYMDDiff(startDate, endDate);
 
     return {
       id: toolCall.id,
       name: toolCall.function.name,
       calledAt,
-      arguments: { operation, startYear, startMonth, startDay, addYears, addMonths, addDays: addDaysVal },
+      arguments: { startDate: args.startDate, endDate: args.endDate },
       status: "completed",
       result: {
         ok: true,
         data: {
-          operation: "add",
-          startDate: `${startYear}年${startMonth}月${startDay}日`,
-          resultDate: `${rYear}年${rMonth}月${rDay}日`,
-          added: { years: addYears, months: addMonths, days: addDaysVal },
-          isLeapYear: this.isLeapYear(rYear),
-          note: `从 ${startYear}年${startMonth}月${startDay}日 推算 ${addYears > 0 ? `+${addYears}` : addYears < 0 ? `${addYears}` : "无"}年 ${addMonths > 0 ? `+${addMonths}` : addMonths < 0 ? `${addMonths}` : "无"}月 ${addDaysVal > 0 ? `+${addDaysVal}` : addDaysVal < 0 ? `${addDaysVal}` : "无"}天`
+          startDate: args.startDate,
+          endDate: args.endDate,
+          totalDays,
+          direction: totalDays >= 0 ? "forward" : "backward",
+          absoluteDays: Math.abs(totalDays),
+          ymdBreakdown: {
+            years,
+            months,
+            days
+          },
+          leapYears: leapYears.length > 0 ? leapYears : undefined,
+          note: totalDays === 0 ? "两个日期相同" : `相差 ${Math.abs(totalDays)} 天`
         }
       }
     };
+  }
+
+  private parseCalculateTimeDate(value: string): { year: number; month: number; day: number } {
+    const match = CALCULATE_TIME_DATE_PATTERN.exec(value);
+    if (!match) {
+      throw new AppError(400, "INVALID_DATE", `日期 ${value} 必须使用 YYYY-MM-DD 格式`);
+    }
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    this.validateDate(year, month, day);
+    return { year, month, day };
   }
 
   /** 验证日期是否有效。 */
