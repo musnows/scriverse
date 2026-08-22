@@ -37,6 +37,12 @@ import {
 import { buildWritingCalendar, writingDateKey } from "./writing-progress-time.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_SECONDS, normalizeAiStreamIdleTimeoutSeconds } from "./ai-stream-timeout.js";
+import {
+  normalizeRoleplayScenePin,
+  roleplayUserTurnDisplayText,
+  roleplayUserTurnTitleSource,
+  type RoleplayScenePin
+} from "./roleplay-turn.js";
 
 type WorkInput = {
   title: string;
@@ -643,7 +649,7 @@ export const aiConversationTaskTypes = ["chat", "roleplay", "continue", "polish"
 export type AiConversationTaskType = typeof aiConversationTaskTypes[number];
 
 export function defaultAiConversationTitle(prompt: string): string {
-  const normalized = prompt.replace(/\s+/gu, " ").trim();
+  const normalized = roleplayUserTurnTitleSource(prompt).replace(/\s+/gu, " ").trim();
   return Array.from(normalized).slice(0, 15).join("") || "新对话";
 }
 
@@ -656,6 +662,7 @@ export type AiConversationContext = {
   totalMessageCount: number;
   warningPending: boolean;
   injectedEntities: AiInjectedEntities;
+  scenePin: RoleplayScenePin;
   messages: Array<{
     id: string;
     role: "user" | "assistant";
@@ -8674,6 +8681,7 @@ export class Store {
       totalMessageCount,
       warningPending: Boolean(optionalString(conversation, "context_warning_at")),
       injectedEntities: parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES),
+      scenePin: normalizeRoleplayScenePin(json(optionalString(conversation, "scene_pin_json") ?? "{}", {})),
       messages: rows.filter((message) => requiredString(message, "id") !== excludeMessageId)
         .map((message) => ({
           id: requiredString(message, "id"),
@@ -8766,6 +8774,20 @@ export class Store {
     );
     const refreshed = this.db.get("SELECT system_clock_text FROM ai_conversations WHERE id = ?", conversationId);
     return (optionalString(refreshed ?? {}, "system_clock_text") ?? clock).trim() || clock;
+  }
+
+  setAiConversationScenePin(conversationId: string, workId: string, pin: unknown): RoleplayScenePin {
+    const conversation = this.db.get("SELECT work_id FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const normalized = normalizeRoleplayScenePin(pin);
+    this.db.run(
+      "UPDATE ai_conversations SET scene_pin_json = ?, updated_at = ? WHERE id = ?",
+      JSON.stringify(normalized),
+      now(),
+      conversationId
+    );
+    return normalized;
   }
 
   listCharacterNameEntries(workId: string): Array<{ characterId: string; normalizedName: string; displayName: string; kind: "primary" | "alias" }> {
@@ -9360,9 +9382,10 @@ export class Store {
     const injectedEntitiesJson = optionalString(conversation, "injected_entities_json")
       ?? JSON.stringify(EMPTY_AI_INJECTED_ENTITIES);
     const systemClockText = optionalString(conversation, "system_clock_text") ?? "";
+    const scenePinJson = optionalString(conversation, "scene_pin_json") ?? "{}";
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, roleplay_user_character_id, task_type, context_scope_json, title, compacted_summary, compacted_message_count, agent_tools_json, injected_entities_json, system_clock_text, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, roleplay_user_character_id, task_type, context_scope_json, title, compacted_summary, compacted_message_count, agent_tools_json, injected_entities_json, system_clock_text, scene_pin_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
         workId,
         optionalString(conversation, "roleplay_character_id"),
@@ -9377,6 +9400,7 @@ export class Store {
           : String(conversation.agent_tools_json),
         injectedEntitiesJson,
         systemClockText,
+        scenePinJson,
         timestamp,
         timestamp,
         currentRequestActor()?.userId ?? null
@@ -9473,7 +9497,7 @@ export class Store {
       title: requiredString(row, "title"),
       isFavorite: booleanValue(row, "is_favorite"),
       messageCount: numberValue(row, "message_count"),
-      preview: requiredString(row, "preview"),
+      preview: roleplayUserTurnDisplayText(requiredString(row, "preview")),
       compactedMessageCount: numberValue(row, "compacted_message_count"),
       hasCompactedSummary: Boolean(requiredString(row, "compacted_summary")),
       contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
@@ -9481,6 +9505,7 @@ export class Store {
       ...(lockedModelId ? { modelId: lockedModelId } : {}),
       ...(hasImageAttachments ? { hasImageAttachments: true, modelLockedByImage: true } : {}),
       contextScope: json<ContextScope>(optionalString(row, "context_scope_json") ?? "", { type: "none" }),
+      scenePin: normalizeRoleplayScenePin(json(optionalString(row, "scene_pin_json") ?? "{}", {})),
       roleplayCharacter: roleplayCharacter ? {
         id: requiredString(roleplayCharacter, "id"),
         name: requiredString(roleplayCharacter, "name"),

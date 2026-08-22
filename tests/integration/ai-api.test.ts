@@ -2427,6 +2427,9 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).toContain('"isDead":false');
       expect(systemPrompt).toContain('"name":"顾潮"');
       expect(systemPrompt).toContain("将每一条 <user_message> 都视为该角色");
+      expect(systemPrompt).toContain("<scene_direction>");
+      expect(systemPrompt).toContain("<scene_pin>");
+      expect(systemPrompt).toContain("不要把它读成用户角色正在说话");
       expect(systemPrompt).toContain('"personaSummary":"说话干脆，码头上认得路。"');
       expect(systemPrompt).toContain('"summary":"北港旧识"');
       expect(systemPrompt).not.toContain("这段其他角色的私密档案不得被读取");
@@ -2619,6 +2622,107 @@ describe("AI 供应商、模型与建议 API", () => {
       characterId: role.body.data.id
     }).expect(409);
     expect(started.body.error.code).toBe("ROLEPLAY_CONVERSATION_STARTED");
+  }, 20_000);
+
+  it("角色扮演将旁白 XML 放在台词之前并写入会话场景钉", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "林舟",
+      gender: "male"
+    }).expect(201);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
+      taskType: "roleplay"
+    }).expect(201);
+    await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: character.body.data.id
+    }).expect(200);
+
+    const capturedTurns: Array<{ systemPrompt: string; currentUser: string; sceneContext: string }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role?: string; content?: string }> };
+      const systemPrompt = String(body.messages[0]?.content ?? "");
+      const currentUser = String(body.messages.filter((message) => message.role === "user").at(-1)?.content ?? "");
+      const sceneContext = String(body.messages.find((message) => (
+        message.role === "user" && String(message.content ?? "").trimStart().startsWith("<scene_context>")
+      ))?.content ?? "");
+      capturedTurns.push({ systemPrompt, currentUser, sceneContext });
+      if (currentUser.includes("潮水拍上木桩")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "潮声没停。" } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "灯还亮着。你先走。" } }] }), { status: 200 });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "你还要走吗？",
+      sceneDirection: "夜雨刚停，码头只剩几盏灯。",
+      scenePin: { location: "北港码头", present: "林舟、顾潮", timeLabel: "远航第 12 日黄昏" },
+      scope: { type: "none" },
+      modelId,
+      conversationId: conversation.body.data.id
+    }).expect(200);
+    expect(streamed.text).toContain("灯还亮着");
+    expect(capturedTurns.length).toBeGreaterThan(0);
+    expect(capturedTurns[0]?.systemPrompt).toContain("<scene_direction>");
+    expect(capturedTurns[0]?.systemPrompt).toContain("<scene_pin>");
+    expect(capturedTurns[0]?.systemPrompt).toContain("不要把它读成用户角色正在说话");
+    expect(capturedTurns[0]?.currentUser.indexOf("<scene_direction>")).toBeGreaterThanOrEqual(0);
+    expect(capturedTurns[0]?.currentUser.indexOf("<scene_direction>")).toBeLessThan(capturedTurns[0]?.currentUser.indexOf("<user_message>") ?? -1);
+    expect(capturedTurns[0]?.currentUser).toContain("夜雨刚停，码头只剩几盏灯。");
+    expect(capturedTurns[0]?.currentUser).toContain("你还要走吗？");
+    expect(capturedTurns[0]?.sceneContext).toContain("<scene_pin>");
+    expect(capturedTurns[0]?.sceneContext).toContain("地点：北港码头");
+    expect(capturedTurns[0]?.sceneContext).toContain("在场：林舟、顾潮");
+    expect(capturedTurns[0]?.sceneContext).toContain("故事时间：远航第 12 日黄昏");
+
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
+    expect(reloaded.body.data.scenePin).toEqual({
+      location: "北港码头",
+      present: "林舟、顾潮",
+      timeLabel: "远航第 12 日黄昏"
+    });
+    expect(reloaded.body.data.title).toBe("你还要走吗？");
+    expect(reloaded.body.data.title).not.toContain("scene_direction");
+    const userMessage = (reloaded.body.data.messages as Array<{ role: string; content: string }>).find((message) => message.role === "user");
+    expect(userMessage?.content).toContain("<scene_direction>");
+    expect(String(userMessage?.content).indexOf("<scene_direction>")).toBeLessThan(String(userMessage?.content).indexOf("<user_message>"));
+    expect(userMessage?.content).toContain("夜雨刚停，码头只剩几盏灯。");
+    expect(userMessage?.content).toContain("你还要走吗？");
+
+    const onlyScene = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "",
+      sceneDirection: "潮水拍上木桩。",
+      scenePin: { location: "北港码头", present: "林舟、顾潮", timeLabel: "远航第 12 日黄昏" },
+      scope: { type: "none" },
+      modelId,
+      conversationId: conversation.body.data.id
+    }).expect(200);
+    expect(onlyScene.text).toContain("潮声没停");
+    const sceneOnlyTurn = capturedTurns.at(-1);
+    expect(sceneOnlyTurn?.currentUser).toContain("<scene_direction>");
+    expect(sceneOnlyTurn?.currentUser).toContain("潮水拍上木桩。");
+    expect(sceneOnlyTurn?.currentUser).not.toContain("<user_message>");
+    expect(sceneOnlyTurn?.sceneContext).toContain("地点：北港码头");
+
+    const emptyBoth = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "",
+      scope: { type: "none" },
+      modelId,
+      conversationId: conversation.body.data.id
+    }).expect(400);
+    expect(emptyBoth.body.error.code).toBe("INSTRUCTION_REQUIRED");
+
+    const forked = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/fork`).send({
+      messageId: (reloaded.body.data.messages as Array<{ id: string }>).at(-1)?.id
+    }).expect(201);
+    expect(forked.body.data.scenePin).toEqual({
+      location: "北港码头",
+      present: "林舟、顾潮",
+      timeLabel: "远航第 12 日黄昏"
+    });
   }, 20_000);
 
   it("对话开始后锁定问答、角色扮演、续写和润色任务类型", async () => {

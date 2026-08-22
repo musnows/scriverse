@@ -41,6 +41,7 @@ import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./goog
 import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH, readableHybridSearchTypes } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes, WORK_AGENT_TOOL_IDS } from "./store.js";
+import { composeRoleplayStoredUserContent } from "./roleplay-turn.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
@@ -3118,7 +3119,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/chat/stream", async (request, response) => {
     const input = parse(z.object({
-      instruction: nonEmpty.max(100_000),
+      instruction: z.string().max(100_000).default(""),
+      sceneDirection: z.string().max(20_000).optional(),
+      scenePin: z.object({
+        location: z.string().max(200).optional(),
+        present: z.string().max(500).optional(),
+        timeLabel: z.string().max(200).optional()
+      }).strict().optional(),
       scope: contextSchema,
       modelId: identifier.optional(),
       parameters: jsonObject.optional(),
@@ -3138,7 +3145,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     for (const citation of citations) {
       if (store.getChapter(citation.chapterId).workId !== request.params.workId) throw new AppError(400, "CITATION_WORK_MISMATCH", "引用章节不属于当前作品");
     }
-    const resolvedInstruction = instructionWithCitations(input.instruction, citations);
     const existingRequest = store.findAiConversationStreamRequest(actorScope, request.params.workId, idempotencyKey);
     if (existingRequest && input.conversationId && existingRequest.conversationId !== input.conversationId) {
       throw new AppError(409, "IDEMPOTENCY_KEY_REUSED", "该请求标识已用于另一项 AI 对话请求");
@@ -3153,6 +3159,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
     }
     const conversationId = String(conversation.id);
+    const isRoleplay = Boolean(conversation.roleplayCharacter);
+    const instructionText = input.instruction.trim();
+    const sceneDirection = isRoleplay ? (input.sceneDirection ?? "").trim() : "";
+    if (!instructionText && !sceneDirection) {
+      throw new AppError(400, "INSTRUCTION_REQUIRED", isRoleplay ? "请输入角色台词或场景旁白" : "请输入指令");
+    }
+    if (!existingRequest && isRoleplay && input.scenePin !== undefined) {
+      store.setAiConversationScenePin(conversationId, request.params.workId, input.scenePin);
+    }
+    const storedUserContent = isRoleplay
+      ? composeRoleplayStoredUserContent(sceneDirection, instructionText)
+      : instructionText;
+    const resolvedInstruction = instructionWithCitations(instructionText, citations);
+    const mentionSource = [sceneDirection, resolvedInstruction].filter(Boolean).join("\n");
     const modelId = resolveConversationModelId(request.params.workId, conversationId, input.modelId);
     const permissions = requestPermissions(request, request.params.workId);
     const controller = new AbortController();
@@ -3195,7 +3215,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           workId: request.params.workId,
           modelId,
           scope: input.scope as ContextScope,
-          instruction: resolvedInstruction,
+          instruction: mentionSource,
           excludeConversationMessageId: input.currentMessageId
         }, { ignoreWarning: input.ignoreContextWarning === true });
         preparedConversation = redactAiConversation(store.getAiConversationSummary(conversationId), permissions);
@@ -3220,7 +3240,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         : ai.resolveInstructionMentions({
           workId: request.params.workId,
           taskType: "chat",
-          instruction: resolvedInstruction,
+          instruction: mentionSource,
           scope: input.scope as ContextScope,
           conversationId
         });
@@ -3237,7 +3257,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         idempotencyKey,
         requestHash,
         userMessage: {
-          content: input.instruction,
+          content: storedUserContent,
           citations,
           ...(input.currentMessageId ? { existingMessageId: input.currentMessageId } : {}),
           ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length || input.imageAttachmentIds?.length) ? { metadata: {
@@ -3292,6 +3312,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: resolvedInstruction,
+        ...(sceneDirection ? { sceneDirection } : {}),
         // 仍由生成路径基于原始范围持久化累计注入，保证预解析不会吞掉本轮自动命中。
         scope: input.scope as ContextScope,
         signal: controller.signal,
