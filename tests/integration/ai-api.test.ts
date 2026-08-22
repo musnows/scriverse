@@ -2380,6 +2380,7 @@ describe("AI 供应商、模型与建议 API", () => {
       roleplaySystemPrompts.push(systemPrompt);
       expect(systemPrompt).toContain("<roleplay_main_prompt>");
       expect(systemPrompt).toContain("你是沉浸式角色扮演引擎");
+      expect(systemPrompt).toContain("个人内心独白必须单独写成 Markdown 引用块，每一行都以 > 开头");
       expect(systemPrompt).toContain("<character_card>");
       expect(systemPrompt).toContain("<user_character_card>");
       expect(systemPrompt).toContain('"name":"林舟"');
