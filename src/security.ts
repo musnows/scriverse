@@ -27,6 +27,8 @@ export type RuntimeSecurityOptions = {
   setupToken?: string;
 };
 
+export const PRIVATE_AI_ENDPOINTS_ENV = "APP_ALLOW_PRIVATE_AI_ENDPOINTS";
+
 type RateEntry = { count: number; resetAt: number };
 const maximumRateEntries = 10_000;
 
@@ -400,18 +402,31 @@ function rememberPinnedAiAddresses(hostname: string, addresses: SafeAiEndpointAd
   pinnedAiAddresses.set(key, addresses);
 }
 
+async function lookupEndpointAddresses(hostname: string): Promise<SafeAiEndpointAddress[]> {
+  if (isIP(hostname)) return [{ address: hostname, family: isIP(hostname) as 4 | 6 }];
+  return (await lookup(hostname, { all: true, verbatim: true }).catch(() => [])).map(({ address, family }) => ({
+    address,
+    family: family as 4 | 6
+  }));
+}
+
+export async function aiEndpointUsesPrivateNetwork(value: string): Promise<boolean> {
+  try {
+    const hostname = normalizedUrlHostname(new URL(value));
+    const addresses = await lookupEndpointAddresses(hostname);
+    return addresses.some(({ address }) => unsafeIpKind(address) === "private");
+  } catch {
+    return false;
+  }
+}
+
 export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = false): Promise<SafeAiEndpointAddress[]> {
   const endpoint = new URL(value);
   if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
     throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
   }
   const hostname = normalizedUrlHostname(endpoint);
-  const addresses: SafeAiEndpointAddress[] = isIP(hostname)
-    ? [{ address: hostname, family: isIP(hostname) as 4 | 6 }]
-    : (await lookup(hostname, { all: true, verbatim: true }).catch(() => [])).map(({ address, family }) => ({
-      address,
-      family: family as 4 | 6
-    }));
+  const addresses = await lookupEndpointAddresses(hostname);
   if (!addresses.length) throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商域名无法解析");
   for (const { address } of addresses) {
     const kind = unsafeIpKind(address);
@@ -504,6 +519,19 @@ export async function fetchSafeAiEndpoint(
   throw new AppError(502, "PROVIDER_REDIRECT_LIMIT", "AI 供应商重定向次数过多");
 }
 
+export function isPrivateAiEndpointsExplicitlyEnabled(environment: NodeJS.ProcessEnv): boolean {
+  return parseBooleanEnvironmentValue(environment[PRIVATE_AI_ENDPOINTS_ENV]) === true;
+}
+
+/** 仅在环境变量被显式开启时写入启动警告；开发环境默认放行不会触发。 */
+export function warnIfPrivateAiEndpointsEnabled(environment: NodeJS.ProcessEnv): void {
+  if (!isPrivateAiEndpointsExplicitlyEnabled(environment)) return;
+  logger.warn("security.private_ai_endpoints.enabled", {
+    env: PRIVATE_AI_ENDPOINTS_ENV,
+    message: "Private and loopback AI provider endpoints are allowed. This weakens SSRF protection and can expose credentials to local or internal services. Enable it only when you must reach a trusted local model."
+  });
+}
+
 export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAuthentication = false): RuntimeSecurityOptions {
   const production = environment.NODE_ENV === "production";
   const username = environment.APP_AUTH_USERNAME?.trim() ?? "";
@@ -521,7 +549,7 @@ export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAu
     ...(username ? { auth: { username, password } } : {}),
     trustProxy,
     enforceSameOrigin: true,
-    allowPrivateAiEndpoints: parseBooleanEnvironmentValue(environment.APP_ALLOW_PRIVATE_AI_ENDPOINTS) ?? !production,
+    allowPrivateAiEndpoints: parseBooleanEnvironmentValue(environment[PRIVATE_AI_ENDPOINTS_ENV]) ?? !production,
     allowRegistration,
     ...(setupToken ? { setupToken } : {})
   };

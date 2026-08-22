@@ -350,9 +350,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('class="checkbox-field model-capability-option"');
     expect(application.text).toContain('模型供应商配置');
     expect(application.text).toContain('const multimodalFields = imageDefaultSupported ?');
-    expect(application.text).toContain('/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1');
+    expect(application.text).toContain('/ai-connectivity-test.js?v=20260822-private-ai-endpoint-hint-v1');
     expect(connectivityTest.text).toContain('图片请求已验证');
     expect(connectivityTest.text).toContain('接下来 2 分钟内不能再次测试');
+    expect(connectivityTest.text).toContain('当前地址指向本机或内网，已允许连接，请确认该地址可信');
     expect(application.text).toContain('发送一张测试图片验证图片请求');
     expect(application.text).toContain('configureTokenQuotaInput(host.querySelector("#daily-token-quota"), "daily-token-quota-warning", 10_000)');
     expect(application.text).toContain('<label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled"');

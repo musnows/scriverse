@@ -16,6 +16,15 @@ describe("AI 连通性测试 Toast 文案", () => {
     expect(providerSuccess.message).toContain("接下来 2 分钟内不能再次测试");
     expect(providerSuccess.message).toContain("可于");
 
+    const privateAllowed = connectivityTestResultToast({
+      ok: true,
+      privateNetworkAllowed: true,
+      cooldown: { reason: "success_cooldown", retryAfterSeconds: 120 }
+    }, "provider");
+    expect(privateAllowed).toMatchObject({ type: "warning" });
+    expect(privateAllowed.message).toContain("供应商连接测试成功");
+    expect(privateAllowed.message).toContain("当前地址指向本机或内网，已允许连接，请确认该地址可信");
+
     const modelSuccess = connectivityTestResultToast({
       ok: true,
       multimodalTested: true,

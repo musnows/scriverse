@@ -1430,7 +1430,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       retryPolicy: options.aiRetryPolicy,
       retrySleep: options.aiRetrySleep,
       aiChatImageMaxBytes: uploadLimits.chatImageBytes,
-      liteLlmPriceCache
+      liteLlmPriceCache,
+      allowPrivateAiEndpoints: options.security?.allowPrivateAiEndpoints === true
     }
   );
   const app = express();

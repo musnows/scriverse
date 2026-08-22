@@ -8,7 +8,11 @@ afterEach(async () => {
   for (const runtime of runtimes.splice(0)) await runtime.close();
 });
 
-async function testProviderConnection(developmentServer: boolean): Promise<{
+async function testProviderConnection(options: {
+  developmentServer: boolean;
+  allowPrivateAiEndpoints?: boolean;
+  baseUrl: string;
+}): Promise<{
   result: Record<string, unknown>;
   requestedUrls: string[];
 }> {
@@ -27,14 +31,17 @@ async function testProviderConnection(developmentServer: boolean): Promise<{
     disableUserAuth: true,
     fetchImpl: fetchMock,
     serveUi: false,
-    security: { allowPrivateAiEndpoints: false, enforceSameOrigin: false },
-    developmentServer
+    security: {
+      allowPrivateAiEndpoints: options.allowPrivateAiEndpoints === true,
+      enforceSameOrigin: false
+    },
+    developmentServer: options.developmentServer
   });
   runtimes.push(runtime);
 
   const provider = await request(runtime.app).post("/api/platform/ai/providers").send({
     name: "开发地址测试供应商",
-    baseUrl: "https://198.18.0.7/v1",
+    baseUrl: options.baseUrl,
     apiKey: "development-test-key",
     status: "enabled"
   }).expect(201);
@@ -44,7 +51,10 @@ async function testProviderConnection(developmentServer: boolean): Promise<{
 
 describe("开发服务 AI 供应商地址校验", () => {
   it("开发模式跳过供应商地址 SSRF 校验", async () => {
-    const result = await testProviderConnection(true);
+    const result = await testProviderConnection({
+      developmentServer: true,
+      baseUrl: "https://198.18.0.7/v1"
+    });
 
     expect(result.result).toMatchObject({ ok: true, availableModels: ["development-model"] });
     expect(result.requestedUrls).toEqual([
@@ -54,10 +64,58 @@ describe("开发服务 AI 供应商地址校验", () => {
   });
 
   it("非开发模式仍拒绝受保护地址", async () => {
-    const result = await testProviderConnection(false);
+    const result = await testProviderConnection({
+      developmentServer: false,
+      baseUrl: "https://198.18.0.7/v1"
+    });
 
     expect(result.result).toMatchObject({ ok: false });
     expect(result.result.error).toContain("AI 供应商地址指向受保护的本机、内网或链路本地网络");
+    expect(result.requestedUrls).toEqual([]);
+  });
+});
+
+describe("私有网络 AI 供应商地址", () => {
+  it("默认拦截本机供应商地址", async () => {
+    const result = await testProviderConnection({
+      developmentServer: false,
+      baseUrl: "http://127.0.0.1:11434/v1"
+    });
+
+    expect(result.result).toMatchObject({ ok: false });
+    expect(result.result.error).toContain("AI 供应商地址指向受保护的本机、内网或链路本地网络");
+    expect(result.result.privateNetworkAllowed).toBeUndefined();
+    expect(result.requestedUrls).toEqual([]);
+  });
+
+  it("开启私有地址后允许本机连接并返回提示", async () => {
+    const result = await testProviderConnection({
+      developmentServer: false,
+      allowPrivateAiEndpoints: true,
+      baseUrl: "http://127.0.0.1:11434/v1"
+    });
+
+    expect(result.result).toMatchObject({
+      ok: true,
+      availableModels: ["development-model"],
+      privateNetworkAllowed: true
+    });
+    expect(result.requestedUrls).toEqual([
+      "http://127.0.0.1:11434/v1/models",
+      "http://127.0.0.1:11434/v1/chat/completions"
+    ]);
+  });
+
+  it("开启私有地址后仍拒绝保留网段", async () => {
+    const result = await testProviderConnection({
+      developmentServer: false,
+      allowPrivateAiEndpoints: true,
+      baseUrl: "https://198.18.0.7/v1"
+    });
+
+    expect(result.result).toMatchObject({ ok: false });
+    expect(result.result.error).toContain("AI 供应商地址指向受保护的本机、内网或链路本地网络");
+    expect(result.result.privateNetworkAllowed).toBeUndefined();
     expect(result.requestedUrls).toEqual([]);
   });
 });

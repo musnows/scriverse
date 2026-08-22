@@ -3,7 +3,7 @@ import { Agent, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity } from "../../src/security.js";
+import { isDevelopmentAuthBypassEnabled, isPrivateAiEndpointsExplicitlyEnabled, PRIVATE_AI_ENDPOINTS_ENV, resolveRuntimeSecurity, warnIfPrivateAiEndpointsEnabled } from "../../src/security.js";
 import {
   isDevelopmentServer,
   isLoopbackHost,
@@ -21,6 +21,7 @@ import { APP_VERSION, SCRIVERSE_BETA_COMMIT_ENV } from "../../src/version.js";
 import { AI_CHAT_TAB_LIMIT_ENV } from "../../src/ai-chat-tab-limit.js";
 import { loadMasterSecret } from "../../src/credential-vault.js";
 import { DATABASE_SCHEMA_VERSION, Database, readDatabaseSchemaVersion } from "../../src/database.js";
+import { logger } from "../../src/logger.js";
 import {
   AI_CHAT_IMAGE_MAX_BYTES_ENV,
   ATTACHMENT_IMAGE_MAX_BYTES_ENV,
@@ -63,6 +64,52 @@ describe("本地服务运行时", () => {
     expect(resolveRuntimeSecurity({ NODE_ENV: "development", APP_ALLOW_PRIVATE_AI_ENDPOINTS: "0" }).allowPrivateAiEndpoints).toBe(false);
     expect(resolveRuntimeSecurity({ NODE_ENV: "development", APP_ALLOW_PRIVATE_AI_ENDPOINTS: "2" }).allowPrivateAiEndpoints).toBe(true);
     expect(resolveRuntimeSecurity({ APP_TRUST_PROXY: "2" }).trustProxy).toBe(2);
+  });
+
+  it("仅在显式开启私有 AI 地址时打印启动警告", () => {
+    expect(isPrivateAiEndpointsExplicitlyEnabled({})).toBe(false);
+    expect(isPrivateAiEndpointsExplicitlyEnabled({ NODE_ENV: "development" })).toBe(false);
+    expect(isPrivateAiEndpointsExplicitlyEnabled({ [PRIVATE_AI_ENDPOINTS_ENV]: "false" })).toBe(false);
+    expect(isPrivateAiEndpointsExplicitlyEnabled({ [PRIVATE_AI_ENDPOINTS_ENV]: "true" })).toBe(true);
+    expect(isPrivateAiEndpointsExplicitlyEnabled({ [PRIVATE_AI_ENDPOINTS_ENV]: "1" })).toBe(true);
+
+    const warnSpy = vi.spyOn(logger, "warn");
+    try {
+      warnIfPrivateAiEndpointsEnabled({ NODE_ENV: "development" });
+      warnIfPrivateAiEndpointsEnabled({ NODE_ENV: "production" });
+      expect(warnSpy).not.toHaveBeenCalledWith("security.private_ai_endpoints.enabled", expect.anything());
+
+      warnIfPrivateAiEndpointsEnabled({ NODE_ENV: "production", [PRIVATE_AI_ENDPOINTS_ENV]: "true" });
+      expect(warnSpy).toHaveBeenCalledWith("security.private_ai_endpoints.enabled", expect.objectContaining({
+        env: PRIVATE_AI_ENDPOINTS_ENV
+      }));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("启动时检测到显式开启的私有 AI 地址会写入警告日志", async () => {
+    const root = mkdtempSync(join(tmpdir(), "scriverse-private-ai-"));
+    roots.push(root);
+    const warnSpy = vi.spyOn(logger, "warn");
+    try {
+      const running = await startLocalServer({
+        host: "127.0.0.1",
+        port: 0,
+        dataDirectory: root,
+        databasePath: join(root, "novel.db"),
+        env: {
+          NODE_ENV: "test",
+          [PRIVATE_AI_ENDPOINTS_ENV]: "true"
+        }
+      });
+      runningServers.push(running);
+      expect(warnSpy).toHaveBeenCalledWith("security.private_ai_endpoints.enabled", expect.objectContaining({
+        env: PRIVATE_AI_ENDPOINTS_ENV
+      }));
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("仅在非生产环境显式开启时允许开发免登录", () => {
