@@ -35,9 +35,12 @@ export function connectivityTestResultToast(result, objectType) {
   }
   if (source.ok === true) {
     const imageNotice = objectType === "model" && source.multimodalTested === true ? "，图片请求已验证" : "";
+    const privateHint = source.privateNetworkAllowed === true
+      ? "；当前地址指向本机或内网，已允许连接，请确认该地址可信"
+      : "";
     return {
-      message: `${label}连接测试成功${imageNotice}；接下来 2 分钟内不能再次测试${retryTimeText(cooldown.retryAt)}`,
-      type: "info"
+      message: `${label}连接测试成功${imageNotice}${privateHint}；接下来 2 分钟内不能再次测试${retryTimeText(cooldown.retryAt)}`,
+      type: privateHint ? "warning" : "info"
     };
   }
   const failure = typeof source.error === "string" && source.error ? source.error : "未知错误";

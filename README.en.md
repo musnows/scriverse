@@ -112,9 +112,11 @@ Run `scriverse --help` for all local server, default server, authentication, wor
 | `APP_AUTH_USERNAME` | Empty | Optional deployment gateway username; the in-app user system is always enabled |
 | `APP_AUTH_PASSWORD` | Empty | Optional deployment gateway password, at least 12 characters; must be transported over HTTPS |
 | `APP_TRUST_PROXY` | `false` | Set to the trusted proxy hop count (usually `1`) or `true` behind a trusted reverse proxy |
-| `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | `true` in development, `false` in production | Allow AI providers on loopback/private networks; link-local and cloud metadata addresses are always blocked |
+| `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | `true` in development, `false` in production | Loopback and private-network AI provider URLs are blocked by default. Setting `true`/`1` allows them with a warning toast and a startup warning log; link-local and cloud metadata addresses stay blocked |
 | `APP_ALLOW_REGISTRATION` | `false` | Registration is enabled only when explicitly set to `true`; unset and all other values stay closed, including first-admin setup |
 | `APP_SETUP_TOKEN` | Empty | Required when registration is enabled and must contain at least 32 characters; only the first administrator must enter it |
+
+`APP_ALLOW_PRIVATE_AI_ENDPOINTS` weakens SSRF protection and should be enabled only when you must reach a trusted local or private-network model. Unset production deployments keep blocking these addresses; when enabled, connection tests no longer fail for that reason, the UI shows a warning, and startup writes a warning log. Link-local and cloud metadata addresses remain blocked.
 
 `SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS` is read when the service starts and only controls how long an interactive AI stream may remain without a new event. Every valid stream event restarts the timer, so generation may continue beyond 60 seconds; this setting does not impose a total-duration limit or change timeout behavior for analysis tasks and other AI requests. Restart the service after changing it.
 

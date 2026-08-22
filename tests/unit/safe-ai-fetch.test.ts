@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
 import { AppError } from "../../src/errors.js";
-import { assertSafeAiEndpoint, assertSafeS3Endpoint, fetchSafeAiEndpoint } from "../../src/security.js";
+import { aiEndpointUsesPrivateNetwork, assertSafeAiEndpoint, assertSafeS3Endpoint, fetchSafeAiEndpoint } from "../../src/security.js";
 
 const safePublicAddress = { address: "93.184.216.34", family: 4 as const };
 const validateTestEndpoint = async (candidate: string) => {
@@ -14,6 +14,25 @@ describe("assertSafeAiEndpoint", () => {
     await expect(assertSafeAiEndpoint("http://127.0.0.1:8080/v1")).rejects.toMatchObject({
       code: "UNSAFE_PROVIDER_ENDPOINT"
     });
+  });
+
+  it("显式开放时允许本机地址并拒绝链路本地与保留网段", async () => {
+    await expect(assertSafeAiEndpoint("http://127.0.0.1:8080/v1", true)).resolves.toEqual([
+      { address: "127.0.0.1", family: 4 }
+    ]);
+    await expect(assertSafeAiEndpoint("https://198.18.0.1/v1", true)).rejects.toMatchObject({
+      code: "UNSAFE_PROVIDER_ENDPOINT"
+    });
+    await expect(assertSafeAiEndpoint("http://169.254.169.254/latest/meta-data", true)).rejects.toMatchObject({
+      code: "UNSAFE_PROVIDER_ENDPOINT"
+    });
+  });
+
+  it("识别本机与内网供应商地址", async () => {
+    await expect(aiEndpointUsesPrivateNetwork("http://127.0.0.1:11434/v1")).resolves.toBe(true);
+    await expect(aiEndpointUsesPrivateNetwork("https://192.168.1.10/v1")).resolves.toBe(true);
+    await expect(aiEndpointUsesPrivateNetwork("https://93.184.216.34/v1")).resolves.toBe(false);
+    await expect(aiEndpointUsesPrivateNetwork("https://198.18.0.1/v1")).resolves.toBe(false);
   });
 
   it("拒绝 IPv4 映射、NAT64 与保留网段伪装的内网地址", async () => {

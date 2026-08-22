@@ -90,7 +90,7 @@ import {
 import { logger, sanitizeError } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
-import { fetchSafeAiEndpoint } from "./security.js";
+import { aiEndpointUsesPrivateNetwork, fetchSafeAiEndpoint } from "./security.js";
 import { defaultAiConversationTitle, normalizeCharacterName, Store, type AiConversationContext, type AiConversationTitleContext } from "./store.js";
 import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
 import { buildWritingCalendar, buildWritingMonthCalendar, formatServerLocalClock, resolveServerTimeZone } from "./writing-progress-time.js";
@@ -188,6 +188,7 @@ type AiManagerOptions = {
   liteLlmPriceCache?: LiteLlmPriceCache;
   retryPolicy?: Partial<AiRetryPolicy>;
   retrySleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  allowPrivateAiEndpoints?: boolean;
 };
 
 function waitForAiRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
@@ -2364,6 +2365,7 @@ export class AiManager {
   }>();
   private readonly vertexTokenCache = new GoogleVertexTokenCache();
   private readonly connectivityTestGate: AiConnectivityTestGate;
+  private readonly allowPrivateAiEndpoints: boolean;
 
   constructor(
     private readonly store: Store,
@@ -2375,6 +2377,7 @@ export class AiManager {
     options: AiManagerOptions = {}
   ) {
     this.connectivityTestGate = new AiConnectivityTestGate(store.db);
+    this.allowPrivateAiEndpoints = options.allowPrivateAiEndpoints === true;
     this.interactiveStreamIdleTimeoutMs = Number.isSafeInteger(options.interactiveStreamIdleTimeoutMs)
       && Number(options.interactiveStreamIdleTimeoutMs) > 0
       ? Number(options.interactiveStreamIdleTimeoutMs)
@@ -3772,6 +3775,16 @@ export class AiManager {
     }
   }
 
+  /** 开启私有地址后，把本机/内网连接从拦截改成结果里的提示字段。 */
+  private async attachPrivateNetworkHint(
+    result: Record<string, unknown>,
+    baseUrl: string
+  ): Promise<Record<string, unknown>> {
+    if (!this.allowPrivateAiEndpoints) return result;
+    if (!await aiEndpointUsesPrivateNetwork(baseUrl)) return result;
+    return { ...result, privateNetworkAllowed: true };
+  }
+
   async testProvider(providerId: string): Promise<Record<string, unknown>> {
     const { row, configFingerprint, claim } = this.acquireProviderConnectivityTest(providerId);
     const protocol = providerProtocol(row);
@@ -3852,7 +3865,10 @@ export class AiManager {
         availableModelCount: availableModels.length,
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
       });
-      return { ok: true, availableModels, cooldown, provider: this.getProvider(providerId) };
+      return this.attachPrivateNetworkHint(
+        { ok: true, availableModels, cooldown, provider: this.getProvider(providerId) },
+        stringValue(row, "base_url")
+      );
     } catch (error) {
       const message = error instanceof Error
         ? redactProviderSecretsText(error.message, credentialSecret, accessToken)
@@ -3882,7 +3898,10 @@ export class AiManager {
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
         error: connectivityTestErrorForLog(error)
       });
-      return { ok: false, error: message, cooldown, provider: this.getProvider(providerId) };
+      return this.attachPrivateNetworkHint(
+        { ok: false, error: message, cooldown, provider: this.getProvider(providerId) },
+        stringValue(row, "base_url")
+      );
     } finally {
       clearTimeout(timeout);
     }
@@ -3928,7 +3947,10 @@ export class AiManager {
         cooldownApplied: cooldown.reason !== "configuration_changed",
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
       });
-      return { ok: true, multimodalTested, cooldown, model: this.getModel(modelId), provider: this.getProvider(providerId) };
+      return this.attachPrivateNetworkHint(
+        { ok: true, multimodalTested, cooldown, model: this.getModel(modelId), provider: this.getProvider(providerId) },
+        stringValue(provider, "base_url")
+      );
     } catch (error) {
       const message = error instanceof Error
         ? redactProviderSecretsText(error.message, credentialSecret, accessToken)
@@ -3961,7 +3983,10 @@ export class AiManager {
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
         error: connectivityTestErrorForLog(error)
       });
-      return { ok: false, error: message, cooldown, model: this.getModel(modelId), provider: this.getProvider(providerId) };
+      return this.attachPrivateNetworkHint(
+        { ok: false, error: message, cooldown, model: this.getModel(modelId), provider: this.getProvider(providerId) },
+        stringValue(provider, "base_url")
+      );
     } finally {
       clearTimeout(timeout);
     }
