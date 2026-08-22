@@ -14392,11 +14392,12 @@ function renderCharacterEditorFields(item) {
       (canReadModule("editor")
         ? field("firstChapterId", "首次登场章节", "select", item?.firstChapterId ?? "", chapterOptions)
         : '<div class="character-editor-empty-field"><b>首次登场章节</b><span>当前账户没有正文读取权限，原有绑定不会被修改。</span></div>')),
-    characterEditorSection("profile", "人物档案", "记录人物定位、行为动力和便于创作时快速理解的简介。",
+    characterEditorSection("profile", "人物档案", "记录人物定位、行为动力、公开人设和便于创作时快速理解的简介。",
       field("code", "编号", "text", item?.code) +
       field("identity", "身份与定位", "text", item?.attributes?.identity) +
       field("motivation", "核心动机", "textarea", item?.profile?.motivation) +
-      field("summary", "人物简介", "textarea", item?.profile?.summary)),
+      field("summary", "人物简介", "textarea", item?.profile?.summary) +
+      '<div class="form-field"><span>人设摘要</span><small>关系扮演时作为公开人设注入对方可见的角色卡，不会包含私密档案或 Markdown 章节。</small><textarea name="personaSummary" maxlength="20000" aria-label="人设摘要">' + esc(item?.profile?.personaSummary ?? "") + "</textarea></div>"),
     characterEditorSection("settings", "扩展设定", "可用短属性和 Markdown 长章节承载形态、能力、生态、经历与研究记录。",
       field("details", "扩展属性", "key-value-list", item?.attributes?.details) +
       '<div id="character-markdown-sections" class="character-markdown-sections"></div>'),
@@ -14444,7 +14445,8 @@ function collectCharacterBody(form) {
     profile: {
       ...profile,
       motivation: String(form.get("motivation") ?? "").trim(),
-      summary: String(form.get("summary") ?? "").trim()
+      summary: String(form.get("summary") ?? "").trim(),
+      personaSummary: String(form.get("personaSummary") ?? "").trim()
     },
     currentState: buildCharacterState(form.getAll("stateKey"), form.getAll("stateValue"), item?.currentState ?? {}),
     lockedFields: form.getAll("lockedFields").map((value) => String(value).trim()).filter(Boolean),

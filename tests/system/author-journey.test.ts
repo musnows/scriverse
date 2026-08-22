@@ -229,9 +229,12 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="character-delete-button"');
     expect(page.text.match(/data-character-editor-tab=/gu)).toHaveLength(5);
     expect(page.text).toContain('data-character-editor-tab="relationships"');
+    expect(page.text).toContain("简介、人设摘要、身份与动机");
     expect(page.text).toContain("保存新版本");
     expect(application.text).toContain("function renderCharacterEditorFields(item)");
     expect(application.text).toContain('field("code", "编号", "text", item?.code)');
+    expect(application.text).toContain('name="personaSummary"');
+    expect(application.text).toContain("人设摘要");
     expect(application.text).toContain('class="character-code"><b>编号</b>');
     expect(application.text).toContain("function openSettingEditor(item = null, { readOnly = false } = {})");
     expect(application.text).toContain("function openCharacterEditor(item = null, { readOnly = false } = {})");

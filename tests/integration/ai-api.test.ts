@@ -2314,7 +2314,7 @@ describe("AI 供应商、模型与建议 API", () => {
       gender: "female",
       aliases: ["潮哥"],
       isDead: false,
-      profile: { summary: "北港旧识", secret: "这段其他角色的私密档案不得被读取" },
+      profile: { summary: "北港旧识", personaSummary: "说话干脆，码头上认得路。", secret: "这段其他角色的私密档案不得被读取" },
       currentState: { location: "南码头" }
     }).expect(201);
     const thirdRole = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星", gender: "none" }).expect(201);
@@ -2427,6 +2427,8 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).toContain('"isDead":false');
       expect(systemPrompt).toContain('"name":"顾潮"');
       expect(systemPrompt).toContain("将每一条 <user_message> 都视为该角色");
+      expect(systemPrompt).toContain('"personaSummary":"说话干脆，码头上认得路。"');
+      expect(systemPrompt).toContain('"summary":"北港旧识"');
       expect(systemPrompt).not.toContain("这段其他角色的私密档案不得被读取");
       expect(systemPrompt).not.toContain("小说作者的创作协作助手");
       expect(systemPrompt).not.toContain("平台创作助手提示不得进入角色扮演");

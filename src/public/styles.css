@@ -3548,7 +3548,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-editor-section > header p { max-width: 430px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; text-align: right; }
 .character-editor-section-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 17px 20px; }
 .character-editor-section-fields > label, .character-editor-section-fields > .form-field { display: grid; align-content: start; gap: 7px; color: var(--muted); font-size: 11px; }
-.character-editor-section-fields > label:has(textarea), .character-editor-section-fields > .structured-list-field, .character-editor-section-fields > .chip-field, .character-editor-section-fields > .markdown-editor-field, .character-editor-field-help { grid-column: 1 / -1; }
+.character-editor-section-fields > label:has(textarea), .character-editor-section-fields > .form-field:has(textarea), .character-editor-section-fields > .structured-list-field, .character-editor-section-fields > .chip-field, .character-editor-section-fields > .markdown-editor-field, .character-editor-field-help { grid-column: 1 / -1; }
 .character-editor-section-fields input, .character-editor-section-fields textarea, .character-editor-section-fields select { width: 100%; padding: 10px 11px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); font-size: 13px; }
 .character-editor-section-fields textarea { min-height: 120px; resize: vertical; line-height: 1.65; }
 .character-editor-section-fields .section-list-row textarea { min-height: 180px; }
