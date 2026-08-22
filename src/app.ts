@@ -1154,7 +1154,16 @@ function redactAiConversation(record: Record<string, unknown>, permissions: Work
     result.agentTools = [
       ...(permissions.characters !== "none" ? ["recall_self"] : []),
       ...(permissions.characters !== "none" && permissions.relationships !== "none" ? ["recall_relationship"] : []),
+      ...(permissions.characters !== "none"
+        && (permissions.relationships !== "none" || permissions.organizations !== "none" || permissions.timeline !== "none")
+        ? ["recall_other"]
+        : []),
+      ...((permissions.races !== "none" || permissions.organizations !== "none" || permissions.settings !== "none") ? ["recall_known"] : []),
       ...(permissions.prose !== "none" ? ["recall_story"] : []),
+      ...(["settings", "characters", "races", "organizations", "timeline", "relationships", "outlines"] as const)
+        .some((module) => permissions[module] !== "none")
+        ? ["image"]
+        : [],
       "calculate_time"
     ];
   }

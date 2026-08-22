@@ -2444,7 +2444,7 @@ function resetAiFeed(
   const roleplayName = roleplayCharacter?.name;
   const roleplayUserName = roleplayUserCharacter?.name;
   feed.innerHTML = roleplayName
-    ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我可以通过角色卡、人物关系和故事正文回答。"}</p></div></div>`
+    ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我可以通过角色卡、人物关系、知情设定和故事正文回答。"}</p></div></div>`
     : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
 }
 
@@ -2671,6 +2671,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   recall_self: "回忆自身",
   image: "读取设定图片",
   recall_relationship: "回忆人物关系",
+  recall_other: "回忆相识角色",
+  recall_known: "回忆知情设定",
   recall_story: "回忆故事",
   calculate_time: "计算日期"
 };
@@ -2684,8 +2686,10 @@ const AI_TOOL_DESCRIPTIONS = {
   search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。",
   recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。",
   image: "读取设定正文引用的图片附件，并返回多模态模型的理解内容。",
-  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。",
-  recall_story: "查询当前作品已保存正文中的关键词，返回匹配段落及章节信息。",
+  recall_relationship: "不传角色列表时读取有关系的角色公开摘要；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。",
+  recall_other: "读取自己通过关系、同一组织或共同参与时间线而认识的其他角色公开摘要。",
+  recall_known: "读取自己所属种族、组织，以及与自己身份相关的世界设定。",
+  recall_story: "查询自己姓名或别名出现过的正文段落，避免全知回忆。",
   calculate_time: "计算日期差值，或从起始日期推算目标日期。"
 };
 
@@ -3440,7 +3444,7 @@ function renderAiRoleplayCharacterSelect() {
   select.title = canSelectCharacter
     ? state.aiPromptSent
       ? aiConversationOptionLockedMessage
-      : "为当前对话选择角色卡；角色扮演时 Agent 可以查询角色记忆、人物关系和故事正文"
+      : "为当前对话选择角色卡；角色扮演时 Agent 可以查询角色记忆、相识角色、知情设定、故事正文和设定图片"
     : "当前账户没有角色模块读取权限";
   renderAiRoleplayUserCharacterSelect();
 }
@@ -3615,7 +3619,7 @@ function syncAiTaskOptions() {
   $("#ai-scope").disabled = interactionBusy || roleplaySelected;
   $("#ai-scope").title = state.aiPromptSent
     ? aiConversationOptionLockedMessage
-    : roleplaySelected ? "角色扮演模式可以查询角色记忆、人物关系和故事正文" : "";
+    : roleplaySelected ? "角色扮演模式可以查询角色记忆、相识角色、知情设定、故事正文和设定图片" : "";
   syncAiModelPicker();
 }
 

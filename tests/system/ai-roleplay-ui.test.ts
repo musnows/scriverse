@@ -37,7 +37,7 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("select.addEventListener(\"keydown\", blockLockedAiConversationOptionKeydown);");
     expect(application).toContain("if (state.aiPromptSent) {");
     expect(application).toContain("return toast(aiConversationOptionLockedMessage);");
-    expect(application).toContain("角色扮演模式可以查询角色记忆、人物关系和故事正文");
+    expect(application).toContain("角色扮演模式可以查询角色记忆、相识角色、知情设定、故事正文和设定图片");
     expect(page).toContain("&feature=ai-roleplay-user-character-visibility-v1");
     expect(application).toContain("AI 会将每条用户消息视为该角色的发言或行动");
     expect(application).toContain("/task-type`");
@@ -46,10 +46,14 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("state.aiContextScope ?? { type: \"none\" }");
     expect(application).toContain('await prepareAiRequestConversation(requestHolder, selectedTaskType, requestScope.conversationScope);');
     expect(application).toContain("mergeAiReferenceScope(conversationScope, state.aiReferences)");
-    expect(application).toContain("Agent 可以查询角色记忆、人物关系和故事正文");
+    expect(application).toContain("Agent 可以查询角色记忆、相识角色、知情设定、故事正文和设定图片");
     expect(application).toContain("recall_self: \"回忆自身\"");
     expect(application).toContain("recall_relationship: \"回忆人物关系\"");
+    expect(application).toContain("recall_other: \"回忆相识角色\"");
+    expect(application).toContain("recall_known: \"回忆知情设定\"");
     expect(application).toContain("recall_story: \"回忆故事\"");
+    expect(application).toContain("image: \"读取设定图片\"");
+    expect(page).toContain("feature=ai-roleplay-knowledge-tools-v1");
     expect(application).toContain("function syncAiTaskOptions()");
     expect(application).toContain('const taskType = roleplaySelected ? "chat" : selectedTaskType;');
     expect(application).toContain('message.querySelector(".message-heading > span").textContent = aiAssistantLabel("", tab.roleplayCharacter);');

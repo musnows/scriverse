@@ -2273,10 +2273,33 @@ describe("AI 供应商、模型与建议 API", () => {
   it("角色扮演对话可将用户视为指定角色，并提供角色记忆、关系和故事查询工具", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const race = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "北港人",
+      description: "北港近海族群。",
+      settings: ["熟悉潮汐"]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "深海种",
+      description: "不该被林舟直接回忆的深海族群。",
+      settings: ["深海禁术"]
+    }).expect(201);
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "领航公会",
+      description: "北港领航员的互助组织。",
+      settings: ["夜间点灯"]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "领航夜灯",
+      category: "职业规矩",
+      content: "领航公会要求夜间必须点灯。",
+      status: "confirmed"
+    }).expect(201);
     const role = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "林舟",
       gender: "male",
       isDead: false,
+      raceId: race.body.data.id,
+      organizationIds: [organization.body.data.id],
       profile: { summary: "北港领航员" },
       currentState: { location: "北港" }
     }).expect(201);
@@ -2290,9 +2313,17 @@ describe("AI 供应商、模型与建议 API", () => {
       name: "顾潮",
       gender: "female",
       aliases: ["潮哥"],
-      profile: { secret: "这段其他角色的私密档案不得被读取" }
+      isDead: false,
+      profile: { summary: "北港旧识", secret: "这段其他角色的私密档案不得被读取" },
+      currentState: { location: "南码头" }
     }).expect(201);
     const thirdRole = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星", gender: "none" }).expect(201);
+    const guildmate = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "陈锚",
+      gender: "male",
+      organizationIds: [organization.body.data.id],
+      profile: { summary: "公会值夜员" }
+    }).expect(201);
     await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
       fromCharacterId: role.body.data.id,
       toCharacterId: otherRole.body.data.id,
@@ -2337,7 +2368,15 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(roleplay.body.data.taskType).toBe("roleplay");
     expect(roleplay.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
     expect(roleplay.body.data.roleplayUserCharacter).toBeNull();
-    expect(roleplay.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "recall_story", "calculate_time"]);
+    expect(roleplay.body.data.agentTools).toEqual([
+      "recall_self",
+      "recall_relationship",
+      "recall_other",
+      "recall_known",
+      "recall_story",
+      "image",
+      "calculate_time"
+    ]);
     const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
     const foreignCharacter = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/characters`).send({ name: "越界角色" }).expect(201);
     const mismatch = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
@@ -2398,20 +2437,35 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).not.toContain("<current_time>");
       expect(systemPrompt).toContain("使用 calculate_time");
       expect(systemPrompt).toContain("使用 recall_story 按关键词查询当前正文");
+      expect(systemPrompt).toContain("只返回当前扮演角色姓名或别名出现过的段落");
+      expect(systemPrompt).toContain("使用 recall_other");
+      expect(systemPrompt).toContain("使用 recall_known");
+      expect(systemPrompt).toContain("使用 image");
       expect(systemPrompt).toContain("latestOccurrences.byStructure");
       expect(systemPrompt).toContain("latestOccurrences.byTimelineTrack");
       expect(JSON.stringify(body.messages)).toContain("<scene_context>");
       expect(JSON.stringify(body.messages)).toContain("<user_message>");
       expect(JSON.stringify(body.messages)).not.toContain("<author_instruction>");
-      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self", "recall_relationship", "recall_story", "calculate_time"]);
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual([
+        "recall_self",
+        "recall_relationship",
+        "recall_other",
+        "recall_known",
+        "recall_story",
+        "image",
+        "calculate_time"
+      ]);
       expect(body.tools?.[0]?.function?.description).toContain("只有值为 true 才能判定已死亡");
       expect(body.tools?.[0]?.function?.description).toContain("gender=unknown 时禁止");
       expect(body.tools?.[0]?.function?.description).toContain("字段为 false 时必须视为仍存活");
       expect(body.tools?.[1]?.function?.description).toContain("只能返回当前角色参与的关系");
       expect(body.tools?.[1]?.function?.description).toContain("未传入 characters");
       expect(body.tools?.[1]?.function?.description).toContain("关系双方的权威 gender");
-      expect(body.tools?.[2]?.function?.description).toContain("查询当前作品已保存正文中的关键词");
-      expect(body.tools?.[3]?.function?.description).toContain("纯计算工具");
+      expect(body.tools?.[2]?.function?.description).toContain("不会返回对方私密档案");
+      expect(body.tools?.[3]?.function?.description).toContain("知情范围内的世界知识");
+      expect(body.tools?.[4]?.function?.description).toContain("只返回当前扮演角色姓名或别名出现过的段落");
+      expect(body.tools?.[5]?.function?.description).toContain("attachmentId");
+      expect(body.tools?.[6]?.function?.description).toContain("纯计算工具");
       expect(JSON.stringify(body.tools)).not.toContain("characterId");
       expect(JSON.stringify(body.tools)).not.toContain("otherCharacter");
       if (completionCount === 1) {
@@ -2419,7 +2473,10 @@ describe("AI 供应商、模型与建议 API", () => {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
           { id: "self-memory", type: "function", function: { name: "recall_self", arguments: JSON.stringify({ categories: ["profile", "sections", "chapters"] }) } },
           { id: "relationship-list", type: "function", function: { name: "recall_relationship", arguments: "{}" } },
-          { id: "story-memory", type: "function", function: { name: "recall_story", arguments: JSON.stringify({ keyword: "密钥" }) } },
+          { id: "known-people", type: "function", function: { name: "recall_other", arguments: "{}" } },
+          { id: "known-world", type: "function", function: { name: "recall_known", arguments: "{}" } },
+          { id: "story-memory", type: "function", function: { name: "recall_story", arguments: JSON.stringify({ keyword: "飞船" }) } },
+          { id: "secret-memory", type: "function", function: { name: "recall_story", arguments: JSON.stringify({ keyword: "密钥" }) } },
           { id: "date-calculation", type: "function", function: { name: "calculate_time", arguments: JSON.stringify({ operation: "diff", startYear: 2025, startMonth: 1, startDay: 1, endYear: 2025, endMonth: 1, endDay: 8 }) } },
           { id: "forbidden-index", type: "function", function: { name: "story_index", arguments: "{}" } },
           { id: "forbidden-grep", type: "function", function: { name: "grep", arguments: JSON.stringify({ keyword: "密钥" }) } }
@@ -2440,18 +2497,33 @@ describe("AI 供应商、模型与建议 API", () => {
         expect(toolMessages[1]).toContain('"gender":"female"');
         expect(toolMessages[1]).toContain("潮哥");
         expect(toolMessages[1]).toContain("relationshipCount");
+        expect(toolMessages[1]).toContain('"isDead":false');
+        expect(toolMessages[1]).toContain("北港旧识");
         expect(toolMessages[1]).not.toContain("旧友");
         expect(toolMessages[1]).not.toContain("共同远航");
-        expect(toolMessages[2]).toContain("顾潮独自藏起了只有自己知道的密钥");
-        expect(toolMessages[2]).toContain('"storyOrdering"');
-        expect(toolMessages[2]).toContain('"storyOrder"');
-        expect(toolMessages[2]).toContain('"latestOccurrences"');
-        expect(toolMessages[2]).toContain('"byTimelineTrack"');
-        expect(toolMessages[2]).toContain(`"trackId":"${roleplayTrack.body.data.id}"`);
-        expect(toolMessages[2]).toContain('"timeSort":12');
-        expect(toolMessages[3]).toContain('"totalDays":7');
-        expect(toolMessages[4]).toContain("TOOL_NOT_AVAILABLE");
-        expect(toolMessages[5]).toContain("TOOL_NOT_AVAILABLE");
+        expect(toolMessages[1]).not.toContain("其他角色的私密档案");
+        expect(toolMessages[2]).toContain("顾潮");
+        expect(toolMessages[2]).toContain("陈锚");
+        expect(toolMessages[2]).toContain("公会值夜员");
+        expect(toolMessages[2]).toContain("北港旧识");
+        expect(toolMessages[2]).not.toContain("沈星");
+        expect(toolMessages[2]).not.toContain("其他角色的私密档案");
+        expect(toolMessages[3]).toContain("北港人");
+        expect(toolMessages[3]).toContain("领航公会");
+        expect(toolMessages[3]).toContain("领航夜灯");
+        expect(toolMessages[3]).toContain("熟悉潮汐");
+        expect(toolMessages[3]).not.toContain("跃迁后必须冷却十二小时");
+        expect(toolMessages[3]).not.toContain("深海禁术");
+        expect(toolMessages[4]).toContain("林舟启动了飞船");
+        expect(toolMessages[4]).toContain('"storyOrdering"');
+        expect(toolMessages[4]).toContain('"storyOrder"');
+        expect(toolMessages[4]).toContain('"latestOccurrences"');
+        expect(toolMessages[4]).not.toContain("顾潮独自藏起了只有自己知道的密钥");
+        expect(toolMessages[5]).not.toContain("顾潮独自藏起了只有自己知道的密钥");
+        expect(toolMessages[5]).toContain("No story memory mentioning this keyword");
+        expect(toolMessages[6]).toContain('"totalDays":7');
+        expect(toolMessages[7]).toContain("TOOL_NOT_AVAILABLE");
+        expect(toolMessages[8]).toContain("TOOL_NOT_AVAILABLE");
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
           { id: "relationship-details", type: "function", function: { name: "recall_relationship", arguments: JSON.stringify({ characters: ["潮哥", "沈星"] }) } }
         ] } }] }), { status: 200 });
@@ -2498,14 +2570,30 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(reloaded.body.data.taskType).toBe("roleplay");
     expect(reloaded.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
     expect(reloaded.body.data.roleplayUserCharacter).toMatchObject({ id: otherRole.body.data.id, name: "顾潮" });
-    expect(reloaded.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "recall_story", "calculate_time"]);
+    expect(reloaded.body.data.agentTools).toEqual([
+      "recall_self",
+      "recall_relationship",
+      "recall_other",
+      "recall_known",
+      "recall_story",
+      "image",
+      "calculate_time"
+    ]);
     const forked = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/fork`).send({
       messageId: reloaded.body.data.messages.at(-1).id
     }).expect(201);
     expect(forked.body.data.taskType).toBe("roleplay");
     expect(forked.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
     expect(forked.body.data.roleplayUserCharacter).toMatchObject({ id: otherRole.body.data.id, name: "顾潮" });
-    expect(forked.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "recall_story", "calculate_time"]);
+    expect(forked.body.data.agentTools).toEqual([
+      "recall_self",
+      "recall_relationship",
+      "recall_other",
+      "recall_known",
+      "recall_story",
+      "image",
+      "calculate_time"
+    ]);
     const lockedUserRole = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
       characterId: role.body.data.id,
       userCharacterId: thirdRole.body.data.id
@@ -2529,7 +2617,7 @@ describe("AI 供应商、模型与建议 API", () => {
       characterId: role.body.data.id
     }).expect(409);
     expect(started.body.error.code).toBe("ROLEPLAY_CONVERSATION_STARTED");
-  });
+  }, 20_000);
 
   it("对话开始后锁定问答、角色扮演、续写和润色任务类型", async () => {
     const taskTypes = ["chat", "roleplay", "continue", "polish"] as const;

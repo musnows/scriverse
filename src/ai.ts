@@ -637,7 +637,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
 }
 
 const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"] as const;
-const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, "recall_self", "recall_relationship", "recall_story"] as const;
+const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, "recall_self", "recall_relationship", "recall_other", "recall_known", "recall_story"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type ConfiguredAgentToolId = (typeof CONFIGURED_AGENT_TOOL_IDS)[number];
 const AGENT_TOOL_READ_MODULES: Record<Exclude<ConfiguredAgentToolId, "search_story_entities">, readonly WorkPermissionModule[]> = {
@@ -1044,6 +1044,15 @@ const recallRelationshipArguments = z.object({
   characters: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
   cursor: agentToolCursor
 }).strict();
+const recallOtherArguments = z.object({
+  characters: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
+  cursor: agentToolCursor
+}).strict();
+const recallKnownArguments = z.object({
+  query: z.string().trim().max(200).default(""),
+  categories: z.array(z.enum(["setting", "race", "organization"])).max(3).default([]),
+  cursor: agentToolCursor
+}).strict();
 const calculateTimeArguments = z.object({
   operation: z.enum(["diff", "add"]),
   startYear: z.number().int().min(-9999).max(9999),
@@ -1147,15 +1156,31 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "recall_relationship",
-      description: "查询当前扮演角色的人物关系，并返回关系双方的权威 gender：male 表示男/雄性，female 表示女/雌性，none 表示无性别，unknown 表示未知；gender=unknown 时禁止根据关系或剧情自行推断。未传入 characters 或传入空数组时，只返回与当前角色有关系的其他角色列表；传入一个或多个角色姓名、别名或角色 ID 时，返回当前角色与这些角色之间的关系详情。只能返回当前角色参与的关系，不能查询两个其他角色之间的关系，也不会返回对方角色卡。已拒绝的关系候选不会作为记忆返回。",
+      description: "查询当前扮演角色的人物关系，并返回关系双方的权威 gender：male 表示男/雄性，female 表示女/雌性，none 表示无性别，unknown 表示未知；gender=unknown 时禁止根据关系或剧情自行推断。未传入 characters 或传入空数组时，只返回与当前角色有关系的其他角色公开摘要（含 isDead、简介与当前状态）；传入一个或多个角色姓名、别名或角色 ID 时，返回当前角色与这些角色之间的关系详情及对方公开摘要。只能返回当前角色参与的关系，不能查询两个其他角色之间的关系，也不会返回对方私密档案或 Markdown 章节。已拒绝的关系候选不会作为记忆返回。",
       parameters: { type: "object", properties: { characters: { type: "array", items: { type: "string", minLength: 1, maxLength: 200 }, maxItems: 20, default: [], description: "可选的对方角色姓名、别名或角色 ID 列表；留空时只列出有关系的角色。" }, cursor: agentToolCursorParameter }, additionalProperties: false }
+    }
+  },
+  recall_other: {
+    type: "function",
+    function: {
+      name: "recall_other",
+      description: "回忆当前扮演角色能够认识的其他角色的公开面貌。gender 是权威性别字段：male 表示男/雄性，female 表示女/雌性，none 表示无性别，unknown 表示未知；gender=unknown 时禁止自行推断。只有 isDead=true 才能判定已死亡；字段为 false 时必须视为仍存活。未传入 characters 时列出自己通过人物关系、同一组织或共同参与的已确认时间线事件而认识的角色；传入姓名、别名或角色 ID 时只返回其中自己认识的角色。只返回公开摘要（姓名、性别、生死、简介、当前状态、种族名与组织名），不会返回对方私密档案或 Markdown 章节。",
+      parameters: { type: "object", properties: { characters: { type: "array", items: { type: "string", minLength: 1, maxLength: 200 }, maxItems: 20, default: [], description: "可选的对方角色姓名、别名或角色 ID 列表；留空时列出自己认识的角色。" }, cursor: agentToolCursorParameter }, additionalProperties: false }
+    }
+  },
+  recall_known: {
+    type: "function",
+    function: {
+      name: "recall_known",
+      description: "回忆当前扮演角色知情范围内的世界知识：自己所属种族（含谱系共同设定）、自己所属组织，以及标题、标签或正文中出现自己姓名、别名、种族名或组织名的世界设定。种族、组织状态分别以 isExtinct、isDissolved 为唯一权威标识；只有值为 true 才能判定已灭绝或已解散。不能查询大纲、伏笔、作者想法，也不能读取其他角色的完整档案。",
+      parameters: { type: "object", properties: { query: { type: "string", maxLength: 200, default: "", description: "可选的回忆关键词；留空时返回自己所属种族、组织以及与自己身份相关的设定。" }, categories: { type: "array", items: { type: "string", enum: ["setting", "race", "organization"] }, maxItems: 3 }, cursor: agentToolCursorParameter }, additionalProperties: false }
     }
   },
   recall_story: {
     type: "function",
     function: {
       name: "recall_story",
-      description: "查询当前作品已保存正文中的关键词，返回最新结构位置优先的完整段落、章节标题、ID 和完整剧情顺序元数据。latestOccurrences.byStructure 独立给出结构顺序最后出现位置；有时间线权限时，latestOccurrences.byTimelineTrack 还会按每条已确认轨道（trackId=null 表示未分轨）给出最大 timeSort 对应的最后出现时间，可用于回忆倒叙事件。只能读取当前正文，不会读取设定库或作者想法。",
+      description: "查询当前作品已保存正文中的关键词，但只返回当前扮演角色姓名或别名出现过的段落，避免全知正文。返回最新结构位置优先的完整段落、章节标题、ID 和完整剧情顺序元数据。latestOccurrences.byStructure 独立给出结构顺序最后出现位置；有时间线权限时，latestOccurrences.byTimelineTrack 还会按每条已确认轨道（trackId=null 表示未分轨）给出最大 timeSort 对应的最后出现时间，可用于回忆倒叙事件。只能读取当前正文，不会读取设定库或作者想法。",
       parameters: { type: "object", properties: { keyword: { type: "string", minLength: 1, maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: 100, default: 20 }, cursor: agentToolCursorParameter }, required: ["keyword"], additionalProperties: false }
     }
   },
@@ -1783,6 +1808,88 @@ function formatMentionCharacterLine(item: Record<string, unknown>): string {
   const profile = item.profile as Record<string, unknown>;
   const summary = typeof profile?.summary === "string" ? profile.summary.trim() : "";
   return `- ${String(item.name)}；gender=${String(item.gender)}；别名=${JSON.stringify(item.aliases)}；种族路径=${racePath}；属性=${JSON.stringify(item.attributes)}；当前状态=${JSON.stringify(item.currentState)}；简介=${summary || "未填写"}`;
+}
+
+function uniqueNonEmptyTerms(values: Iterable<string>): string[] {
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const term = value.trim();
+    if (!term) continue;
+    const key = term.toLocaleLowerCase("zh-CN");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    terms.push(term);
+  }
+  return terms;
+}
+
+function roleplayCharacterNameTerms(character: Record<string, unknown>): string[] {
+  const aliases = Array.isArray(character.aliases)
+    ? character.aliases.filter((item): item is string => typeof item === "string")
+    : [];
+  return uniqueNonEmptyTerms([String(character.name ?? ""), ...aliases]).slice(0, 10);
+}
+
+function roleplayWorldIdentityTerms(character: Record<string, unknown>): string[] {
+  const race = character.race && typeof character.race === "object" && !Array.isArray(character.race)
+    ? character.race as { name?: unknown; lineage?: Array<{ name?: unknown }> }
+    : null;
+  const organizations = Array.isArray(character.organizations) ? character.organizations : [];
+  return uniqueNonEmptyTerms([
+    ...roleplayCharacterNameTerms(character),
+    typeof race?.name === "string" ? race.name : "",
+    typeof character.species === "string" ? character.species : "",
+    ...(Array.isArray(race?.lineage) ? race.lineage.map((entry) => String(entry?.name ?? "")) : []),
+    ...organizations.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+      return String((item as Record<string, unknown>).name ?? "");
+    })
+  ]);
+}
+
+function textMentionsAnyTerm(value: unknown, terms: readonly string[]): boolean {
+  if (terms.length === 0) return false;
+  const haystack = String(value ?? "").toLocaleLowerCase("zh-CN");
+  if (!haystack) return false;
+  return terms.some((term) => haystack.includes(term.toLocaleLowerCase("zh-CN")));
+}
+
+function characterProfileSummary(character: Record<string, unknown>): string {
+  const profile = character.profile && typeof character.profile === "object" && !Array.isArray(character.profile)
+    ? character.profile as Record<string, unknown>
+    : {};
+  return typeof profile.summary === "string" ? profile.summary.trim() : "";
+}
+
+function publicRoleplayCharacterMemory(character: Record<string, unknown>): Record<string, unknown> {
+  const race = character.race && typeof character.race === "object" && !Array.isArray(character.race)
+    ? character.race as { name?: unknown; isExtinct?: unknown }
+    : null;
+  const organizations = Array.isArray(character.organizations) ? character.organizations : [];
+  return {
+    id: character.id,
+    name: character.name,
+    gender: character.gender,
+    isDead: character.isDead,
+    aliases: Array.isArray(character.aliases) ? character.aliases : [],
+    species: character.species ?? "",
+    raceName: typeof race?.name === "string" ? race.name : String(character.species ?? ""),
+    raceIsExtinct: race?.isExtinct === true,
+    organizations: organizations.flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const organization = item as Record<string, unknown>;
+      return [{
+        name: String(organization.name ?? ""),
+        role: String(organization.role ?? ""),
+        isDissolved: organization.isDissolved === true
+      }];
+    }),
+    summary: characterProfileSummary(character),
+    currentState: character.currentState && typeof character.currentState === "object" && !Array.isArray(character.currentState)
+      ? character.currentState
+      : {}
+  };
 }
 
 export type KeywordEntityMatches = {
@@ -6008,14 +6115,17 @@ export class AiManager {
     const directImageToolGuidance = input.imageAttachments?.length && enabledToolIds.includes("image")
       ? ["本轮作者消息已经直接附带原生图片内容，这些图片当前消息中已经可见，禁止再调用 image 工具尝试查看或读取。image 工具只用于当前消息没有直接附带、但作品设定正文通过 attachment:// 引用的图片。"]
       : [];
-    const toolGuidance = enabledToolIds.includes("recall_self") || enabledToolIds.includes("recall_relationship")
+    const toolGuidance = enabledToolIds.includes("recall_self") || enabledToolIds.includes("recall_relationship") || enabledToolIds.includes("recall_other") || enabledToolIds.includes("recall_known")
       ? [
           `当前可用的内部能力是：${enabledToolIds.join("、")}。不要向用户提及工具、调用过程、资料库或检索结果。`,
           ...directImageToolGuidance,
           ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当回应涉及角色自身的身份、经历、所见所闻或记忆，而角色卡与对话历史不足以确定时，使用 recall_self 回忆；它不能指定或查询其他角色。",
           ...(enabledToolIds.includes("recall_relationship") ? ["当回应涉及当前角色与其他角色的关系、关系类型、状态或相处经历，而角色卡与对话历史不足以确定时，使用 recall_relationship；先不传 characters 获取有关系的角色列表，再传入 characters 数组获取一个或多个指定角色的关系详情。它只能查询当前角色参与的关系，不能查询两个其他角色之间的关系。"] : []),
-          ...(enabledToolIds.includes("recall_story") ? ["当回应涉及已经写入故事的近期情节、场景、最新进展、先后顺序或具体措辞，而角色自身记忆与对话历史不足以确定时，使用 recall_story 按关键词查询当前正文；以 latestOccurrences.byStructure 判断结构最后出现位置，以 latestOccurrences.byTimelineTrack 中同一 trackId 的最大 timeSort 判断倒叙时间，不能跨轨道比较。"] : []),
+          ...(enabledToolIds.includes("recall_other") ? ["当需要确认其他角色的公开身份、生死、简介或当前可见状态，而角色卡与对话历史不足以确定时，使用 recall_other；它只能查询自己通过人物关系、同一组织或共同参与的已确认时间线事件而认识的角色，不会返回对方私密档案。"] : []),
+          ...(enabledToolIds.includes("recall_known") ? ["当回应涉及自己所属种族、组织或与自己姓名、别名、种族、组织相关的世界设定，而角色卡与对话历史不足以确定时，使用 recall_known。它不能查询大纲、伏笔、想法或其他角色的完整档案，也不能把无关的世界设定当成自己必然知道的知识。"] : []),
+          ...(enabledToolIds.includes("recall_story") ? ["当回应涉及已经写入故事的近期情节、场景、最新进展、先后顺序或具体措辞，而角色自身记忆与对话历史不足以确定时，使用 recall_story 按关键词查询当前正文；只返回当前扮演角色姓名或别名出现过的段落。以 latestOccurrences.byStructure 判断结构最后出现位置，以 latestOccurrences.byTimelineTrack 中同一 trackId 的最大 timeSort 判断倒叙时间，不能跨轨道比较。"] : []),
+          ...(enabledToolIds.includes("image") && !input.imageAttachments?.length ? ["需要理解设定库文档通过 attachment:// 引用的图片时，使用 image；只能传入角色资料或知情世界知识中出现的附件 ID。"] : []),
           "把返回内容自然地当作角色自己的记忆、认知或感受来表达。没有返回的信息就以符合角色的方式表现为不知道、没见过、记不清或不确定，不得补用全知信息。"
         ].join("\n")
       : enabledToolIds.length > 0
@@ -6362,6 +6472,59 @@ export class AiManager {
     ].join("\n");
   }
 
+  private collectRoleplayKnownCharacters(
+    workId: string,
+    roleplayCharacterId: string,
+    permissions: WorkModulePermissions
+  ): Map<string, Set<string>> {
+    const known = new Map<string, Set<string>>();
+    const remember = (characterId: string, via: string): void => {
+      if (!characterId || characterId === roleplayCharacterId) return;
+      const reasons = known.get(characterId) ?? new Set<string>();
+      reasons.add(via);
+      known.set(characterId, reasons);
+    };
+    const self = this.store.getCharacter(roleplayCharacterId);
+    if (canReadWorkModule(permissions, "relationships")) {
+      for (const relationship of this.store.listRelationships(workId)) {
+        if (relationship.confirmationStatus === "rejected") continue;
+        const fromCharacterId = String(relationship.fromCharacterId);
+        const toCharacterId = String(relationship.toCharacterId);
+        if (fromCharacterId === roleplayCharacterId) remember(toCharacterId, "relationship");
+        if (toCharacterId === roleplayCharacterId) remember(fromCharacterId, "relationship");
+      }
+    }
+    if (canReadWorkModule(permissions, "organizations")) {
+      const selfOrganizationIds = new Set(
+        (Array.isArray(self.organizations) ? self.organizations : []).flatMap((item) => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+          const organizationId = String((item as Record<string, unknown>).organizationId ?? "");
+          return organizationId ? [organizationId] : [];
+        })
+      );
+      if (selfOrganizationIds.size > 0) {
+        for (const other of this.store.listCharacters(workId)) {
+          const otherId = String(other.id);
+          if (otherId === roleplayCharacterId) continue;
+          const sharesOrganization = (Array.isArray(other.organizations) ? other.organizations : []).some((item) => (
+            item && typeof item === "object" && !Array.isArray(item)
+            && selfOrganizationIds.has(String((item as Record<string, unknown>).organizationId ?? ""))
+          ));
+          if (sharesOrganization) remember(otherId, "organization");
+        }
+      }
+    }
+    if (canReadWorkModule(permissions, "timeline")) {
+      for (const event of this.store.listTimelineEvents(workId)) {
+        if (event.status !== "confirmed" || !Array.isArray(event.participantIds)) continue;
+        const participantIds = event.participantIds.map((item) => String(item));
+        if (!participantIds.includes(roleplayCharacterId)) continue;
+        for (const participantId of participantIds) remember(participantId, "timeline");
+      }
+    }
+    return known;
+  }
+
   private enabledAgentToolIds(
     workId: string,
     taskType: TaskType,
@@ -6382,8 +6545,23 @@ export class AiManager {
       if (canReadWorkModule(permissions, "relationships") && (!requested || requested.has("recall_relationship"))) {
         roleplayTools.push("recall_relationship");
       }
+      if (
+        (canReadWorkModule(permissions, "relationships") || canReadWorkModule(permissions, "organizations") || canReadWorkModule(permissions, "timeline"))
+        && (!requested || requested.has("recall_other"))
+      ) {
+        roleplayTools.push("recall_other");
+      }
+      if (
+        (canReadWorkModule(permissions, "races") || canReadWorkModule(permissions, "organizations") || canReadWorkModule(permissions, "settings"))
+        && (!requested || requested.has("recall_known"))
+      ) {
+        roleplayTools.push("recall_known");
+      }
       if (canReadWorkModule(permissions, "prose") && (!requested || requested.has("recall_story"))) {
         roleplayTools.push("recall_story");
+      }
+      if (this.canReadWithAgentTool(permissions, "image") && (!requested || requested.has("image"))) {
+        roleplayTools.push("image");
       }
       roleplayTools.push("calculate_time");
       return roleplayTools;
@@ -6591,6 +6769,8 @@ export class AiManager {
       : name === "image" ? imageArguments
       : name === "recall_self" ? recallSelfArguments
       : name === "recall_relationship" ? recallRelationshipArguments
+      : name === "recall_other" ? recallOtherArguments
+      : name === "recall_known" ? recallKnownArguments
       : name === "recall_story" ? grepArguments
       : name === "calculate_time" ? calculateTimeArguments
       : null;
@@ -6605,7 +6785,12 @@ export class AiManager {
       ? (toolId === "calculate_time" && enabledTools.has(toolId))
         || (toolId === "recall_self" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters"))
         || (toolId === "recall_relationship" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters") && canReadWorkModule(permissions, "relationships"))
+        || (toolId === "recall_other" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters")
+          && (canReadWorkModule(permissions, "relationships") || canReadWorkModule(permissions, "organizations") || canReadWorkModule(permissions, "timeline")))
+        || (toolId === "recall_known" && enabledTools.has(toolId)
+          && (canReadWorkModule(permissions, "races") || canReadWorkModule(permissions, "organizations") || canReadWorkModule(permissions, "settings")))
         || (toolId === "recall_story" && enabledTools.has(toolId) && canReadWorkModule(permissions, "prose"))
+        || (toolId === "image" && enabledTools.has(toolId) && this.canReadWithAgentTool(permissions, "image"))
       : Boolean(configuredToolId && enabledTools.has(configuredToolId) && this.canReadWithAgentTool(permissions, configuredToolId));
     if (!schema || !toolId || !toolAvailable) {
       return {
@@ -6661,16 +6846,14 @@ export class AiManager {
         if (!hasRequestedCharacters) {
           const existing = relatedCharacters.get(otherCharacterId);
           relatedCharacters.set(otherCharacterId, {
-            id: otherCharacterId,
-            name: other.name,
-            gender: other.gender,
-            aliases: Array.isArray(other.aliases) ? other.aliases : [],
+            ...publicRoleplayCharacterMemory(other),
             relationshipCount: Number(existing?.relationshipCount ?? 0) + 1
           });
           continue;
         }
         if (!normalizedRequestedCharacters.some((query) => characterSearchText(other).includes(query))) continue;
         const selfIsFrom = fromCharacterId === roleplayCharacterId;
+        const otherPublic = publicRoleplayCharacterMemory(other);
         relationshipRecords.push({
           category: "relationship",
           relationshipId: String(relationship.id),
@@ -6678,6 +6861,9 @@ export class AiManager {
           selfGender: character.gender,
           other: String(other.name),
           otherGender: other.gender,
+          otherIsDead: otherPublic.isDead,
+          otherSummary: otherPublic.summary,
+          otherCurrentState: otherPublic.currentState,
           direction: relationship.directed ? (selfIsFrom ? "self_to_other" : "other_to_self") : "mutual",
           directed: Boolean(relationship.directed),
           relationshipType: relationship.category,
@@ -6715,6 +6901,196 @@ export class AiManager {
         name,
         calledAt,
         arguments: { characters: requestedCharacters, ...(cursor > 0 ? { cursor } : {}) },
+        status: "completed",
+        result
+      };
+    }
+    if (name === "recall_other") {
+      if (!roleplayCharacterId) throw new Error("Roleplay character is required for recall_other");
+      const { characters: requestedCharacters, cursor } = args as z.infer<typeof recallOtherArguments>;
+      const character = this.store.getCharacter(roleplayCharacterId);
+      if (String(character.workId) !== workId) throw new Error("Roleplay character belongs to a different work");
+      const characterList = this.store.listCharacters(workId);
+      const characters = new Map(characterList.map((item) => [String(item.id), item]));
+      const characterSearchText = (item: Record<string, unknown> | null): string => {
+        if (!item) return "";
+        const aliases = Array.isArray(item.aliases) ? item.aliases.filter((alias): alias is string => typeof alias === "string") : [];
+        return [item.id, item.name, item.code, ...aliases].map((value) => String(value ?? "")).join("\n").toLocaleLowerCase("zh-CN");
+      };
+      const knownCharacters = this.collectRoleplayKnownCharacters(workId, roleplayCharacterId, permissions);
+      const normalizedRequestedCharacters = requestedCharacters.map((item) => item.toLocaleLowerCase("zh-CN"));
+      const unresolvedCharacters = requestedCharacters.filter((item, index) => !characterList.some((candidate) => characterSearchText(candidate).includes(normalizedRequestedCharacters[index] ?? "")));
+      const unknownCharacters: string[] = [];
+      const sourceRecords: Record<string, unknown>[] = [];
+      if (requestedCharacters.length === 0) {
+        for (const [otherCharacterId, knownVia] of knownCharacters) {
+          const other = characters.get(otherCharacterId);
+          if (!other) continue;
+          sourceRecords.push({
+            category: "character",
+            ...publicRoleplayCharacterMemory(other),
+            knownVia: [...knownVia]
+          });
+        }
+      } else {
+        const matchedIds = new Set<string>();
+        for (const query of normalizedRequestedCharacters) {
+          const other = characterList.find((candidate) => characterSearchText(candidate).includes(query));
+          if (!other) continue;
+          const otherCharacterId = String(other.id);
+          if (matchedIds.has(otherCharacterId)) continue;
+          matchedIds.add(otherCharacterId);
+          const knownVia = knownCharacters.get(otherCharacterId);
+          if (!knownVia) {
+            unknownCharacters.push(String(other.name));
+            continue;
+          }
+          sourceRecords.push({
+            category: "character",
+            ...publicRoleplayCharacterMemory(other),
+            knownVia: [...knownVia]
+          });
+        }
+      }
+      const records = structuralToolResultRecords(sourceRecords, maximumRecordChars);
+      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+        ok: true,
+        data: {
+          identity: { name: character.name, gender: character.gender, code: character.code },
+          mode: requestedCharacters.length > 0 ? "details" : "known_characters",
+          ...(requestedCharacters.length > 0 ? { requestedCharacters } : {}),
+          characters: page,
+          ...(unresolvedCharacters.length > 0 ? { unresolvedCharacters } : {}),
+          ...(unknownCharacters.length > 0 ? { unknownCharacters } : {}),
+          ...(sourceRecords.length === 0 ? { hint: "No matching known character was found." } : {})
+        },
+        pagination
+      }), maximumResultChars);
+      return {
+        id: toolCall.id,
+        name,
+        calledAt,
+        arguments: { characters: requestedCharacters, ...(cursor > 0 ? { cursor } : {}) },
+        status: "completed",
+        result
+      };
+    }
+    if (name === "recall_known") {
+      if (!roleplayCharacterId) throw new Error("Roleplay character is required for recall_known");
+      const { query, categories: categoryList, cursor } = args as z.infer<typeof recallKnownArguments>;
+      const character = this.store.getCharacter(roleplayCharacterId);
+      if (String(character.workId) !== workId) throw new Error("Roleplay character belongs to a different work");
+      const availableCategories = new Set<z.infer<typeof recallKnownArguments>["categories"][number]>();
+      if (canReadWorkModule(permissions, "settings")) availableCategories.add("setting");
+      if (canReadWorkModule(permissions, "races")) availableCategories.add("race");
+      if (canReadWorkModule(permissions, "organizations")) availableCategories.add("organization");
+      const requestedCategories = categoryList.length > 0
+        ? categoryList.filter((category) => availableCategories.has(category))
+        : [...availableCategories];
+      const identityTerms = roleplayWorldIdentityTerms(character);
+      const normalizedQuery = query.toLocaleLowerCase("zh-CN");
+      const matchesQuery = (value: unknown): boolean => !normalizedQuery
+        || JSON.stringify(value).toLocaleLowerCase("zh-CN").includes(normalizedQuery);
+      const knownRaceIds = new Set<string>();
+      const race = character.race && typeof character.race === "object" && !Array.isArray(character.race)
+        ? character.race as { id?: unknown; lineage?: Array<{ id?: unknown }> }
+        : null;
+      if (typeof race?.id === "string" && race.id) knownRaceIds.add(race.id);
+      if (typeof character.raceId === "string" && character.raceId) knownRaceIds.add(character.raceId);
+      if (Array.isArray(race?.lineage)) {
+        for (const entry of race.lineage) {
+          if (typeof entry?.id === "string" && entry.id) knownRaceIds.add(entry.id);
+        }
+      }
+      const knownOrganizationIds = new Set(
+        (Array.isArray(character.organizations) ? character.organizations : []).flatMap((item) => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+          const organizationId = String((item as Record<string, unknown>).organizationId ?? "");
+          return organizationId ? [organizationId] : [];
+        })
+      );
+      const memoryRecords: Record<string, unknown>[] = [];
+      if (requestedCategories.includes("race")) {
+        for (const raceId of knownRaceIds) {
+          try {
+            const knownRace = this.store.getRace(raceId, true);
+            if (String(knownRace.workId) !== workId) continue;
+            const record = {
+              category: "race",
+              id: knownRace.id,
+              name: knownRace.name,
+              isExtinct: knownRace.isExtinct,
+              description: knownRace.description,
+              lineage: knownRace.lineage,
+              effectiveSettings: knownRace.effectiveSettings,
+              settingsSections: knownRace.settingsSections
+            };
+            if (matchesQuery(record)) memoryRecords.push(record);
+          } catch {
+            continue;
+          }
+        }
+      }
+      if (requestedCategories.includes("organization")) {
+        const memberships = Array.isArray(character.organizations) ? character.organizations : [];
+        for (const organizationId of knownOrganizationIds) {
+          try {
+            const organization = this.store.getOrganization(organizationId);
+            if (String(organization.workId) !== workId) continue;
+            const membership = memberships.find((item) => (
+              item && typeof item === "object" && !Array.isArray(item)
+              && String((item as Record<string, unknown>).organizationId ?? "") === organizationId
+            )) as Record<string, unknown> | undefined;
+            const record = {
+              category: "organization",
+              id: organization.id,
+              name: organization.name,
+              isDissolved: organization.isDissolved,
+              description: organization.description,
+              settingsSections: organization.settingsSections,
+              selfRole: String(membership?.role ?? ""),
+              selfNote: String(membership?.note ?? "")
+            };
+            if (matchesQuery(record)) memoryRecords.push(record);
+          } catch {
+            continue;
+          }
+        }
+      }
+      if (requestedCategories.includes("setting")) {
+        for (const setting of this.store.listSettings(workId, true)) {
+          const searchable = [setting.title, setting.category, JSON.stringify(setting.tags ?? []), setting.content];
+          if (!textMentionsAnyTerm(searchable.join("\n"), identityTerms)) continue;
+          const record = {
+            category: "setting",
+            id: setting.id,
+            title: setting.title,
+            settingCategory: setting.category,
+            content: collapseAiBlankLines(String(setting.content ?? "")),
+            tags: setting.tags,
+            status: setting.status,
+            locked: setting.locked
+          };
+          if (matchesQuery(record)) memoryRecords.push(record);
+        }
+      }
+      const records = structuralToolResultRecords(memoryRecords, maximumRecordChars);
+      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+        ok: true,
+        data: {
+          identity: { name: character.name, gender: character.gender, code: character.code },
+          query,
+          categories: requestedCategories,
+          memories: page,
+          ...(memoryRecords.length === 0 ? { hint: "No matching known world knowledge was found." } : {})
+        },
+        pagination
+      }), maximumResultChars);
+      return {
+        id: toolCall.id,
+        name,
+        calledAt,
+        arguments: { query, categories: requestedCategories, ...(cursor > 0 ? { cursor } : {}) },
         status: "completed",
         result
       };
@@ -7013,20 +7389,29 @@ export class AiManager {
       const { keyword, limit, cursor } = args as z.infer<typeof grepArguments>;
       const timelineAvailable = canReadWorkModule(permissions, "timeline");
       const chapterIds = scopedChapterIds ? [...scopedChapterIds] : undefined;
-      const matches = this.store.searchChapterParagraphs(workId, keyword, limit, {
+      const searchLimit = name === "recall_story" ? 100 : limit;
+      if (name === "recall_story" && !roleplayCharacterId) throw new Error("Roleplay character is required for recall_story");
+      const identityTerms = name === "recall_story" && roleplayCharacterId
+        ? roleplayCharacterNameTerms(this.store.getCharacter(roleplayCharacterId))
+        : [];
+      const paragraphMentionsSelf = (paragraph: unknown): boolean => (
+        name !== "recall_story" || textMentionsAnyTerm(paragraph, identityTerms)
+      );
+      const matches = this.store.searchChapterParagraphs(workId, keyword, searchLimit, {
         excludeAuthorNotes: true,
         includeStoryOrder: true,
         includeTimeline: timelineAvailable,
         order: "story_desc",
         chapterIds
-      });
+      }).filter((item) => paragraphMentionsSelf(item.paragraph)).slice(0, limit);
       const latestByStructure = this.store.searchLatestChapterParagraphsByStructure(workId, keyword, {
         excludeAuthorNotes: true,
         includeTimeline: timelineAvailable,
         chapterIds
-      });
+      }).filter((item) => paragraphMentionsSelf(item.paragraph));
       const latestByTimelineTrack = timelineAvailable
         ? this.store.searchLatestChapterParagraphsByTimelineTrack(workId, keyword, { excludeAuthorNotes: true, chapterIds })
+          .filter((item) => paragraphMentionsSelf(item.occurrence.paragraph))
         : [];
       const latestStructureRecords = structuralToolResultRecords(latestByStructure, maximumRecordChars)
         .map((record) => ({ ...record, _toolResultSection: "latestStructure" }));
@@ -7070,7 +7455,10 @@ export class AiManager {
                     ? "byStructure 可有多个并行末位；byTimelineTrack 每项是对应 trackId（null 表示未分轨事件）上最大已确认 timeSort 的代表段落，matchingLinksAtLatestTime 大于 1 表示该时刻存在并列匹配。"
                     : "byStructure 可有多个并行末位；当前不能读取时间线，因此不能判断倒叙时间。"
               },
-              matches: section("match")
+              matches: section("match"),
+              ...(name === "recall_story" && matches.length === 0
+                ? { hint: "No story memory mentioning this keyword was found in passages that include the current character." }
+                : {})
             },
             pagination
           };
