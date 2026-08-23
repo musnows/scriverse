@@ -62,6 +62,23 @@ async function submitLogin(runtime: Runtime, username: string, password: string)
   return request(runtime.app).post("/api/auth/login").send({ username, password, ...captcha });
 }
 
+async function submitDesktopLogin(
+  runtime: Runtime,
+  username: string,
+  password: string,
+  profileId = "11111111-1111-4111-8111-111111111111"
+) {
+  const captcha = await solveCaptcha(runtime.app);
+  return request(runtime.app).post("/api/desktop/auth/login").send({
+    username,
+    password,
+    desktopId: "22222222-2222-4222-8222-222222222222",
+    profileId,
+    clientVersion: "0.8.7",
+    ...captcha
+  });
+}
+
 function createUserAuthTestRuntime(allowRegistration = true): Runtime {
   const runtime = createRuntime({
     databasePath: ":memory:",
@@ -807,7 +824,111 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(otherSession.body.data.user.onboardingCompleted).toBe(false);
   });
 
-  it("服务器重启后使旧网页会话失效并要求重新登录", async () => {
+  it("Desktop 登录签发非 Cookie Bearer 会话并保留完整交互权限", async () => {
+    const registered = await register(runtime, "desktop_bearer_user");
+    const login = await submitDesktopLogin(runtime, registered.user.username, "secure-password-123");
+    expect(login.status).toBe(200);
+    expect(login.headers["set-cookie"]).toBeUndefined();
+    expect(login.headers["cache-control"]).toBe("no-store");
+    expect(login.body.data).toMatchObject({
+      token: expect.stringMatching(/^scrvd_[A-Za-z0-9_-]{43}$/u),
+      expiresAt: expect.any(String),
+      user: { userId: registered.user.userId }
+    });
+    const authorization = `Bearer ${String(login.body.data.token)}`;
+    const session = await request(runtime.app)
+      .get("/api/auth/session")
+      .set("Authorization", authorization)
+      .expect(200);
+    expect(session.body.data).toMatchObject({
+      authenticated: true,
+      csrfToken: null,
+      user: { userId: registered.user.userId }
+    });
+
+    const work = await request(runtime.app)
+      .post("/api/works")
+      .set("Authorization", authorization)
+      .send({ title: "Desktop Bearer 作品" })
+      .expect(201);
+    expect(work.body.data.title).toBe("Desktop Bearer 作品");
+    expect(runtime.database.get(
+      "SELECT token_hash = ? AS leaked, desktop_id, profile_id, client_version FROM user_desktop_sessions WHERE user_id = ?",
+      login.body.data.token,
+      registered.user.userId
+    )).toEqual({
+      leaked: 0,
+      desktop_id: "22222222-2222-4222-8222-222222222222",
+      profile_id: "11111111-1111-4111-8111-111111111111",
+      client_version: "0.8.7"
+    });
+
+    await request(runtime.app)
+      .delete("/api/auth/session")
+      .set("Authorization", authorization)
+      .expect(204)
+      .expect((response) => {
+        expect(response.headers["set-cookie"]).toBeUndefined();
+      });
+    const revoked = await request(runtime.app)
+      .get("/api/works")
+      .set("Authorization", authorization)
+      .expect(401);
+    expect(revoked.body.error.code).toBe("DESKTOP_SESSION_INVALID");
+  });
+
+  it("仅允许作品所有者通过网页或 Desktop 会话管理离线访问", async () => {
+    const owner = await register(runtime, "offline_owner");
+    const collaborator = await register(runtime, "offline_collaborator");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "离线授权作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    expect(work.body.data.offlineAccessEnabled).toBe(false);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, role: "editor" })
+      .expect(201);
+
+    const csrfDenied = await owner.agent.patch(`/api/works/${workId}/offline-access`)
+      .send({ enabled: true })
+      .expect(403);
+    expect(csrfDenied.body.error.code).toBe("CSRF_TOKEN_INVALID");
+    const collaboratorDenied = await collaborator.agent.patch(`/api/works/${workId}/offline-access`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ enabled: true })
+      .expect(403);
+    expect(collaboratorDenied.body.error.code).toBe("WORK_OWNER_REQUIRED");
+
+    const enabled = await owner.agent.patch(`/api/works/${workId}/offline-access`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ enabled: true })
+      .expect(200);
+    expect(enabled.body.data).toMatchObject({ id: workId, offlineAccessEnabled: true });
+    expect(runtime.database.get("SELECT offline_access_enabled FROM works WHERE id = ?", workId)).toEqual({ offline_access_enabled: 1 });
+
+    const apiKeyReset = await owner.agent.post("/api/auth/api-key/reset")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({})
+      .expect(200);
+    const apiKeyDenied = await request(runtime.app).patch(`/api/works/${workId}/offline-access`)
+      .set("Authorization", `Bearer ${String(apiKeyReset.body.data.apiKey)}`)
+      .send({ enabled: false })
+      .expect(403);
+    expect(apiKeyDenied.body.error.code).toBe("CLI_SCOPE_DENIED");
+
+    const desktopLogin = await submitDesktopLogin(runtime, owner.user.username, "secure-password-123");
+    expect(desktopLogin.status).toBe(200);
+    const desktopDisabled = await request(runtime.app).patch(`/api/works/${workId}/offline-access`)
+      .set("Authorization", `Bearer ${String(desktopLogin.body.data.token)}`)
+      .send({ enabled: false })
+      .expect(200);
+    expect(desktopDisabled.headers["set-cookie"]).toBeUndefined();
+    expect(desktopDisabled.body.data.offlineAccessEnabled).toBe(false);
+  });
+
+  it("服务器重启后使旧网页会话失效但保留 Desktop 会话", async () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-auth-restart-"));
     const databasePath = join(root, "novel.db");
     let firstRuntime: Runtime | null = null;
@@ -822,6 +943,9 @@ describe("用户、作品权限与操作者追踪 API", () => {
       });
       const user = await register(firstRuntime, "restart_user");
       await user.agent.get("/api/auth/session").expect(200);
+      const desktopLogin = await submitDesktopLogin(firstRuntime, "restart_user", "secure-password-123");
+      expect(desktopLogin.status).toBe(200);
+      const desktopAuthorization = `Bearer ${String(desktopLogin.body.data.token)}`;
       await firstRuntime.close();
       firstRuntime = null;
 
@@ -838,6 +962,15 @@ describe("用户、作品权限与操作者追踪 API", () => {
         .expect(200);
       expect(expiredSession.body.data).toMatchObject({ authenticated: false, user: null, csrfToken: null });
       await request(restartedRuntime.app).get("/api/works").set("Cookie", user.cookie).expect(401);
+      const persistentDesktopSession = await request(restartedRuntime.app)
+        .get("/api/auth/session")
+        .set("Authorization", desktopAuthorization)
+        .expect(200);
+      expect(persistentDesktopSession.body.data).toMatchObject({
+        authenticated: true,
+        csrfToken: null,
+        user: { userId: user.user.userId }
+      });
 
       const captcha = await solveCaptcha(restartedRuntime.app);
       await request(restartedRuntime.app).post("/api/auth/login").send({
@@ -3332,6 +3465,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
   it("管理员可管理账户，但不能停用自己或移除最后一名管理员", async () => {
     const admin = await register(runtime, "root_admin");
     const writer = await register(runtime, "normal_writer");
+    const writerDesktopLogin = await submitDesktopLogin(runtime, "normal_writer", "secure-password-123");
+    expect(writerDesktopLogin.status).toBe(200);
     await admin.agent.patch(`/api/users/${admin.user.userId}`).set("X-CSRF-Token", admin.csrfToken).send({ role: "user" }).expect(409);
     const promoted = await admin.agent.patch(`/api/users/${writer.user.userId}`).set("X-CSRF-Token", admin.csrfToken).send({ role: "admin" }).expect(200);
     expect(promoted.body.data.role).toBe("admin");
@@ -3339,6 +3474,10 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(disabled.body.data.status).toBe("disabled");
     expect(runtime.database.get(
       "SELECT COUNT(*) AS count FROM user_sessions WHERE user_id = ? AND revoked_at IS NULL",
+      writer.user.userId
+    )).toEqual({ count: 0 });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM user_desktop_sessions WHERE user_id = ? AND revoked_at IS NULL",
       writer.user.userId
     )).toEqual({ count: 0 });
     await writer.agent.get("/api/works").expect(401);

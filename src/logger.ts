@@ -11,7 +11,7 @@ export type LogRecord = {
   event: string;
   requestId?: string;
   actorRef?: string;
-  authentication?: "session" | "api-key";
+  authentication?: "session" | "desktop-session" | "api-key";
   [key: string]: unknown;
 };
 

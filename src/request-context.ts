@@ -5,7 +5,7 @@ export type RequestActor = {
   username: string;
   displayName: string;
   role: "admin" | "user";
-  authentication?: "session" | "api-key";
+  authentication?: "session" | "desktop-session" | "api-key";
 };
 
 export type RequestContext = {

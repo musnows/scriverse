@@ -13,6 +13,7 @@ import { logger, sanitizeError } from "./logger.js";
 import { resolveReleaseCheckIntervalMs, resolveReleaseCheckRetries, resolveReleaseCheckTimeoutMs } from "./release-update.js";
 import { resolveImageUploadLimits } from "./upload-limits.js";
 import { resolveBetaVersionLabel } from "./version.js";
+import { claimServerDataDirectory, STORAGE_MANIFEST_FILENAME } from "./storage-manifest.js";
 
 export type LocalServerOptions = {
   host: string;
@@ -187,6 +188,12 @@ export function createPreMigrationBackup(
     cpSync(masterKeyPath, target, { preserveTimestamps: true });
     chmodSync(target, 0o600);
   }
+  const storageManifestPath = join(options.dataDirectory, STORAGE_MANIFEST_FILENAME);
+  if (existsSync(storageManifestPath)) {
+    const target = join(incompleteDirectory, STORAGE_MANIFEST_FILENAME);
+    cpSync(storageManifestPath, target, { preserveTimestamps: true });
+    chmodSync(target, 0o600);
+  }
   const attachmentsPath = join(options.dataDirectory, "attachments");
   if (existsSync(attachmentsPath)) {
     cpSync(attachmentsPath, join(incompleteDirectory, "attachments"), { recursive: true, preserveTimestamps: true });
@@ -217,6 +224,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
   try {
     mkdirSync(options.dataDirectory, { recursive: true, mode: 0o700 });
     chmodSync(options.dataDirectory, 0o700);
+    claimServerDataDirectory(options.dataDirectory, options.databasePath);
     recordStartupAttempt(options.dataDirectory, options.env);
     security = resolveRuntimeSecurity(options.env);
     warnIfPrivateAiEndpointsEnabled(options.env);

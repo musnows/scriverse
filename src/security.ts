@@ -152,7 +152,7 @@ export function createBasicAuthMiddleware(options: BasicAuthOptions): RequestHan
 
 export function createSecurityHeadersMiddleware(): RequestHandler {
   return (request, response, next) => {
-    response.setHeader("Content-Security-Policy", "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'none'");
+    response.setHeader("Content-Security-Policy", "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self'");
     response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
     response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
     response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
@@ -212,7 +212,8 @@ export function createAuthenticationRateLimitMiddleware(limit = 10, windowMs = 1
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
     const path = normalizeApiPath(request.path);
-    const authenticationWrite = request.method === "POST" && ["/api/auth/login", "/api/auth/register"].includes(path);
+    const authenticationWrite = request.method === "POST"
+      && ["/api/auth/login", "/api/auth/register", "/api/desktop/auth/login"].includes(path);
     if (!authenticationWrite) return next();
     const rate = consumeRate(entries, `${requestKey(request)}:${path}`, limit, windowMs);
     if (rate.allowed) return next();

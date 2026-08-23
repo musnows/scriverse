@@ -88,6 +88,45 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA index_list(drafts)").some((index) => index.name === "idx_drafts_favorite")).toBe(true);
     expect(first.all("PRAGMA index_list(settings)").some((index) => index.name === "idx_settings_favorite")).toBe(true);
     expect(first.all("PRAGMA index_list(organizations)").some((index) => index.name === "idx_organizations_favorite")).toBe(true);
+    expect(first.all("PRAGMA table_info(user_desktop_sessions)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "id",
+      "user_id",
+      "token_hash",
+      "desktop_id",
+      "profile_id",
+      "client_version",
+      "expires_at",
+      "revoked_at"
+    ]));
+    expect(first.all("PRAGMA index_list(user_desktop_sessions)").map((index) => index.name)).toEqual(expect.arrayContaining([
+      "idx_user_desktop_sessions_token",
+      "idx_user_desktop_sessions_user",
+      "idx_user_desktop_sessions_active_profile"
+    ]));
+    expect(first.get("SELECT offline_access_enabled FROM works WHERE id = 'work-old'")).toEqual({ offline_access_enabled: 0 });
+    expect(first.all("PRAGMA table_info(sync_changes)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "cursor",
+      "work_id",
+      "entity_type",
+      "entity_id",
+      "operation",
+      "version_no",
+      "changed_by_user_id",
+      "changed_at"
+    ]));
+    expect(first.all("PRAGMA table_info(sync_mutation_results)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "mutation_id",
+      "client_id",
+      "user_id",
+      "work_id",
+      "request_hash",
+      "status",
+      "result_json"
+    ]));
+    expect(first.all("PRAGMA index_list(sync_changes)").map((index) => index.name)).toEqual(expect.arrayContaining([
+      "idx_sync_changes_work_cursor",
+      "idx_sync_changes_entity"
+    ]));
     expect(first.all("PRAGMA table_info(s3_backup_targets)").map((column) => column.name)).toEqual(expect.arrayContaining([
       "id",
       "endpoint",

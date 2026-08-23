@@ -1171,7 +1171,39 @@ export class Store {
       timestamp ?? now(),
       currentRequestActor()?.userId ?? null
     );
+    if (type === "setting") {
+      this.recordSyncChange(
+        String(entity.workId),
+        "setting",
+        entityId,
+        source === "delete" ? "delete" : "upsert",
+        versionNo,
+        timestamp
+      );
+    }
     return versionNo;
+  }
+
+  private recordSyncChange(
+    workId: string,
+    entityType: "chapter" | "setting",
+    entityId: string,
+    operation: "upsert" | "delete",
+    versionNo: number,
+    timestamp?: string
+  ): void {
+    this.db.run(
+      `INSERT INTO sync_changes (
+         work_id, entity_type, entity_id, operation, version_no, changed_by_user_id, changed_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      workId,
+      entityType,
+      entityId,
+      operation,
+      versionNo,
+      currentRequestActor()?.userId ?? null,
+      timestamp ?? now()
+    );
   }
 
   private backfillEntityVersionBaselines(): void {
@@ -1897,6 +1929,30 @@ export class Store {
       );
       this.recordEntityVersion("work", workId, source, sourceRef, changeNote || "更新作品信息", timestamp);
       this.audit(workId, "work.updated", "work", workId, { fields: Object.keys(input), versionNo: Number(current.versionNo) + 1, source, sourceRef, changeNote });
+    });
+    return this.getWork(workId);
+  }
+
+  setWorkOfflineAccess(workId: string, enabled: boolean): Record<string, unknown> {
+    this.db.transaction(() => {
+      const current = this.getWork(workId);
+      if (Boolean(current.offlineAccessEnabled) === enabled) return;
+      const timestamp = now();
+      this.db.run(
+        "UPDATE works SET offline_access_enabled = ?, version_no = version_no + 1, updated_at = ? WHERE id = ?",
+        enabled ? 1 : 0,
+        timestamp,
+        workId
+      );
+      this.recordEntityVersion(
+        "work",
+        workId,
+        "manual",
+        null,
+        enabled ? "允许 Desktop 离线访问" : "禁止 Desktop 离线访问",
+        timestamp
+      );
+      this.audit(workId, enabled ? "work.offline-access.enabled" : "work.offline-access.disabled", "work", workId, { enabled });
     });
     return this.getWork(workId);
   }
@@ -2908,6 +2964,7 @@ export class Store {
     changeNote: string;
     timestamp?: string;
   }): void {
+    const timestamp = input.timestamp ?? now();
     this.db.run(
       `INSERT INTO chapter_versions (
          id, work_id, chapter_id, version_no, title, content, volume_id, sort_order, chapter_type,
@@ -2925,8 +2982,16 @@ export class Store {
       input.source,
       input.sourceRef,
       input.changeNote.trim(),
-      input.timestamp ?? now(),
+      timestamp,
       currentRequestActor()?.userId ?? null
+    );
+    this.recordSyncChange(
+      input.workId,
+      "chapter",
+      input.chapterId,
+      input.source === "delete" ? "delete" : "upsert",
+      input.versionNo,
+      timestamp
     );
   }
 
@@ -3042,7 +3107,7 @@ export class Store {
     const hasOtherChange = nextExcluded !== current.excludedFromAnalysis || hasTypeChange;
     if (!hasTextChange && !hasOtherChange) return current;
     const timestamp = now();
-    const versionNo = Number(current.versionNo) + (hasTextChange ? 1 : 0);
+    const versionNo = Number(current.versionNo) + (hasTextChange || hasTypeChange ? 1 : 0);
     this.db.transaction(() => {
       const lockedCurrent = this.getChapter(chapterId);
       this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(lockedCurrent.versionNo));
@@ -3060,7 +3125,8 @@ export class Store {
         chapterId
       );
       if (hasTextChange) this.syncChapterParagraphSearch(String(current.workId), chapterId, nextContent);
-      if (hasTextChange) {
+      else if (hasTypeChange) this.syncChapterParagraphSearchVersion(chapterId, versionNo);
+      if (hasTextChange || hasTypeChange) {
         this.insertChapterVersionRow({
           workId: String(current.workId),
           chapterId,
@@ -3072,7 +3138,7 @@ export class Store {
           chapterType: nextChapterType,
           source,
           sourceRef,
-          changeNote: changeNote || "更新章节正文",
+          changeNote: changeNote || (hasTextChange ? "更新章节正文" : "更新章节类型"),
           timestamp
         });
       }
@@ -3715,9 +3781,33 @@ export class Store {
         }
       } else if (action.type === "setType") {
         for (const chapter of currentChapters) {
-          this.db.run("UPDATE chapters SET chapter_type = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?", action.chapterType, timestamp, String(chapter.id));
-          this.invalidateChapter(workId, String(chapter.id), Number(chapter.versionNo));
-          this.audit(workId, "chapter.saved", "chapter", String(chapter.id), { chapterType: action.chapterType, batch: true });
+          if (chapter.chapterType === action.chapterType) continue;
+          const chapterId = String(chapter.id);
+          const versionNo = Number(chapter.versionNo) + 1;
+          this.db.run(
+            "UPDATE chapters SET chapter_type = ?, version_no = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?",
+            action.chapterType,
+            versionNo,
+            timestamp,
+            chapterId
+          );
+          this.syncChapterParagraphSearchVersion(chapterId, versionNo);
+          this.insertChapterVersionRow({
+            workId,
+            chapterId,
+            versionNo,
+            title: String(chapter.title),
+            content: String(chapter.content),
+            volumeId: String(chapter.volumeId),
+            sortOrder: Number(chapter.sortOrder),
+            chapterType: action.chapterType,
+            source: "manual",
+            sourceRef: null,
+            changeNote: "批量更新章节类型",
+            timestamp
+          });
+          this.invalidateChapter(workId, chapterId, versionNo);
+          this.audit(workId, "chapter.saved", "chapter", chapterId, { chapterType: action.chapterType, versionNo, batch: true });
         }
       } else if (action.type === "setAnalysisExclusion") {
         for (const chapter of currentChapters) {
@@ -4247,6 +4337,7 @@ export class Store {
         ? `/api/works/${encodeURIComponent(workId)}/cover?v=${encodeURIComponent(requiredString(cover, "updated_at"))}`
         : optionalString(row, "cover_url"),
       tags: json(requiredString(row, "tags_json"), []),
+      offlineAccessEnabled: numberValue(row, "offline_access_enabled") === 1,
       versionNo: numberValue(row, "version_no") || this.currentEntityVersionNo("work", workId),
       ownerUserId,
       accessRole,

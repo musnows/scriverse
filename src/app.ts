@@ -46,6 +46,7 @@ import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
+import { OfflineSyncService } from "./offline-sync.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
 import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logging.js";
@@ -53,6 +54,7 @@ import { accountReference, logger, sanitizeError } from "./logger.js";
 import { currentRequestActor, runWithRequestActor } from "./request-context.js";
 import { S3BackupManager, type S3BackupManagerOptions } from "./s3-backup.js";
 import { APP_VERSION } from "./version.js";
+import { DESKTOP_SYNC_PROTOCOL, desktopCompatibilityMetadata } from "./desktop-protocol.js";
 import { ReleaseUpdateChecker } from "./release-update.js";
 import { CHARACTER_AVATAR_IMAGE_MAX_BYTES, DEFAULT_IMAGE_UPLOAD_LIMITS, formatUploadLimit, type ImageUploadLimits } from "./upload-limits.js";
 import { canReadWorkModule, canWriteWorkModule, chapterAnnotationPermissionModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
@@ -160,6 +162,14 @@ const loginSchema = z.object({
   password: z.string().max(200),
   ...captchaFields
 }).strict();
+const desktopLoginSchema = z.object({
+  username: z.string().trim().min(1).max(100),
+  password: z.string().max(200),
+  desktopId: z.string().uuid(),
+  profileId: z.string().uuid(),
+  clientVersion: z.string().trim().min(1).max(80),
+  ...captchaFields
+}).strict();
 const userUpdateSchema = z.object({ role: z.enum(["admin", "user"]).optional(), status: z.enum(["active", "disabled"]).optional() }).strict();
 const memberRoleValueSchema = z.enum(["editor", "settings-editor", "viewer"]);
 const moduleAccessSchema = z.enum(["none", "read", "write"]);
@@ -238,6 +248,7 @@ const workSchema = z.object({
   coverUrl: z.string().url().nullable().optional(),
   tags: optionalStrings
 });
+const workOfflineAccessSchema = z.object({ enabled: z.boolean() }).strict();
 
 const settingSchema = z.object({
   title: nonEmpty.max(200),
@@ -249,6 +260,31 @@ const settingSchema = z.object({
   evidence: z.array(z.unknown()).optional(),
   scope: jsonObject.optional(),
   authorNote: z.string().max(20_000).optional()
+});
+const chapterSyncSnapshotSchema = z.object({
+  title: nonEmpty.max(300),
+  content: z.string().max(2_000_000),
+  chapterType: chapterTypeSchema
+}).strict();
+const settingSyncSnapshotSchema = settingSchema.strict();
+const syncMutationBaseFields = {
+  mutationId: z.string().uuid(),
+  entityId: identifier,
+  operation: z.literal("update"),
+  baseVersionNo: z.number().int().positive(),
+  changeNote: z.string().trim().min(1).max(500).default("Desktop 离线修改")
+};
+const syncPushSchema = z.object({
+  clientId: z.string().uuid(),
+  mutations: z.array(z.discriminatedUnion("entityType", [
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("chapter"), localSnapshot: chapterSyncSnapshotSchema }).strict(),
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("setting"), localSnapshot: settingSyncSnapshotSchema }).strict()
+  ])).min(1).max(20)
+}).strict().superRefine((input, context) => {
+  const mutationIds = input.mutations.map((mutation) => mutation.mutationId);
+  if (new Set(mutationIds).size !== mutationIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["mutations"], message: "同一批次不能重复 mutationId" });
+  }
 });
 
 const globalReplaceSchema = z.object({
@@ -686,6 +722,20 @@ const contextSchema = z.object({
   includeSettingInfo: z.boolean().optional()
 });
 
+const desktopLocalAiPreparationSchema = z.object({
+  taskType: z.enum(["chat", "continue", "polish"]),
+  instruction: nonEmpty.max(100_000),
+  scope: contextSchema,
+  contextWindow: z.number().int().min(32_768).max(2_000_000),
+  maxOutputTokens: z.number().int().min(1).max(2_000_000),
+  conversationId: identifier.optional(),
+  currentMessageId: identifier.optional(),
+  citations: aiCitationsSchema.optional()
+}).strict().refine((input) => input.maxOutputTokens < input.contextWindow, {
+  path: ["maxOutputTokens"],
+  message: "本地 AI 最大输出令牌数必须小于上下文窗口"
+});
+
 /** 创建任务 API 的分析类型校验：仅允许可新建类型，历史类型在运行层保留防御性拒绝。 */
 export const creatableAnalysisTaskTypeSchema = z.enum(CREATABLE_ANALYSIS_TASK_TYPES);
 const relationshipSourceRefSchema = z.object({
@@ -888,6 +938,7 @@ export type Runtime = {
   liteLlmPriceCache: LiteLlmPriceCache;
   backups: S3BackupManager;
   auth: UserAuthService;
+  offlineSync: OfflineSyncService;
   attachmentStorage: AttachmentStorage;
   characterAvatarStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
@@ -902,6 +953,10 @@ function data(response: Response, value: unknown, status = 200): void {
 
 function noContent(response: Response): void {
   response.status(204).end();
+}
+
+function hasInteractiveSession(request: Request): boolean {
+  return request.authMethod === "session" || request.authMethod === "desktop-session";
 }
 
 async function sendEpub(response: Response, archive: Readable, title: string, fallbackStem: string): Promise<void> {
@@ -1335,6 +1390,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
   const store = new Store(database);
+  const offlineSync = new OfflineSyncService(database, store);
   const platformAiSettings = store.getPlatformAiSettings();
   const platformAiStreamIdleTimeoutMs = normalizeAiStreamIdleTimeoutSeconds(
     Number(platformAiSettings.streamIdleTimeoutSeconds)
@@ -1487,6 +1543,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       status: "ok",
       bootId,
       version: APP_VERSION,
+      ...desktopCompatibilityMetadata(),
       versionLabel: options.betaVersionLabel ?? null,
       protocol: "openai-chat-completions",
       protocols: [...AI_PROVIDER_PROTOCOLS],
@@ -1504,10 +1561,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.use(createCaptchaRateLimitMiddleware());
   app.use(createApiRateLimitMiddleware(options.security?.apiRateLimit, options.security?.apiRateWindowMs));
   if (options.security?.enforceSameOrigin ?? true) app.use(createSameOriginMiddleware());
+  app.use("/api/sync/works", express.json({ limit: "3mb" }));
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/api/auth/session", (request, response) => {
-    const session = auth.authenticate(request);
+    const desktopSession = auth.authenticateDesktop(request);
+    const session = desktopSession ? null : auth.authenticate(request);
     const registrationOpen = options.security?.allowRegistration === true;
     const setupRequired = !auth.hasUsers();
     const setupTokenRequired = setupRequired && Boolean(options.security?.setupToken);
@@ -1516,8 +1575,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       data(response, { authenticated: true, user: developmentUser, csrfToken: null, bootId, setupRequired: false, setupTokenRequired: false, registrationOpen });
       return;
     }
-    data(response, session
-      ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, bootId, setupRequired: false, setupTokenRequired: false, registrationOpen }
+    const interactiveSession = desktopSession ?? session;
+    data(response, interactiveSession
+      ? {
+          authenticated: true,
+          user: interactiveSession.user,
+          csrfToken: desktopSession ? null : session!.csrfToken,
+          bootId,
+          setupRequired: false,
+          setupTokenRequired: false,
+          registrationOpen
+        }
       : { authenticated: false, user: null, csrfToken: null, bootId, setupRequired, setupTokenRequired, registrationOpen });
   });
   app.get("/api/auth/captcha", (_request, response) => {
@@ -1547,6 +1615,19 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     logger.info("auth.login.succeeded", { actorRef: accountReference(result.session.user.userId) });
     data(response, { user: result.session.user, csrfToken: result.session.csrfToken });
   });
+  app.post("/api/desktop/auth/login", (request, response) => {
+    const input = parse(desktopLoginSchema, request.body);
+    captcha.consume(input.captchaId, input.captchaAnswer);
+    const result = auth.loginDesktop(input.username, input.password, {
+      desktopId: input.desktopId,
+      profileId: input.profileId,
+      clientVersion: input.clientVersion
+    });
+    response.setHeader("Cache-Control", "no-store");
+    runWithRequestActor(result.session.user, () => store.audit(null, "user.logged-in", "user", result.session.user.userId, { source: "desktop" }));
+    logger.info("auth.desktop_login.succeeded", { actorRef: accountReference(result.session.user.userId) });
+    data(response, { token: result.token, expiresAt: result.session.expiresAt, user: result.session.user });
+  });
   app.use(createUserSessionMiddleware(auth, {
     disabled: options.disableUserAuth === true,
     resolveBypassUser: getDevelopmentUser
@@ -1560,12 +1641,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, { authenticated: true, user: request.authUser, apiKeyPrefix: request.authApiKey?.prefix ?? null });
   });
   app.delete("/api/auth/session", (request, response) => {
-    if (request.authSession) auth.revoke(request.authSession.id);
-    clearSessionCookie(response, request.secure);
+    if (request.authDesktopSession) auth.revokeDesktop(request.authDesktopSession.id);
+    if (request.authSession) {
+      auth.revoke(request.authSession.id);
+      clearSessionCookie(response, request.secure);
+    }
     noContent(response);
   });
   app.post("/api/auth/onboarding/complete", (request, response) => {
-    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话完成新手引导");
+    if (!request.authUser || !hasInteractiveSession(request)) throw new AppError(401, "SESSION_REQUIRED", "请使用交互式会话完成新手引导");
     parse(z.object({}).strict(), request.body ?? {});
     const updated = auth.completeOnboarding(request.authUser.userId);
     store.audit(null, "user.onboarding-completed", "user", updated.userId);
@@ -1609,18 +1693,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, updated);
   });
   app.patch("/api/auth/password", (request, response) => {
-    if (!request.authUser || !request.authSession) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    const activeSession = request.authDesktopSession
+      ? { id: request.authDesktopSession.id, kind: "desktop" as const }
+      : request.authSession
+        ? { id: request.authSession.id, kind: "browser" as const }
+        : null;
+    if (!request.authUser || !activeSession) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     const input = parse(passwordChangeSchema, request.body);
-    auth.changePassword(request.authUser.userId, request.authSession.id, input.currentPassword, input.newPassword);
+    auth.changePassword(request.authUser.userId, activeSession.id, input.currentPassword, input.newPassword, activeSession.kind);
     store.audit(null, "user.password-changed", "user", request.authUser.userId);
     noContent(response);
   });
   app.get("/api/auth/api-key", (request, response) => {
-    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话管理 API Key");
+    if (!request.authUser || !hasInteractiveSession(request)) throw new AppError(401, "SESSION_REQUIRED", "请使用交互式会话管理 API Key");
     data(response, auth.getApiKeyStatus(request.authUser.userId));
   });
   app.post("/api/auth/api-key/reveal", (request, response) => {
-    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话管理 API Key");
+    if (!request.authUser || !hasInteractiveSession(request)) throw new AppError(401, "SESSION_REQUIRED", "请使用交互式会话管理 API Key");
     parse(z.object({}).strict(), request.body ?? {});
     const userId = request.authUser.userId;
     const revealed = database.transaction(() => {
@@ -1631,7 +1720,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, revealed);
   });
   app.post("/api/auth/api-key/reset", (request, response) => {
-    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话管理 API Key");
+    if (!request.authUser || !hasInteractiveSession(request)) throw new AppError(401, "SESSION_REQUIRED", "请使用交互式会话管理 API Key");
     parse(z.object({}).strict(), request.body ?? {});
     const userId = request.authUser.userId;
     const result = database.transaction(() => {
@@ -1715,7 +1804,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? store.getWorkDirectoryPage(request.params.workId, pagination) : store.getWorkDirectory(request.params.workId));
   });
   app.post("/api/works/:workId/presence", (request, response) => {
-    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话上报协作状态");
+    if (!request.authUser || !hasInteractiveSession(request)) throw new AppError(401, "SESSION_REQUIRED", "请使用交互式会话上报协作状态");
     const input = parse(presenceHeartbeatSchema, request.body);
     data(response, collaborationPresence.heartbeat(request.params.workId, input.clientId, {
       userId: request.authUser.userId,
@@ -1767,6 +1856,82 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       request.body
     );
     data(response, store.updateWork(request.params.workId, input, expectedVersionNo, "manual", null, changeNote));
+  });
+  app.patch("/api/works/:workId/offline-access", (request, response) => {
+    if (!request.authUser || !hasInteractiveSession(request)) {
+      throw new AppError(401, "SESSION_REQUIRED", "请使用网页或 Desktop 登录管理离线访问");
+    }
+    const input = parse(workOfflineAccessSchema, request.body);
+    data(response, store.setWorkOfflineAccess(request.params.workId, input.enabled));
+  });
+  app.post("/api/sync/works/:workId/snapshots", (request, response) => {
+    if (!request.authUser || !hasInteractiveSession(request)) {
+      throw new AppError(401, "SESSION_REQUIRED", "请使用 Desktop 或网页登录创建同步快照");
+    }
+    parse(z.object({}).strict(), request.body ?? {});
+    response.setHeader("Cache-Control", "no-store");
+    data(response, offlineSync.createSnapshot(request.params.workId, request.authUser.userId), 201);
+  });
+  app.get("/api/sync/works/:workId/changes", (request, response) => {
+    if (!request.authUser || !hasInteractiveSession(request)) {
+      throw new AppError(401, "SESSION_REQUIRED", "请使用 Desktop 或网页登录读取同步变更");
+    }
+    const query = parse(z.object({
+      after: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+      limit: z.coerce.number().int().min(1).max(200).default(200)
+    }).strict(), request.query);
+    response.setHeader("Cache-Control", "no-store");
+    data(response, offlineSync.listChanges(request.params.workId, query.after, query.limit));
+  });
+  app.post("/api/sync/works/:workId/push", (request, response) => {
+    if (!request.authUser || !hasInteractiveSession(request)) {
+      throw new AppError(401, "SESSION_REQUIRED", "请使用 Desktop 或网页登录提交离线变更");
+    }
+    if (Buffer.byteLength(JSON.stringify(request.body ?? {}), "utf8") > DESKTOP_SYNC_PROTOCOL.maxMutationBytes) {
+      throw new AppError(413, "SYNC_PUSH_TOO_LARGE", `同步批次不能超过 ${DESKTOP_SYNC_PROTOCOL.maxMutationBytes} bytes`);
+    }
+    const input = parse(syncPushSchema, request.body);
+    response.setHeader("Cache-Control", "no-store");
+    data(response, offlineSync.pushMutations(
+      request.params.workId,
+      request.authUser.userId,
+      input.clientId,
+      input.mutations
+    ));
+  });
+  app.get("/api/sync/works/:workId/mutations/:mutationId", (request, response) => {
+    if (!request.authUser || !hasInteractiveSession(request)) {
+      throw new AppError(401, "SESSION_REQUIRED", "请使用 Desktop 或网页登录读取同步变更结果");
+    }
+    const mutationId = parse(z.string().uuid(), request.params.mutationId);
+    response.setHeader("Cache-Control", "no-store");
+    data(response, offlineSync.getMutationResult(request.params.workId, request.authUser.userId, mutationId));
+  });
+  app.get("/api/sync/snapshots/:snapshotId/items", (request, response) => {
+    if (!request.authUser || !hasInteractiveSession(request)) {
+      throw new AppError(401, "SESSION_REQUIRED", "请使用 Desktop 或网页登录读取同步快照");
+    }
+    const snapshotId = parse(z.string().uuid(), request.params.snapshotId);
+    const snapshot = offlineSync.describeOwnedSnapshot(snapshotId, request.authUser.userId);
+    auth.assertActiveWork(snapshot.workId);
+    auth.assertWorkAccess(request.authUser, snapshot.workId, { read: ["prose", "settings"] }, false, true);
+    const query = parse(z.object({
+      after: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+      limit: z.coerce.number().int().min(1).max(100).default(100)
+    }).strict(), request.query);
+    response.setHeader("Cache-Control", "no-store");
+    data(response, offlineSync.readSnapshotPage(snapshotId, request.authUser.userId, query.after, query.limit));
+  });
+  app.delete("/api/sync/snapshots/:snapshotId", (request, response) => {
+    if (!request.authUser || !hasInteractiveSession(request)) {
+      throw new AppError(401, "SESSION_REQUIRED", "请使用 Desktop 或网页登录删除同步快照");
+    }
+    const snapshotId = parse(z.string().uuid(), request.params.snapshotId);
+    const snapshot = offlineSync.describeOwnedSnapshot(snapshotId, request.authUser.userId);
+    auth.assertActiveWork(snapshot.workId);
+    auth.assertWorkAccess(request.authUser, snapshot.workId, { read: ["prose", "settings"] }, false, true);
+    offlineSync.deleteSnapshot(snapshotId, request.authUser.userId);
+    noContent(response);
   });
   app.delete("/api/works/:workId", async (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
@@ -3091,6 +3256,36 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       ? mapRecords(ai.listSuggestionsPage(request.params.workId, pagination, status), (suggestion) => redactSuggestion(suggestion, permissions))
       : ai.listSuggestions(request.params.workId, status).map((suggestion) => redactSuggestion(suggestion, permissions)));
   });
+  app.post("/api/works/:workId/desktop-local-ai/prepare", (request, response) => {
+    const input = parse(desktopLocalAiPreparationSchema, request.body);
+    const permissions = requestPermissions(request, request.params.workId);
+    if (!canWriteWorkModule(permissions, "ai-chat")) {
+      throw new AppError(403, "WORK_MODULE_WRITE_DENIED", "你没有使用创作助手的权限");
+    }
+    const citations = input.citations ?? [];
+    for (const citation of citations) {
+      if (store.getChapter(citation.chapterId).workId !== request.params.workId) {
+        throw new AppError(400, "CITATION_WORK_MISMATCH", "引用章节不属于当前作品");
+      }
+    }
+    if (input.conversationId) {
+      assertRequestAiConversationOwner(request, input.conversationId);
+      const conversation = store.getAiConversationSummary(input.conversationId);
+      if (String(conversation.workId) !== request.params.workId) {
+        throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+      }
+    }
+    data(response, ai.prepareDesktopLocalAiCompletion({
+      workId: request.params.workId,
+      taskType: input.taskType,
+      instruction: instructionWithCitations(input.instruction, citations),
+      scope: input.scope as ContextScope,
+      contextWindow: input.contextWindow,
+      maxOutputTokens: input.maxOutputTokens,
+      ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+      ...(input.currentMessageId ? { excludeConversationMessageId: input.currentMessageId } : {})
+    }));
+  });
   app.post("/api/works/:workId/suggestions", async (request, response) => {
     const input = parse(z.object({
       taskType: z.enum(TASK_TYPES),
@@ -3610,6 +3805,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       backups.dispose();
       liteLlmPriceCache.dispose();
       ai.dispose();
+      offlineSync.dispose();
       const cancelledStreamRequests = store.cancelActiveAiConversationStreamRequests();
       if (cancelledStreamRequests > 0) logger.info("ai.stream.requests_cancelled", { count: cancelledStreamRequests });
     }
@@ -3630,5 +3826,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     })();
     return closePromise;
   };
-  return { app, database, store, ai, liteLlmPriceCache, backups, auth, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
+  return { app, database, store, ai, liteLlmPriceCache, backups, auth, offlineSync, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
 }

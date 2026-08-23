@@ -64,6 +64,15 @@ export type AuthSession = {
   csrfToken: string;
 };
 
+export type AuthDesktopSession = {
+  id: string;
+  user: AuthUser;
+  desktopId: string;
+  profileId: string;
+  clientVersion: string;
+  expiresAt: string;
+};
+
 export type AuthApiKey = {
   user: AuthUser;
   prefix: string;
@@ -86,15 +95,18 @@ declare global {
   namespace Express {
     interface Request {
       authSession?: AuthSession;
+      authDesktopSession?: AuthDesktopSession;
       authUser?: AuthUser;
-      authMethod?: "session" | "api-key";
+      authMethod?: "session" | "desktop-session" | "api-key";
       authApiKey?: AuthApiKey;
     }
   }
 }
 
-const sessionCookieName = "scriverse_session";
-const sessionLifetimeMs = 30 * 24 * 60 * 60_000;
+export const SESSION_COOKIE_NAME = "scriverse_session";
+export const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60_000;
+export const DESKTOP_SESSION_TOKEN_PREFIX = "scrvd_";
+export const DESKTOP_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60_000;
 const apiKeyPrefix = "scrv_";
 function membershipAccessRole(row: Row | undefined): PublicWorkAccessRole | null {
   const role = String(row?.role ?? "");
@@ -139,12 +151,23 @@ function parseCookies(header: string | undefined): Map<string, string> {
   return result;
 }
 
+function bearerCredential(request: Request): string | null {
+  const authorization = request.get("authorization");
+  if (!authorization?.startsWith("Bearer ")) return null;
+  const token = authorization.slice(7).trim();
+  return token.length > 0 && token.length <= 200 ? token : null;
+}
+
 function apiKeyCredential(request: Request): string | null {
   const direct = request.get("x-scriverse-api-key")?.trim();
   if (direct) return direct;
-  const authorization = request.get("authorization");
-  if (!authorization?.startsWith("Bearer ")) return null;
-  return authorization.slice(7).trim();
+  const bearer = bearerCredential(request);
+  return bearer?.startsWith(apiKeyPrefix) ? bearer : null;
+}
+
+function desktopSessionCredential(request: Request): string | null {
+  const bearer = bearerCredential(request);
+  return bearer?.startsWith(DESKTOP_SESSION_TOKEN_PREFIX) ? bearer : null;
 }
 
 function mapUser(row: Row): AuthUser {
@@ -177,6 +200,7 @@ function workIdFromPath(database: Database, pathname: string): string | null {
   const resource = (decoded[2] ?? "").toLocaleLowerCase("en-US");
   if (root !== "api") return null;
   if (resource === "works" && decoded[3] && decoded[3].toLocaleLowerCase("en-US") !== "import") return decoded[3];
+  if (resource === "sync" && decoded[3]?.toLocaleLowerCase("en-US") === "works" && decoded[4]) return decoded[4];
   const tableByResource: Record<string, string> = {
     volumes: "volumes",
     chapters: "chapters",
@@ -301,11 +325,55 @@ export class UserAuthService {
       sha256(token),
       csrfToken,
       timestamp.toISOString(),
-      new Date(timestamp.getTime() + sessionLifetimeMs).toISOString(),
+      new Date(timestamp.getTime() + SESSION_LIFETIME_MS).toISOString(),
       timestamp.toISOString()
     );
     const user = this.getUser(userId);
     return { token, session: { id: sessionId, user, csrfToken } };
+  }
+
+  private createDesktopSession(userId: string, input: {
+    desktopId: string;
+    profileId: string;
+    clientVersion: string;
+  }): { token: string; session: AuthDesktopSession } {
+    const token = `${DESKTOP_SESSION_TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
+    const sessionId = randomUUID();
+    const timestamp = new Date();
+    const createdAt = timestamp.toISOString();
+    const expiresAt = new Date(timestamp.getTime() + DESKTOP_SESSION_LIFETIME_MS).toISOString();
+    this.database.run(
+      `UPDATE user_desktop_sessions SET revoked_at = ?
+       WHERE desktop_id = ? AND profile_id = ? AND revoked_at IS NULL`,
+      createdAt,
+      input.desktopId,
+      input.profileId
+    );
+    this.database.run(
+      `INSERT INTO user_desktop_sessions (
+         id, user_id, token_hash, desktop_id, profile_id, client_version, created_at, expires_at, last_seen_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      sessionId,
+      userId,
+      sha256(token),
+      input.desktopId,
+      input.profileId,
+      input.clientVersion,
+      createdAt,
+      expiresAt,
+      createdAt
+    );
+    return {
+      token,
+      session: {
+        id: sessionId,
+        user: this.getUser(userId),
+        desktopId: input.desktopId,
+        profileId: input.profileId,
+        clientVersion: input.clientVersion,
+        expiresAt
+      }
+    };
   }
 
   register(input: { username: string; password: string }): { token: string; session: AuthSession } {
@@ -353,9 +421,12 @@ export class UserAuthService {
     });
   }
 
-  login(username: string, password: string): { token: string; session: AuthSession } {
+  private validateLoginCredentials(username: string, password: string): {
+    user: AuthUser;
+    normalizedUsername: string;
+    loginAt: string;
+  } {
     const normalizedUsername = normalizeUsername(username);
-    const timestamp = new Date();
     const row = this.database.get(
       "SELECT * FROM users WHERE normalized_username = ?",
       normalizedUsername
@@ -372,16 +443,43 @@ export class UserAuthService {
       logger.warn("auth.login.failed", { reason: "account_disabled", actorRef: accountReference(user.userId) });
       throw new AppError(403, "ACCOUNT_DISABLED", "该账户已被停用");
     }
+    return { user, normalizedUsername, loginAt: new Date().toISOString() };
+  }
+
+  login(username: string, password: string): { token: string; session: AuthSession } {
+    const validated = this.validateLoginCredentials(username, password);
     return this.database.transaction(() => {
-      const loginAt = timestamp.toISOString();
-      this.database.run("DELETE FROM login_attempts WHERE normalized_username = ?", normalizedUsername);
-      this.database.run("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?", loginAt, loginAt, user.userId);
-      return this.createSession(user.userId);
+      this.database.run("DELETE FROM login_attempts WHERE normalized_username = ?", validated.normalizedUsername);
+      this.database.run(
+        "UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?",
+        validated.loginAt,
+        validated.loginAt,
+        validated.user.userId
+      );
+      return this.createSession(validated.user.userId);
+    });
+  }
+
+  loginDesktop(username: string, password: string, input: {
+    desktopId: string;
+    profileId: string;
+    clientVersion: string;
+  }): { token: string; session: AuthDesktopSession } {
+    const validated = this.validateLoginCredentials(username, password);
+    return this.database.transaction(() => {
+      this.database.run("DELETE FROM login_attempts WHERE normalized_username = ?", validated.normalizedUsername);
+      this.database.run(
+        "UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?",
+        validated.loginAt,
+        validated.loginAt,
+        validated.user.userId
+      );
+      return this.createDesktopSession(validated.user.userId, input);
     });
   }
 
   authenticate(request: Request): AuthSession | null {
-    const token = parseCookies(request.get("cookie")).get(sessionCookieName);
+    const token = parseCookies(request.get("cookie")).get(SESSION_COOKIE_NAME);
     if (!token) return null;
     const row = this.database.get(
       `SELECT session.id AS session_id, session.csrf_token, session.expires_at, session.revoked_at,
@@ -393,6 +491,35 @@ export class UserAuthService {
     if (user.status !== "active") return null;
     this.database.run("UPDATE user_sessions SET last_seen_at = ? WHERE id = ?", new Date().toISOString(), String(row.session_id));
     return { id: String(row.session_id), csrfToken: String(row.csrf_token), user };
+  }
+
+  authenticateDesktop(request: Request): AuthDesktopSession | null {
+    const token = desktopSessionCredential(request);
+    if (!token || token.length !== DESKTOP_SESSION_TOKEN_PREFIX.length + 43) return null;
+    const row = this.database.get(
+      `SELECT session.id AS session_id, session.desktop_id, session.profile_id, session.client_version,
+              session.expires_at, session.revoked_at, user.*
+       FROM user_desktop_sessions session
+       JOIN users user ON user.id = session.user_id
+       WHERE session.token_hash = ?`,
+      sha256(token)
+    );
+    if (!row || row.revoked_at || String(row.expires_at) <= new Date().toISOString()) return null;
+    const user = mapUser(row);
+    if (user.status !== "active") return null;
+    this.database.run(
+      "UPDATE user_desktop_sessions SET last_seen_at = ? WHERE id = ?",
+      new Date().toISOString(),
+      String(row.session_id)
+    );
+    return {
+      id: String(row.session_id),
+      user,
+      desktopId: String(row.desktop_id),
+      profileId: String(row.profile_id),
+      clientVersion: String(row.client_version),
+      expiresAt: String(row.expires_at)
+    };
   }
 
   authenticateApiKey(request: Request): AuthApiKey | null {
@@ -412,6 +539,10 @@ export class UserAuthService {
 
   hasApiKeyCredential(request: Request): boolean {
     return apiKeyCredential(request) !== null;
+  }
+
+  hasDesktopSessionCredential(request: Request): boolean {
+    return desktopSessionCredential(request) !== null;
   }
 
   getApiKeyStatus(userId: string): ApiKeyStatus {
@@ -476,6 +607,10 @@ export class UserAuthService {
     this.database.run("UPDATE user_sessions SET revoked_at = ? WHERE id = ?", new Date().toISOString(), sessionId);
   }
 
+  revokeDesktop(sessionId: string): void {
+    this.database.run("UPDATE user_desktop_sessions SET revoked_at = ? WHERE id = ?", new Date().toISOString(), sessionId);
+  }
+
   getUser(userId: string): AuthUser {
     const row = this.database.get("SELECT * FROM users WHERE id = ?", userId);
     if (!row) throw notFound("用户");
@@ -538,9 +673,15 @@ export class UserAuthService {
     return this.database.transaction(() => {
       this.database.run("UPDATE users SET role = ?, status = ?, updated_at = ? WHERE id = ?", nextRole, nextStatus, new Date().toISOString(), userId);
       if (nextStatus === "disabled") {
+        const revokedAt = new Date().toISOString();
         this.database.run(
           "UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
-          new Date().toISOString(),
+          revokedAt,
+          userId
+        );
+        this.database.run(
+          "UPDATE user_desktop_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+          revokedAt,
           userId
         );
       }
@@ -614,7 +755,13 @@ export class UserAuthService {
     return this.getUser(userId);
   }
 
-  changePassword(userId: string, sessionId: string, currentPassword: string, newPassword: string): void {
+  changePassword(
+    userId: string,
+    sessionId: string,
+    currentPassword: string,
+    newPassword: string,
+    sessionKind: "browser" | "desktop" = "browser"
+  ): void {
     const row = this.database.get("SELECT * FROM users WHERE id = ?", userId);
     if (!row) throw notFound("用户");
     const calculated = passwordDigest(currentPassword, String(row.password_salt));
@@ -623,7 +770,22 @@ export class UserAuthService {
     const timestamp = new Date().toISOString();
     this.database.transaction(() => {
       this.database.run("UPDATE users SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?", passwordDigest(newPassword, salt), salt, timestamp, userId);
-      this.database.run("UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND id <> ? AND revoked_at IS NULL", timestamp, userId, sessionId);
+      this.database.run(
+        `UPDATE user_sessions SET revoked_at = ?
+         WHERE user_id = ? AND (? <> 'browser' OR id <> ?) AND revoked_at IS NULL`,
+        timestamp,
+        userId,
+        sessionKind,
+        sessionId
+      );
+      this.database.run(
+        `UPDATE user_desktop_sessions SET revoked_at = ?
+         WHERE user_id = ? AND (? <> 'desktop' OR id <> ?) AND revoked_at IS NULL`,
+        timestamp,
+        userId,
+        sessionKind,
+        sessionId
+      );
       this.database.run("DELETE FROM login_attempts WHERE normalized_username = ?", String(row.normalized_username));
     });
   }
@@ -792,17 +954,17 @@ export class UserAuthService {
 }
 
 export function setSessionCookie(response: Response, token: string, secure: boolean): void {
-  response.cookie(sessionCookieName, token, {
+  response.cookie(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
     secure,
     path: "/",
-    maxAge: sessionLifetimeMs
+    maxAge: SESSION_LIFETIME_MS
   });
 }
 
 export function clearSessionCookie(response: Response, secure: boolean): void {
-  response.clearCookie(sessionCookieName, { httpOnly: true, sameSite: "lax", secure, path: "/" });
+  response.clearCookie(SESSION_COOKIE_NAME, { httpOnly: true, sameSite: "lax", secure, path: "/" });
 }
 
 export function createUserSessionMiddleware(
@@ -822,17 +984,34 @@ export function createUserSessionMiddleware(
       }
       return runWithRequestActor(null, next);
     }
-    const apiKey = auth.authenticateApiKey(request);
-    if (auth.hasApiKeyCredential(request) && !apiKey) {
+    const apiKeyProvided = auth.hasApiKeyCredential(request);
+    const desktopSessionProvided = auth.hasDesktopSessionCredential(request);
+    if (apiKeyProvided && desktopSessionProvided) {
+      logger.warn("auth.request.rejected", { reason: "conflicting_credentials", method: request.method, path: sanitizeRequestPath(request.path) });
+      response.status(400).json({ error: { code: "AUTH_CREDENTIAL_CONFLICT", message: "请求包含相互冲突的身份凭据" } });
+      return;
+    }
+    const apiKey = apiKeyProvided ? auth.authenticateApiKey(request) : null;
+    if (apiKeyProvided && !apiKey) {
       logger.warn("auth.request.rejected", { reason: "invalid_api_key", method: request.method, path: sanitizeRequestPath(request.path) });
       response.status(401).json({ error: { code: "API_KEY_INVALID", message: "API Key 无效或已失效" } });
       return;
     }
-    const session = apiKey ? null : auth.authenticate(request);
+    const desktopSession = desktopSessionProvided ? auth.authenticateDesktop(request) : null;
+    if (desktopSessionProvided && !desktopSession) {
+      logger.warn("auth.request.rejected", { reason: "invalid_desktop_session", method: request.method, path: sanitizeRequestPath(request.path) });
+      response.status(401).json({ error: { code: "DESKTOP_SESSION_INVALID", message: "Desktop 登录已失效，请重新登录" } });
+      return;
+    }
+    const session = apiKey || desktopSession ? null : auth.authenticate(request);
     if (apiKey) {
       request.authApiKey = apiKey;
       request.authUser = apiKey.user;
       request.authMethod = "api-key";
+    } else if (desktopSession) {
+      request.authDesktopSession = desktopSession;
+      request.authUser = desktopSession.user;
+      request.authMethod = "desktop-session";
     } else if (session) {
       request.authSession = session;
       request.authUser = session.user;
@@ -843,8 +1022,9 @@ export function createUserSessionMiddleware(
       || path === "/api/auth/session"
       || (path === "/api/auth/register" && request.method === "POST")
       || (path === "/api/auth/login" && request.method === "POST")
+      || (path === "/api/desktop/auth/login" && request.method === "POST")
       || !path.startsWith("/api/");
-    if (!session && !apiKey && !isPublic) {
+    if (!session && !desktopSession && !apiKey && !isPublic) {
       logger.warn("auth.request.rejected", { reason: "authentication_required", method: request.method, path: sanitizeRequestPath(request.path) });
       response.status(401).json({ error: { code: "AUTH_REQUIRED", message: "请先登录" } });
       return;
@@ -857,9 +1037,10 @@ export function createUserSessionMiddleware(
         return;
       }
     }
-    const user = apiKey?.user ?? session?.user ?? null;
-    return runWithRequestActor(user ? { ...user, authentication: apiKey ? "api-key" : "session" } : null, () => {
-      if (user) logger.debug("auth.request.authenticated", { authMethod: apiKey ? "api-key" : "session" });
+    const user = apiKey?.user ?? desktopSession?.user ?? session?.user ?? null;
+    const authMethod = apiKey ? "api-key" : desktopSession ? "desktop-session" : "session";
+    return runWithRequestActor(user ? { ...user, authentication: authMethod } : null, () => {
+      if (user) logger.debug("auth.request.authenticated", { authMethod });
       next();
     });
   };
@@ -983,12 +1164,30 @@ function globalReplaceWriteModules(request: Request): WorkPermissionModule[] {
   return [];
 }
 
+function syncPushWriteModules(request: Request): WorkPermissionModule[] {
+  const mutations = requestBodyRecord(request).mutations;
+  if (!Array.isArray(mutations)) return [];
+  const modules = new Set<WorkPermissionModule>();
+  for (const mutation of mutations) {
+    if (!mutation || typeof mutation !== "object" || Array.isArray(mutation)) continue;
+    const entityType = (mutation as Record<string, unknown>).entityType;
+    if (entityType === "chapter") modules.add("prose");
+    if (entityType === "setting") modules.add("settings");
+  }
+  return [...modules];
+}
+
 function workModuleRequirements(request: Request, write: boolean, annotationAccess?: { kind: "note" | "todo"; createdByUserId: string | null }): WorkAuthorizationRequirements {
   const pathname = normalizeApiPath(request.path);
   const direct = (module: WorkPermissionModule, extraWrite: WorkPermissionModule[] = []): WorkAuthorizationRequirements => (
     write ? { write: [module, ...extraWrite] } : { read: [module] }
   );
+  if (/^\/api\/sync\/works\/[^/]+\/snapshots$/u.test(pathname)) return { read: ["prose", "settings"] };
+  if (/^\/api\/sync\/works\/[^/]+\/changes$/u.test(pathname)) return { read: ["prose", "settings"] };
+  if (/^\/api\/sync\/works\/[^/]+\/push$/u.test(pathname)) return { write: syncPushWriteModules(request) };
+  if (/^\/api\/sync\/works\/[^/]+\/mutations\/[^/]+$/u.test(pathname)) return { read: ["prose", "settings"] };
   if (/^\/api\/works\/[^/]+$/u.test(pathname)) return write ? { ownerOnly: true } : {};
+  if (/^\/api\/works\/[^/]+\/offline-access$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/cover$/u.test(pathname)) return write ? { ownerOnly: true } : {};
   if (/^\/api\/works\/[^/]+\/members(?:\/[^/]+)?$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/presence$/u.test(pathname)) return {};
