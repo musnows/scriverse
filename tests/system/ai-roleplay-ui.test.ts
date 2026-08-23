@@ -64,8 +64,9 @@ describe("AI 角色扮演界面", () => {
     expect(page).toContain('id="ai-scene-button" class="ai-scene-button hidden"');
     expect(page).toContain('id="ai-scene-panel" class="ai-scene-panel hidden"');
     expect(page).toContain('id="ai-scene-direction"');
-    expect(page).toContain("feature=ai-roleplay-scene-turn-v1");
-    expect(application).toContain("/roleplay-turn.js?v=20260823-ai-roleplay-scene-turn-v1");
+    expect(page).toContain("feature=ai-roleplay-scene-turn-v2");
+    expect(application).toContain("/roleplay-turn.js?v=20260823-ai-roleplay-scene-turn-v2");
+    expect(application).toContain("roleplayUserTurnDisplayText");
     expect(application).toContain("function syncAiSceneComposer()");
     expect(application).toContain("function toggleAiScenePanel()");
     expect(application).toContain("sceneDirection");

@@ -7,8 +7,9 @@ import {
   normalizeRoleplayScenePin,
   parseRoleplayUserTurn,
   roleplayScenePinHasContent,
+  roleplayUserTurnDisplayText,
   roleplayUserTurnTitleSource
-} from "/roleplay-turn.js?v=20260823-ai-roleplay-scene-turn-v1";
+} from "/roleplay-turn.js?v=20260823-ai-roleplay-scene-turn-v2";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { createAiChatTabManager, normalizeAiChatTabLimit } from "/ai-chat-tabs.js?v=20260816-ai-chat-switcher-v2";
 import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260816-ai-chat-tabs-v1";
