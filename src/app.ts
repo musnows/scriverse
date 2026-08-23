@@ -724,19 +724,53 @@ const contextSchema = z.object({
   includeSettingInfo: z.boolean().optional()
 });
 
-const desktopLocalAiPreparationSchema = z.object({
+const desktopLocalAiRuntimeModelSchema = z.object({
+  id: identifier,
+  providerId: identifier,
+  providerName: nonEmpty.max(200),
+  protocol: z.literal("openai-chat-completions"),
+  maxTokensParameter: z.enum(MAX_TOKENS_PARAMETERS),
+  thinkingType: z.enum(["enabled", "adaptive"]),
+  concurrencyLimit: z.number().int().min(1).max(100),
+  rpmLimit: z.number().int().min(1).max(10_000),
+  analysisTimeoutSeconds: z.number().int().min(MIN_AI_ANALYSIS_TIMEOUT_SECONDS).max(MAX_AI_ANALYSIS_TIMEOUT_SECONDS),
+  displayName: nonEmpty.max(200),
+  modelId: nonEmpty.max(300),
+  purposes: z.array(z.enum(TASK_TYPES)).min(1).max(TASK_TYPES.length),
+  contextNote: z.string().max(10_000),
+  contextWindow: z.number().int().min(32_768).max(2_000_000),
+  outputNote: z.string().max(10_000),
+  preset: z.object({
+    temperature: z.number().min(0).max(2),
+    max_tokens: z.number().int().min(1).max(2_000_000)
+  }).strict(),
+  thinkingEnabled: z.boolean(),
+  thinkingEffort: z.enum(["default", "auto", "low", "medium", "high", "xhigh", "max"]),
+  multimodalEnabled: z.boolean(),
+  note: z.string().max(10_000)
+}).strict().refine((input) => input.preset.max_tokens < input.contextWindow, {
+  path: ["preset", "max_tokens"],
+  message: "本地 AI 最大输出令牌数必须小于上下文窗口"
+});
+
+const desktopLocalAiRunSchema = z.object({
   taskType: z.enum(["chat", "continue", "polish"]),
   instruction: nonEmpty.max(100_000),
   scope: contextSchema,
-  contextWindow: z.number().int().min(32_768).max(2_000_000),
-  maxOutputTokens: z.number().int().min(1).max(2_000_000),
+  runtimeModel: desktopLocalAiRuntimeModelSchema,
   conversationId: identifier.optional(),
   currentMessageId: identifier.optional(),
-  citations: aiCitationsSchema.optional()
-}).strict().refine((input) => input.maxOutputTokens < input.contextWindow, {
-  path: ["maxOutputTokens"],
-  message: "本地 AI 最大输出令牌数必须小于上下文窗口"
-});
+  citations: aiCitationsSchema.optional(),
+  imageAttachmentIds: z.array(identifier).max(4).optional(),
+  sceneDirection: z.string().max(20_000).optional()
+}).strict();
+
+const desktopLocalAiCompletionResponseSchema = z.object({
+  requestId: identifier,
+  status: z.number().int().min(100).max(599),
+  body: z.string().max(4 * 1024 * 1024),
+  retryAfter: z.string().max(500).optional()
+}).strict();
 
 /** 创建任务 API 的分析类型校验：仅允许可新建类型，历史类型在运行层保留防御性拒绝。 */
 export const creatableAnalysisTaskTypeSchema = z.enum(CREATABLE_ANALYSIS_TASK_TYPES);
@@ -2106,7 +2140,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/works/:workId/chapter-annotations", (request, response) => {
     const pagination = parsePagination(request.query);
-    const permissions = requestPermissions(request, request.params.workId);
+    const permissions = requestPermissions(request, String(request.params.workId));
     data(response, pagination
       ? store.listWorkChapterAnnotationsPage(request.params.workId, pagination, readableChapterAnnotationKinds(permissions))
       : store.listWorkChapterAnnotations(request.params.workId, readableChapterAnnotationKinds(permissions)));
@@ -3260,12 +3294,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       ? mapRecords(ai.listSuggestionsPage(request.params.workId, pagination, status), (suggestion) => redactSuggestion(suggestion, permissions))
       : ai.listSuggestions(request.params.workId, status).map((suggestion) => redactSuggestion(suggestion, permissions)));
   });
-  app.post("/api/works/:workId/desktop-local-ai/prepare", (request, response) => {
-    const input = parse(desktopLocalAiPreparationSchema, request.body);
-    const permissions = requestPermissions(request, request.params.workId);
+  const desktopLocalAiActorScope = (request: Request): string => {
+    const actor = currentRequestActor();
+    return request.authUser?.userId ? `user:${request.authUser.userId}` : actor?.userId ? `user:${actor.userId}` : "auth-disabled";
+  };
+  const assertDesktopLocalAiPermission = (request: Request): WorkModulePermissions => {
+    const permissions = requestPermissions(request, String(request.params.workId));
     if (!canWriteWorkModule(permissions, "ai-chat")) {
       throw new AppError(403, "WORK_MODULE_WRITE_DENIED", "你没有使用创作助手的权限");
     }
+    return permissions;
+  };
+  app.post("/api/works/:workId/desktop-local-ai/runs", async (request, response) => {
+    const input = parse(desktopLocalAiRunSchema, request.body);
+    const permissions = assertDesktopLocalAiPermission(request);
     const citations = input.citations ?? [];
     for (const citation of citations) {
       if (store.getChapter(citation.chapterId).workId !== request.params.workId) {
@@ -3279,16 +3321,33 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
       }
     }
-    data(response, ai.prepareDesktopLocalAiCompletion({
+    data(response, await ai.startDesktopLocalAiRun({
       workId: request.params.workId,
       taskType: input.taskType,
       instruction: instructionWithCitations(input.instruction, citations),
       scope: input.scope as ContextScope,
-      contextWindow: input.contextWindow,
-      maxOutputTokens: input.maxOutputTokens,
+      runtimeModel: input.runtimeModel,
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
-      ...(input.currentMessageId ? { excludeConversationMessageId: input.currentMessageId } : {})
-    }));
+      ...(input.currentMessageId ? { excludeConversationMessageId: input.currentMessageId } : {}),
+      ...(input.imageAttachmentIds?.length ? { imageAttachmentIds: input.imageAttachmentIds } : {}),
+      ...(input.sceneDirection ? { sceneDirection: input.sceneDirection } : {})
+    }, desktopLocalAiActorScope(request), currentRequestActor(), permissions), 202);
+  });
+  app.get("/api/works/:workId/desktop-local-ai/runs/:runId", (request, response) => {
+    assertDesktopLocalAiPermission(request);
+    const runId = parse(identifier, request.params.runId);
+    data(response, ai.desktopLocalAiRunStatus(runId, request.params.workId, desktopLocalAiActorScope(request)));
+  });
+  app.post("/api/works/:workId/desktop-local-ai/runs/:runId/responses", (request, response) => {
+    assertDesktopLocalAiPermission(request);
+    const runId = parse(identifier, request.params.runId);
+    const input = parse(desktopLocalAiCompletionResponseSchema, request.body);
+    data(response, ai.submitDesktopLocalAiCompletion(runId, request.params.workId, desktopLocalAiActorScope(request), input));
+  });
+  app.delete("/api/works/:workId/desktop-local-ai/runs/:runId", (request, response) => {
+    assertDesktopLocalAiPermission(request);
+    const runId = parse(identifier, request.params.runId);
+    data(response, ai.cancelDesktopLocalAiRun(runId, request.params.workId, desktopLocalAiActorScope(request)));
   });
   app.post("/api/works/:workId/suggestions", async (request, response) => {
     const input = parse(z.object({
