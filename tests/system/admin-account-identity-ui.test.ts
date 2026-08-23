@@ -22,16 +22,16 @@ describe("系统管理员账户标识", () => {
     const styles = await request(runtime.app).get("/styles.css").expect(200);
 
     expect(page.text).toContain('id="account-admin-mark" class="account-admin-mark hidden"');
-    expect(page.text).toContain('id="account-admin-label" class="account-admin-label hidden">管理员</span>');
-    expect(page.text).toContain("feature=admin-account-identity-v1");
+    expect(page.text).not.toContain("account-admin-label");
+    expect(page.text).toContain("feature=admin-account-identity-v2");
     expect(application.text).toContain("const isSystemAdmin = session.user.isSystemAdmin === true;");
-    expect(application.text).toContain('accountButton.classList.toggle("is-system-admin", isSystemAdmin);');
     expect(application.text).toContain('$("#account-admin-mark").classList.toggle("hidden", !isSystemAdmin);');
-    expect(application.text).toContain('$("#account-admin-label").classList.toggle("hidden", !isSystemAdmin);');
+    expect(application.text).not.toContain('accountButton.classList.toggle("is-system-admin"');
+    expect(application.text).not.toContain('$("#account-admin-label")');
     expect(application.text).not.toContain('session.user.role === "admin" ? "系统管理员"');
-    expect(styles.text).toContain(".account-button.is-system-admin {");
     expect(styles.text).toContain(".account-admin-mark {");
-    expect(styles.text).toContain(".account-admin-label {");
+    expect(styles.text).not.toContain(".account-button.is-system-admin");
+    expect(styles.text).not.toContain(".account-admin-label {");
     expect(styles.text).toContain(".account-button > span:last-child { display: none; }");
   });
 });
