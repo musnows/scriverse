@@ -540,28 +540,29 @@ describe("作品、导入和章节版本 API", () => {
       chapters: movedSelection,
       action: { type: "setType", chapterType: "设定" }
     }).expect(200);
+    const typedSelection = selected.map((chapter) => ({ ...chapter, expectedVersionNo: 3 }));
     await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters/batch`).send({
-      chapters: movedSelection,
+      chapters: typedSelection,
       action: { type: "setAnalysisExclusion", excludedFromAnalysis: true }
     }).expect(200);
 
     const updated = await request(runtime.app).get(`/api/chapters/${first.body.data.id}`).expect(200);
-    expect(updated.body.data).toMatchObject({ chapterType: "设定", excludedFromAnalysis: true, versionNo: 2 });
+    expect(updated.body.data).toMatchObject({ chapterType: "设定", excludedFromAnalysis: true, versionNo: 3 });
 
     const conflict = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters/batch`).send({
-      chapters: [{ id: first.body.data.id, expectedVersionNo: 2 }, { id: second.body.data.id, expectedVersionNo: 99 }],
+      chapters: [{ id: first.body.data.id, expectedVersionNo: 3 }, { id: second.body.data.id, expectedVersionNo: 99 }],
       action: { type: "delete" }
     }).expect(409);
     expect(conflict.body.error.code).toBe("VERSION_CONFLICT");
     await request(runtime.app).get(`/api/chapters/${first.body.data.id}`).expect(200);
 
     await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters/batch`).send({
-      chapters: movedSelection,
+      chapters: typedSelection,
       action: { type: "delete" }
     }).expect(200, { data: { processed: 2, action: "delete" } });
     await request(runtime.app).get(`/api/chapters/${first.body.data.id}`).expect(404);
     const versions = await request(runtime.app).get(`/api/chapters/${first.body.data.id}/versions`).expect(200);
-    expect(versions.body.data[0]).toMatchObject({ versionNo: 3, content: "第一章正文", source: "delete" });
+    expect(versions.body.data[0]).toMatchObject({ versionNo: 4, content: "第一章正文", source: "delete" });
     expect(runtime.database.get(
       "SELECT COUNT(*) AS count FROM analysis_tasks WHERE work_id = ? AND status = 'pending'",
       work.body.data.id
@@ -731,7 +732,7 @@ describe("作品、导入和章节版本 API", () => {
     expect(tree.body.data.volumes[0]).toMatchObject({ description: "间谍身份开始暴露。", keywords: ["身份暴露", "阵营冲突"], storyOrder: 3 });
   });
 
-  it("支持四种章节类型且只修改类型时不增加正文版本", async () => {
+  it("支持四种章节类型且只修改类型时仍记录新版本", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "章节类型作品" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "正文" }).expect(201);
     const chapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
@@ -743,7 +744,9 @@ describe("作品、导入和章节版本 API", () => {
     expect(chapter.body.data).toMatchObject({ chapterType: "设定", versionNo: 1 });
 
     const marked = await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`).send({ chapterType: "作者的话" }).expect(200);
-    expect(marked.body.data).toMatchObject({ chapterType: "作者的话", versionNo: 1, analysisStatus: "expired" });
+    expect(marked.body.data).toMatchObject({ chapterType: "作者的话", versionNo: 2, analysisStatus: "expired" });
+    const versions = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/versions`).expect(200);
+    expect(versions.body.data[0]).toMatchObject({ versionNo: 2, chapterType: "作者的话", source: "manual" });
     await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`).send({ chapterType: "无效类型" }).expect(400);
 
     const exported = await request(runtime.app).get(`/api/works/${work.body.data.id}/export?format=json`).expect(200);

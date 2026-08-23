@@ -90,6 +90,56 @@ describe("AI 供应商、模型与建议 API", () => {
     runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", contextWindow, modelId);
   }
 
+  it("为 Desktop 本地模型准备 Server Prompt 和作品上下文但不调用远端供应商", async () => {
+    await request(runtime.app).patch("/api/platform/ai/settings").send({
+      systemPrompt: "平台远端 Prompt"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      systemPrompt: "作品远端 Prompt"
+    }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+      role: "user",
+      content: "上一轮问题"
+    }).expect(201);
+    await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+      role: "assistant",
+      content: "上一轮回答"
+    }).expect(201);
+    const current = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+      role: "user",
+      content: "请结合跃迁限制继续讨论"
+    }).expect(201);
+
+    const prepared = await request(runtime.app).post(`/api/works/${workId}/desktop-local-ai/prepare`).send({
+      taskType: "chat",
+      instruction: "请结合跃迁限制继续讨论",
+      scope: { type: "chapter", chapterId },
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      conversationId,
+      currentMessageId: current.body.data.id
+    }).expect(200);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(prepared.body.data.remoteSystemPrompt).toContain("<platform_system_prompt>");
+    expect(prepared.body.data.remoteSystemPrompt).toContain("平台远端 Prompt");
+    expect(prepared.body.data.remoteSystemPrompt).toContain("<work_system_prompt>");
+    expect(prepared.body.data.remoteSystemPrompt).toContain("作品远端 Prompt");
+    expect(prepared.body.data.remoteSystemPrompt).not.toContain("desktop_local_ai_prompt");
+    expect(prepared.body.data.messages).toEqual(expect.arrayContaining([
+      { role: "user", content: "上一轮问题" },
+      { role: "assistant", content: "上一轮回答" }
+    ]));
+    expect(JSON.stringify(prepared.body.data.messages)).toContain("跃迁后必须冷却十二小时");
+    expect(JSON.stringify(prepared.body.data.messages)).toContain("<author_instruction>");
+    expect(prepared.body.data.contextUsage).toMatchObject({
+      modelId: "desktop-local-model",
+      contextWindow: 128_000
+    });
+  });
+
   it.each([
     ["openai-chat-completions", "OpenAI Chat"],
     ["openai-responses", "OpenAI Responses"]

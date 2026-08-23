@@ -110,6 +110,9 @@ describe("安全限速器", () => {
     await authAgent.post("/api/auth/login").expect(200);
     const blockedLogin = await authAgent.post("/API/AUTH/LOGIN").expect(429);
     expect(blockedLogin.body.error.code).toBe("AUTH_RATE_LIMITED");
+    await authAgent.post("/api/desktop/auth/login").expect(200);
+    const blockedDesktopLogin = await authAgent.post("/API/DESKTOP/AUTH/LOGIN").expect(429);
+    expect(blockedDesktopLogin.body.error.code).toBe("AUTH_RATE_LIMITED");
   });
 });
 

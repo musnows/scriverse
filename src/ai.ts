@@ -436,6 +436,23 @@ type GenerateResult = {
   contextUsage: Record<string, unknown>;
 };
 
+export type DesktopLocalAiPreparationInput = {
+  workId: string;
+  taskType: "chat" | "continue" | "polish";
+  instruction: string;
+  scope: ContextScope;
+  contextWindow: number;
+  maxOutputTokens: number;
+  conversationId?: string;
+  excludeConversationMessageId?: string;
+};
+
+export type DesktopLocalAiPreparationResult = {
+  remoteSystemPrompt: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  contextUsage: Record<string, unknown>;
+};
+
 export type AiContextCompactionEvent = {
   contextUsage: Record<string, unknown>;
   sourceMessageCount: number;
@@ -5815,6 +5832,74 @@ export class AiManager {
     };
   }
 
+  prepareDesktopLocalAiCompletion(input: DesktopLocalAiPreparationInput): DesktopLocalAiPreparationResult {
+    const model: ModelRow = {
+      id: "desktop-local-model",
+      provider_id: "desktop-local-provider",
+      display_name: "Desktop Local AI",
+      model_id: "desktop-local-model",
+      enabled: 1,
+      context_window: input.contextWindow,
+      preset_json: JSON.stringify({ max_tokens: input.maxOutputTokens })
+    };
+    const scope = input.taskType === "continue"
+      ? this.enrichContinuationScope(input.workId, input.scope, input.instruction)
+      : input.scope;
+    const preparedInput: GenerateInput = {
+      workId: input.workId,
+      taskType: input.taskType,
+      instruction: input.instruction,
+      scope,
+      agentToolIds: [],
+      disableTools: true,
+      ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+      ...(input.excludeConversationMessageId ? { excludeConversationMessageId: input.excludeConversationMessageId } : {})
+    };
+    const conversation = preparedInput.conversationId
+      ? this.store.getAiConversationContext(
+        preparedInput.conversationId,
+        preparedInput.workId,
+        preparedInput.excludeConversationMessageId
+      )
+      : null;
+    const budget = this.contextBudget(preparedInput, model, conversation);
+    const context = this.buildContext(preparedInput, model, budget);
+    const completionMessages = this.buildMessages(preparedInput, context, conversation);
+    const systemMessage = completionMessages[0];
+    if (systemMessage?.role !== "system" || typeof systemMessage.content !== "string") {
+      throw new AppError(500, "LOCAL_AI_CONTEXT_INVALID", "无法为 Desktop 本地 AI 构建系统提示词");
+    }
+    const messages = completionMessages.slice(1).map((message) => {
+      if ((message.role !== "user" && message.role !== "assistant") || typeof message.content !== "string") {
+        throw new AppError(409, "LOCAL_AI_CONTENT_UNSUPPORTED", "当前上下文包含本地 AI 暂不支持的消息内容");
+      }
+      return { role: message.role, content: message.content };
+    });
+    const contextWindow = Math.max(32_768, Math.min(2_000_000, Number(input.contextWindow) || 128_000));
+    const inputTokens = estimateCompletionMessageTokens(completionMessages);
+    const systemPromptTokens = estimateAiTokens(systemMessage.content);
+    const remainingTokens = Math.max(0, contextWindow - inputTokens);
+    return {
+      remoteSystemPrompt: systemMessage.content,
+      messages,
+      contextUsage: {
+        modelId: "desktop-local-model",
+        contextWindow,
+        inputTokens,
+        remainingTokens,
+        usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
+        maxOutputTokens: input.maxOutputTokens,
+        tokenDistribution: {
+          systemPromptTokens,
+          functionTokens: 0,
+          skillsTokens: 0,
+          contextTokens: Math.max(0, inputTokens - systemPromptTokens),
+          leftTokens: remainingTokens
+        }
+      }
+    };
+  }
+
   private completionContextUsage(
     input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">,
     model: ModelRow,
@@ -6570,8 +6655,9 @@ export class AiManager {
       ? this.roleplayCharacterId(workId, conversationId)
       : roleplayCharacterIdOverride;
     const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
+    const requested = requestedToolIds ? new Set(requestedToolIds) : null;
+    if (requested?.size === 0) return [];
     if (roleplayCharacterId) {
-      const requested = requestedToolIds ? new Set(requestedToolIds) : null;
       if (!canReadWorkModule(permissions, "characters")) return [];
       const roleplayTools: AgentToolId[] = [];
       if (!requested || requested.has("recall_self")) roleplayTools.push("recall_self");
@@ -6604,7 +6690,6 @@ export class AiManager {
       : this.store.getWorkAiSettings(workId).agentTools;
     const enabled = new Set((sourceTools as unknown[])
       .filter((item): item is ConfiguredAgentToolId => typeof item === "string" && CONFIGURED_AGENT_TOOL_IDS.includes(item as ConfiguredAgentToolId)));
-    const requested = requestedToolIds ? new Set(requestedToolIds) : null;
     return CONFIGURED_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)
       && (!requested || requested.has(toolId))
       && this.canReadWithAgentTool(permissions, toolId));
