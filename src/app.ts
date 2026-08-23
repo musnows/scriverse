@@ -41,6 +41,7 @@ import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./goog
 import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH, readableHybridSearchTypes } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes, WORK_AGENT_TOOL_IDS } from "./store.js";
+import { composeRoleplayStoredUserContent } from "./roleplay-turn.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
@@ -1154,7 +1155,16 @@ function redactAiConversation(record: Record<string, unknown>, permissions: Work
     result.agentTools = [
       ...(permissions.characters !== "none" ? ["recall_self"] : []),
       ...(permissions.characters !== "none" && permissions.relationships !== "none" ? ["recall_relationship"] : []),
+      ...(permissions.characters !== "none"
+        && (permissions.relationships !== "none" || permissions.organizations !== "none" || permissions.timeline !== "none")
+        ? ["recall_other"]
+        : []),
+      ...((permissions.races !== "none" || permissions.organizations !== "none" || permissions.settings !== "none") ? ["recall_known"] : []),
       ...(permissions.prose !== "none" ? ["recall_story"] : []),
+      ...(["settings", "characters", "races", "organizations", "timeline", "relationships", "outlines"] as const)
+        .some((module) => permissions[module] !== "none")
+        ? ["image"]
+        : [],
       "calculate_time"
     ];
   }
@@ -1282,7 +1292,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     CHARACTER_AVATAR_IMAGE_MAX_BYTES
   );
   mkdirSync(characterAvatarStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
-  const auth = new UserAuthService(database);
+  const credentialVault = new CredentialVault(options.masterSecret);
+  const auth = new UserAuthService(database, credentialVault);
   const collaborationPresence = new CollaborationPresence(
     45_000,
     Date.now,
@@ -1381,7 +1392,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return lockedModelId ?? requestedModelId;
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
-  const credentialVault = new CredentialVault(options.masterSecret);
   const backups = new S3BackupManager(database, credentialVault, store, attachmentStorage, {
     ...options.backupOptions,
     characterAvatarStorage,
@@ -1430,7 +1440,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       retryPolicy: options.aiRetryPolicy,
       retrySleep: options.aiRetrySleep,
       aiChatImageMaxBytes: uploadLimits.chatImageBytes,
-      liteLlmPriceCache
+      liteLlmPriceCache,
+      allowPrivateAiEndpoints: options.security?.allowPrivateAiEndpoints === true
     }
   );
   const app = express();
@@ -1607,6 +1618,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/auth/api-key", (request, response) => {
     if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话管理 API Key");
     data(response, auth.getApiKeyStatus(request.authUser.userId));
+  });
+  app.post("/api/auth/api-key/reveal", (request, response) => {
+    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话管理 API Key");
+    parse(z.object({}).strict(), request.body ?? {});
+    const userId = request.authUser.userId;
+    const revealed = database.transaction(() => {
+      const secret = auth.revealApiKey(userId);
+      store.audit(null, "user.api-key-copied", "user", userId, { prefix: secret.prefix });
+      return { apiKey: secret.apiKey };
+    });
+    data(response, revealed);
   });
   app.post("/api/auth/api-key/reset", (request, response) => {
     if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话管理 API Key");
@@ -2065,6 +2087,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.createDraft(request.params.workId, parse(draftSchema, request.body)), 201);
   });
   app.get("/api/drafts/:draftId", (request, response) => data(response, store.getDraft(request.params.draftId)));
+  app.patch("/api/drafts/:draftId/favorite", (request, response) => {
+    const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
+    data(response, store.setDraftFavorite(request.params.draftId, input.isFavorite));
+  });
   app.patch("/api/drafts/:draftId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(draftSchema.partial().extend({
       changeNote: changeNoteSchema,
@@ -2089,6 +2115,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/works/:workId/settings/context", (request, response) => data(response, store.listSettings(request.params.workId, true)));
   app.get("/api/settings/:settingId", (request, response) => data(response, store.getSetting(request.params.settingId)));
+  app.patch("/api/settings/:settingId/favorite", (request, response) => {
+    const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
+    const setting = store.setSettingFavorite(request.params.settingId, input.isFavorite);
+    publishEntityChange(String(setting.workId), "setting", String(setting.id));
+    data(response, setting);
+  });
   app.patch("/api/settings/:settingId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(settingSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const setting = store.updateSetting(request.params.settingId, input, "manual", null, changeNote, expectedVersionNo);
@@ -2172,6 +2204,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       await characterAvatarStorage.remove(result.storageKey);
     }
     data(response, redactCharacterLinks(result.character, requestPermissions(request)));
+  });
+  app.patch("/api/characters/:characterId/favorite", (request, response) => {
+    const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
+    const character = store.setCharacterFavorite(request.params.characterId, input.isFavorite);
+    publishEntityChange(String(character.workId), "character", String(character.id));
+    data(response, redactCharacterLinks(character, requestPermissions(request)));
   });
   app.patch("/api/characters/:characterId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(characterUpdateSchema.extend({ expectedVersionNo: expectedVersionNoSchema }), request.body);
@@ -2393,6 +2431,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/organizations/:organizationId", (request, response) => {
     data(response, redactOrganizationMembers(store.getOrganization(request.params.organizationId), requestPermissions(request)));
+  });
+  app.patch("/api/organizations/:organizationId/favorite", (request, response) => {
+    const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
+    const organization = store.setOrganizationFavorite(request.params.organizationId, input.isFavorite);
+    publishEntityChange(String(organization.workId), "organization", String(organization.id));
+    data(response, redactOrganizationMembers(organization, requestPermissions(request)));
   });
   app.patch("/api/organizations/:organizationId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(organizationSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
@@ -3075,7 +3119,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/chat/stream", async (request, response) => {
     const input = parse(z.object({
-      instruction: nonEmpty.max(100_000),
+      instruction: z.string().max(100_000).default(""),
+      sceneDirection: z.string().max(20_000).optional(),
+      scenePin: z.object({
+        location: z.string().max(200).optional(),
+        present: z.string().max(500).optional(),
+        timeLabel: z.string().max(200).optional()
+      }).strict().optional(),
       scope: contextSchema,
       modelId: identifier.optional(),
       parameters: jsonObject.optional(),
@@ -3095,7 +3145,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     for (const citation of citations) {
       if (store.getChapter(citation.chapterId).workId !== request.params.workId) throw new AppError(400, "CITATION_WORK_MISMATCH", "引用章节不属于当前作品");
     }
-    const resolvedInstruction = instructionWithCitations(input.instruction, citations);
     const existingRequest = store.findAiConversationStreamRequest(actorScope, request.params.workId, idempotencyKey);
     if (existingRequest && input.conversationId && existingRequest.conversationId !== input.conversationId) {
       throw new AppError(409, "IDEMPOTENCY_KEY_REUSED", "该请求标识已用于另一项 AI 对话请求");
@@ -3110,6 +3159,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
     }
     const conversationId = String(conversation.id);
+    const isRoleplay = Boolean(conversation.roleplayCharacter);
+    const instructionText = input.instruction.trim();
+    const sceneDirection = isRoleplay ? (input.sceneDirection ?? "").trim() : "";
+    if (!instructionText && !sceneDirection) {
+      throw new AppError(400, "INSTRUCTION_REQUIRED", isRoleplay ? "请输入角色台词或场景旁白" : "请输入指令");
+    }
+    if (!existingRequest && isRoleplay && input.scenePin !== undefined) {
+      store.setAiConversationScenePin(conversationId, request.params.workId, input.scenePin);
+    }
+    const storedUserContent = isRoleplay
+      ? composeRoleplayStoredUserContent(sceneDirection, instructionText)
+      : instructionText;
+    const resolvedInstruction = instructionWithCitations(instructionText, citations);
+    const mentionSource = [sceneDirection, resolvedInstruction].filter(Boolean).join("\n");
     const modelId = resolveConversationModelId(request.params.workId, conversationId, input.modelId);
     const permissions = requestPermissions(request, request.params.workId);
     const controller = new AbortController();
@@ -3152,7 +3215,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           workId: request.params.workId,
           modelId,
           scope: input.scope as ContextScope,
-          instruction: resolvedInstruction,
+          instruction: mentionSource,
           excludeConversationMessageId: input.currentMessageId
         }, { ignoreWarning: input.ignoreContextWarning === true });
         preparedConversation = redactAiConversation(store.getAiConversationSummary(conversationId), permissions);
@@ -3177,7 +3240,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         : ai.resolveInstructionMentions({
           workId: request.params.workId,
           taskType: "chat",
-          instruction: resolvedInstruction,
+          instruction: mentionSource,
           scope: input.scope as ContextScope,
           conversationId
         });
@@ -3194,7 +3257,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         idempotencyKey,
         requestHash,
         userMessage: {
-          content: input.instruction,
+          content: storedUserContent,
           citations,
           ...(input.currentMessageId ? { existingMessageId: input.currentMessageId } : {}),
           ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length || input.imageAttachmentIds?.length) ? { metadata: {
@@ -3249,6 +3312,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: resolvedInstruction,
+        ...(sceneDirection ? { sceneDirection } : {}),
         // 仍由生成路径基于原始范围持久化累计注入，保证预解析不会吞掉本轮自动命中。
         scope: input.scope as ContextScope,
         signal: controller.signal,

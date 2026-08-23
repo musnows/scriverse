@@ -59,6 +59,6 @@ describe("AI 模型选择收纳界面", () => {
     expect(styles).toContain(".ai-model-popover.hidden { display: none; }");
     expect(styles).toContain(".ai-model-options { display: grid;");
     expect(styles).toContain(".ai-model-option-image-icon");
-    expect(styles).toContain(".ai-attachment-button { position: absolute; bottom: 8px; left: 8px;");
+    expect(styles).toContain(".prompt-composer-leading { position: absolute; bottom: 8px; left: 8px;");
   });
 });

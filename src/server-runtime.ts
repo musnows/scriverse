@@ -8,7 +8,7 @@ import { resolveAiRetryPolicy } from "./ai-retry.js";
 import { AI_STREAM_IDLE_TIMEOUT_SECONDS_ENV, resolveAiStreamIdleTimeoutMs } from "./ai-stream-timeout.js";
 import { DATABASE_SCHEMA_VERSION, readDatabaseSchemaVersion } from "./database.js";
 import { loadMasterSecret } from "./credential-vault.js";
-import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity, type RuntimeSecurityOptions } from "./security.js";
+import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity, warnIfPrivateAiEndpointsEnabled, type RuntimeSecurityOptions } from "./security.js";
 import { logger, sanitizeError } from "./logger.js";
 import { resolveReleaseCheckIntervalMs, resolveReleaseCheckRetries, resolveReleaseCheckTimeoutMs } from "./release-update.js";
 import { resolveImageUploadLimits } from "./upload-limits.js";
@@ -219,6 +219,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
     chmodSync(options.dataDirectory, 0o700);
     recordStartupAttempt(options.dataDirectory, options.env);
     security = resolveRuntimeSecurity(options.env);
+    warnIfPrivateAiEndpointsEnabled(options.env);
     createPreMigrationBackup(options, options.env);
     const devAuthBypass = isDevelopmentAuthBypassEnabled(options.env);
     if (devAuthBypass && !isLoopbackHost(options.host)) {

@@ -2,6 +2,14 @@ import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate,
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
+import {
+  emptyRoleplayScenePin,
+  normalizeRoleplayScenePin,
+  parseRoleplayUserTurn,
+  roleplayScenePinHasContent,
+  roleplayUserTurnDisplayText,
+  roleplayUserTurnTitleSource
+} from "/roleplay-turn.js?v=20260823-ai-roleplay-scene-turn-v2";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { createAiChatTabManager, normalizeAiChatTabLimit } from "/ai-chat-tabs.js?v=20260816-ai-chat-switcher-v2";
 import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260816-ai-chat-tabs-v1";
@@ -17,7 +25,7 @@ import {
 } from "/foreshadow-reminder.js?v=20260812-editor-reminder-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260822-ai-model-thinking-label-v3&feature=ai-provider-responses-v1";
-import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
+import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260822-private-ai-endpoint-hint-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
 import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260818-ai-agent-turn-process-v1";
@@ -100,6 +108,7 @@ import { systemStatusPresentation } from "/system-status.js?v=20260801-system-he
 import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncryptionPresentation, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260810-backup-encryption-v1";
 import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";
 import { normalizeUploadProgress, uploadProgressText } from "/upload-progress.js?v=20260812-upload-progress-v1";
+import { resolveToastRegionHost } from "/toast-layer.js?v=20260822-toast-modal-host-v1";
 import { buildGlobalReplaceRefreshPlan, resolveGlobalReplaceChapterCount } from "/global-replace-refresh.js?v=20260812-global-replace-tree-v2";
 import {
   clampCropRect,
@@ -461,6 +470,10 @@ function applyWorkAccessMode() {
   $(".ai-panel").classList.toggle("permission-hidden", aiHidden);
   $("#ai-prompt").readOnly = aiReadOnly;
   $("#ai-prompt").setAttribute("aria-readonly", String(aiReadOnly));
+  $("#ai-scene-direction").readOnly = aiReadOnly;
+  $("#ai-scene-location").readOnly = aiReadOnly;
+  $("#ai-scene-present").readOnly = aiReadOnly;
+  $("#ai-scene-time").readOnly = aiReadOnly;
   $("#ai-send").classList.toggle("permission-hidden", aiReadOnly);
   renderAiRoleplayCharacterSelect();
   updateBackgroundTaskCenterVisibility();
@@ -2082,7 +2095,7 @@ function createAiChatTabState(input = {}) {
     roleplayUserCharacter: input.roleplayUserCharacter ?? null,
     citations: input.citations ?? [],
     references: input.references ?? [],
-    composer: input.composer ?? { text: "", citations: [], references: [], images: [] },
+    composer: input.composer ?? { text: "", citations: [], references: [], images: [], sceneDirection: "", scenePin: emptyRoleplayScenePin() },
     contextUsage: input.contextUsage ?? null,
     contextWarning: input.contextWarning === true,
     lastMessageAt: input.lastMessageAt ?? null,
@@ -2124,12 +2137,21 @@ function setAiChatTabComposerSnapshot(tab, snapshot) {
     text: snapshot.text,
     citations: tab.citations.map((citation) => ({ ...citation })),
     references: tab.references.map((reference) => ({ ...reference })),
-    images: normalizeAiChatImageAttachments(snapshot.images)
+    images: normalizeAiChatImageAttachments(snapshot.images),
+    sceneDirection: String(snapshot.sceneDirection ?? ""),
+    scenePin: normalizeRoleplayScenePin(snapshot.scenePin)
   };
 }
 
 function clearAiChatTabComposer(tab) {
-  setAiChatTabComposerSnapshot(tab, { text: "", citations: [], references: [], images: [] });
+  setAiChatTabComposerSnapshot(tab, {
+    text: "",
+    citations: [],
+    references: [],
+    images: [],
+    sceneDirection: "",
+    scenePin: normalizeRoleplayScenePin(tab.composer?.scenePin)
+  });
 }
 
 function applyAiChatTabState(tab) {
@@ -2149,6 +2171,7 @@ function applyAiChatTabState(tab) {
   if (selectedModelId && state.models.some((model) => model.id === selectedModelId)) $("#ai-model").value = selectedModelId;
   syncAiModelPicker();
   setAiPromptText(tab.composer.text);
+  restoreAiSceneComposer(tab.composer);
   renderAiCitations();
   renderAiReferences();
   renderAiImageAttachments();
@@ -2170,7 +2193,9 @@ function aiChatTabIsReplaceable(tab = activeAiChatTab()) {
     && !(tab.composer?.text || "").trim()
     && !(tab.composer?.citations?.length)
     && !(tab.composer?.references?.length)
-    && !(tab.composer?.images?.length));
+    && !(tab.composer?.images?.length)
+    && !(tab.composer?.sceneDirection || "").trim()
+    && !roleplayScenePinHasContent(tab.composer?.scenePin));
 }
 
 function aiChatTabOpeningSlot() {
@@ -2443,7 +2468,7 @@ function resetAiFeed(
   const roleplayName = roleplayCharacter?.name;
   const roleplayUserName = roleplayUserCharacter?.name;
   feed.innerHTML = roleplayName
-    ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我可以通过角色卡、人物关系和故事正文回答。"}</p></div></div>`
+    ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我可以通过角色卡、人物关系、知情设定和故事正文回答。"}</p></div></div>`
     : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
 }
 
@@ -2521,8 +2546,9 @@ async function retryAiMessage(message) {
   const sourceTab = aiChatTabManager.get(message.closest(".ai-feed")?.dataset.aiTabId);
   const userMessage = findAiRetryUserMessage(message);
   const prompt = userMessage?.dataset.copyText ?? "";
+  const sceneDirection = userMessage?.dataset.sceneDirection ?? "";
   const userMessageId = userMessage?.dataset.messageId ?? "";
-  if (!sourceTab?.conversationId || !userMessageId || !prompt.trim()) {
+  if (!sourceTab?.conversationId || !userMessageId || !(prompt.trim() || sceneDirection.trim())) {
     toast("找不到需要重试的用户指令", "error");
     return;
   }
@@ -2535,6 +2561,7 @@ async function retryAiMessage(message) {
     retry: {
       message,
       prompt,
+      sceneDirection,
       citations: aiMessageCitations(userMessage),
       images: aiMessageImageAttachments(userMessage),
       userMessageId
@@ -2670,6 +2697,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   recall_self: "回忆自身",
   image: "读取设定图片",
   recall_relationship: "回忆人物关系",
+  recall_other: "回忆相识角色",
+  recall_known: "回忆知情设定",
   recall_story: "回忆故事",
   calculate_time: "计算日期"
 };
@@ -2683,9 +2712,11 @@ const AI_TOOL_DESCRIPTIONS = {
   search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。",
   recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。",
   image: "读取设定正文引用的图片附件，并返回多模态模型的理解内容。",
-  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。",
-  recall_story: "查询当前作品已保存正文中的关键词，返回匹配段落及章节信息。",
-  calculate_time: "计算日期差值，或从起始日期推算目标日期。"
+  recall_relationship: "不传角色列表时读取有关系的角色公开摘要；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。",
+  recall_other: "读取自己通过关系、同一组织或共同参与时间线而认识的其他角色公开摘要。",
+  recall_known: "读取自己所属种族、组织，以及与自己身份相关的世界设定。",
+  recall_story: "查询自己姓名或别名出现过的正文段落，避免全知回忆。",
+  calculate_time: "计算两个 YYYY-MM-DD 日期之间的天数差。"
 };
 
 const aiFeedScrollFrames = new WeakMap();
@@ -3183,7 +3214,7 @@ function renderAiConversationHistory() {
 }
 
 function defaultAiConversationTitle(prompt) {
-  const normalized = String(prompt ?? "").replace(/\s+/gu, " ").trim();
+  const normalized = roleplayUserTurnTitleSource(String(prompt ?? "")).replace(/\s+/gu, " ").trim();
   return Array.from(normalized).slice(0, 15).join("") || "新对话";
 }
 
@@ -3191,7 +3222,7 @@ function upsertAiConversationSummary(conversation) {
   if (!conversation?.id) return;
   const current = state.aiConversations.find((item) => item.id === conversation.id);
   const lastMessage = Array.isArray(conversation.messages) ? conversation.messages.at(-1) : null;
-  const summary = { ...current, ...conversation, ...(lastMessage ? { preview: lastMessage.content } : {}) };
+  const summary = { ...current, ...conversation, ...(lastMessage ? { preview: roleplayUserTurnDisplayText(lastMessage.content) } : {}) };
   delete summary.messages;
   delete summary.messagesPage;
   if (!current && loadedAiConversationsWorkId === state.work?.id) {
@@ -3214,7 +3245,7 @@ function updateAiConversationSummaryFromMessage(message) {
     ...current,
     title: current.title === "新对话" && message.role === "user" ? defaultAiConversationTitle(message.content) : current.title,
     messageCount: Number(current.messageCount ?? 0) + 1,
-    preview: message.content,
+    preview: roleplayUserTurnDisplayText(message.content),
     ...(aiConversationMessageHasImages(message) ? { hasImageAttachments: true, modelLockedByImage: true } : {}),
     updatedAt: message.createdAt ?? current.updatedAt
   });
@@ -3349,7 +3380,14 @@ function applyConversationToAiChatTab(tab, conversation) {
   tab.roleplayUserCharacter = conversation.roleplayUserCharacter ?? null;
   tab.citations = [];
   tab.references = [];
-  tab.composer = { text: "", citations: [], references: [], images: [] };
+  tab.composer = {
+    text: "",
+    citations: [],
+    references: [],
+    images: [],
+    sceneDirection: "",
+    scenePin: normalizeRoleplayScenePin(conversation.scenePin)
+  };
   tab.contextUsage = null;
   tab.contextWarning = conversation.contextWarningPending === true;
   resetAiFeed(tab.feed, tab.roleplayCharacter, tab.roleplayUserCharacter);
@@ -3400,16 +3438,30 @@ async function createNewAiConversation(taskType = "chat") {
   }
 }
 
+function favoriteCharactersFirst(characters) {
+  const items = Array.isArray(characters) ? characters : [];
+  return [
+    ...items.filter((character) => character.isFavorite === true),
+    ...items.filter((character) => character.isFavorite !== true)
+  ];
+}
+
+function roleplayCharacterOptionLabel(character) {
+  const favoriteLabel = character?.isFavorite === true ? "[已收藏] " : "";
+  const deathLabel = character?.isDead ? "（已死亡）" : "";
+  return `${favoriteLabel}${String(character?.name ?? "")}${deathLabel}`;
+}
+
 function renderAiRoleplayCharacterSelect() {
   const select = $("#ai-roleplay-character");
   const selectedId = String(state.aiRoleplayCharacter?.id ?? "");
-  const availableCharacters = state.characters.filter((character) => !character.mergedIntoCharacterId);
+  const availableCharacters = favoriteCharactersFirst(state.characters.filter((character) => !character.mergedIntoCharacterId));
   const options = [{ id: "", name: "选择角色卡" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
-    name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
+    name: roleplayCharacterOptionLabel(character)
   }))];
   if (selectedId && !options.some((option) => option.id === selectedId)) {
-    options.push({ id: selectedId, name: String(state.aiRoleplayCharacter.name) });
+    options.push({ id: selectedId, name: roleplayCharacterOptionLabel(state.aiRoleplayCharacter) });
   }
   select.replaceChildren(...options.map((option) => {
     const element = document.createElement("option");
@@ -3425,7 +3477,7 @@ function renderAiRoleplayCharacterSelect() {
   select.title = canSelectCharacter
     ? state.aiPromptSent
       ? aiConversationOptionLockedMessage
-      : "为当前对话选择角色卡；角色扮演时 Agent 可以查询角色记忆、人物关系和故事正文"
+      : "为当前对话选择角色卡；角色扮演时 Agent 可以查询角色记忆、相识角色、知情设定、故事正文和设定图片"
     : "当前账户没有角色模块读取权限";
   renderAiRoleplayUserCharacterSelect();
 }
@@ -3434,15 +3486,15 @@ function renderAiRoleplayUserCharacterSelect() {
   const select = $("#ai-roleplay-user-character");
   const selectedId = String(state.aiRoleplayUserCharacter?.id ?? "");
   const aiCharacterId = String(state.aiRoleplayCharacter?.id ?? "");
-  const availableCharacters = state.characters.filter((character) => (
+  const availableCharacters = favoriteCharactersFirst(state.characters.filter((character) => (
     !character.mergedIntoCharacterId && String(character.id) !== aiCharacterId
-  ));
+  )));
   const options = [{ id: "", name: "选择我的角色（可选）" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
-    name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
+    name: roleplayCharacterOptionLabel(character)
   }))];
   if (selectedId && !options.some((option) => option.id === selectedId)) {
-    options.push({ id: selectedId, name: String(state.aiRoleplayUserCharacter.name) });
+    options.push({ id: selectedId, name: roleplayCharacterOptionLabel(state.aiRoleplayUserCharacter) });
   }
   select.replaceChildren(...options.map((option) => {
     const element = document.createElement("option");
@@ -3461,7 +3513,7 @@ function renderAiRoleplayUserCharacterSelect() {
       ? "请先选择 AI 扮演的角色"
       : state.aiPromptSent
         ? aiConversationOptionLockedMessage
-        : "选择后，AI 会将每条用户消息视为该角色的发言或行动";
+        : "选择后，主输入是该角色的台词或行动；旁白请写在场景框";
 }
 
 const aiConversationOptionLockedMessage = "会话选项在会话开始后不支持修改，若需要修改，请新建会话";
@@ -3600,8 +3652,9 @@ function syncAiTaskOptions() {
   $("#ai-scope").disabled = interactionBusy || roleplaySelected;
   $("#ai-scope").title = state.aiPromptSent
     ? aiConversationOptionLockedMessage
-    : roleplaySelected ? "角色扮演模式可以查询角色记忆、人物关系和故事正文" : "";
+    : roleplaySelected ? "角色扮演模式可以查询角色记忆、相识角色、知情设定、故事正文和设定图片" : "";
   syncAiModelPicker();
+  syncAiSceneComposer();
 }
 
 function applyAiConversationTaskType(taskType) {
@@ -3638,8 +3691,8 @@ function applyAiRoleplayCharacter(character, userCharacter = null) {
   $(".ai-panel").classList.toggle("is-roleplaying", active);
   $("#ai-prompt").dataset.placeholder = active
     ? state.aiRoleplayUserCharacter
-      ? `以 ${String(state.aiRoleplayUserCharacter.name)} 的身份与 ${String(state.aiRoleplayCharacter.name)} 对话……`
-      : `与 ${String(state.aiRoleplayCharacter.name)} 角色开始对话……`
+      ? `以 ${String(state.aiRoleplayUserCharacter.name)} 的身份输入台词或行动……`
+      : `输入对 ${String(state.aiRoleplayCharacter.name)} 说的台词或行动……`
     : "告诉 AI 你想讨论或修改什么……";
   renderAiRoleplayCharacterSelect();
   syncAiTaskOptions();
@@ -3946,9 +3999,11 @@ function clearAiPromptComposer() {
   state.aiReferences = [];
   state.aiImageAttachments = [];
   setAiPromptText("");
+  setAiSceneDirection("");
   renderAiCitations();
   renderAiImageAttachments();
   hideAiMentionMenu();
+  syncAiSceneComposer();
 }
 
 function captureAiPromptComposer() {
@@ -3956,7 +4011,9 @@ function captureAiPromptComposer() {
     text: aiPromptText(),
     citations: state.aiCitations.map((citation) => ({ ...citation })),
     references: state.aiReferences.map((reference) => ({ ...reference })),
-    images: normalizeAiChatImageAttachments(state.aiImageAttachments)
+    images: normalizeAiChatImageAttachments(state.aiImageAttachments),
+    sceneDirection: aiSceneDirectionText(),
+    scenePin: captureAiScenePin()
   };
 }
 
@@ -3965,9 +4022,75 @@ function restoreAiPromptComposer(snapshot) {
   state.aiReferences = snapshot.references.map((reference) => ({ ...reference }));
   state.aiImageAttachments = normalizeAiChatImageAttachments(snapshot.images);
   setAiPromptText(snapshot.text);
+  restoreAiSceneComposer(snapshot);
   renderAiCitations();
   renderAiImageAttachments();
   hideAiMentionMenu();
+}
+
+function aiSceneDirectionText() {
+  return String($("#ai-scene-direction")?.value ?? "");
+}
+
+function setAiSceneDirection(value) {
+  const input = $("#ai-scene-direction");
+  if (input) input.value = String(value ?? "");
+}
+
+function captureAiScenePin() {
+  return normalizeRoleplayScenePin({
+    location: $("#ai-scene-location")?.value ?? "",
+    present: $("#ai-scene-present")?.value ?? "",
+    timeLabel: $("#ai-scene-time")?.value ?? ""
+  });
+}
+
+function setAiScenePin(pin) {
+  const normalized = normalizeRoleplayScenePin(pin);
+  const location = $("#ai-scene-location");
+  const present = $("#ai-scene-present");
+  const timeLabel = $("#ai-scene-time");
+  if (location) location.value = normalized.location;
+  if (present) present.value = normalized.present;
+  if (timeLabel) timeLabel.value = normalized.timeLabel;
+}
+
+function restoreAiSceneComposer(snapshot = {}) {
+  setAiSceneDirection(snapshot.sceneDirection ?? "");
+  setAiScenePin(snapshot.scenePin);
+  syncAiSceneComposer();
+}
+
+function roleplaySceneComposerVisible() {
+  return $("#ai-task").value === "roleplay" && Boolean(state.aiRoleplayCharacter);
+}
+
+function syncAiSceneComposer() {
+  const button = $("#ai-scene-button");
+  const panel = $("#ai-scene-panel");
+  if (!button || !panel) return;
+  const visible = roleplaySceneComposerVisible();
+  const busy = aiInteractionBusy();
+  const readOnly = Boolean(state.work) && !canWritePermissionModule(state.work, "ai-chat");
+  button.classList.toggle("hidden", !visible);
+  button.disabled = !visible || busy || readOnly;
+  button.setAttribute("aria-hidden", String(!visible));
+  if (!visible) {
+    panel.classList.add("hidden");
+    button.setAttribute("aria-expanded", "false");
+  }
+  const hasContent = Boolean(aiSceneDirectionText().trim()) || roleplayScenePinHasContent(captureAiScenePin());
+  button.classList.toggle("is-active", hasContent);
+}
+
+function toggleAiScenePanel() {
+  const button = $("#ai-scene-button");
+  const panel = $("#ai-scene-panel");
+  if (!button || !panel || button.classList.contains("hidden")) return;
+  const willOpen = panel.classList.contains("hidden");
+  panel.classList.toggle("hidden", !willOpen);
+  button.setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) $("#ai-scene-direction")?.focus();
 }
 
 function aiPromptTextBeforeCursor() {
@@ -5109,8 +5232,18 @@ async function initializeAuthentication() {
   return true;
 }
 
+function syncToastRegionHost() {
+  const region = $("#toast-region");
+  const host = resolveToastRegionHost([...document.querySelectorAll("dialog[open]")], document.body);
+  if (!host || region.parentElement === host) return false;
+  if (typeof region.hidePopover === "function" && region.matches(":popover-open")) region.hidePopover();
+  host.append(region);
+  return true;
+}
+
 function raiseToastRegion() {
   const region = $("#toast-region");
+  syncToastRegionHost();
   if (typeof region.showPopover !== "function") return;
   if (region.matches(":popover-open")) region.hidePopover();
   region.showPopover();
@@ -5263,9 +5396,6 @@ function confirmToast(message, { title = "请再次确认", confirmLabel = "确�
   confirm.textContent = confirmLabel;
   actions.append(cancel, confirm);
   element.append(heading, description, actions);
-  region.append(element);
-  raiseToastRegion();
-  cancel.focus();
   return new Promise((resolve) => {
     const finish = (confirmed) => {
       element.remove();
@@ -5280,6 +5410,9 @@ function confirmToast(message, { title = "请再次确认", confirmLabel = "确�
       event.preventDefault();
       finish(false);
     });
+    region.append(element);
+    raiseToastRegion();
+    cancel.focus();
   });
 }
 
@@ -5340,8 +5473,15 @@ function inputToast(message, { title = "请输入", inputLabel = title, value = 
 
 document.addEventListener("toggle", (event) => {
   const target = event.target;
-  if (target instanceof HTMLDialogElement && target.open && $("#toast-region").childElementCount) {
+  if (!(target instanceof HTMLDialogElement)) return;
+  const region = $("#toast-region");
+  if (target.open && region.childElementCount) {
     raiseToastRegion();
+    return;
+  }
+  if (!target.open && (region.parentElement !== document.body || region.childElementCount)) {
+    const moved = syncToastRegionHost();
+    if (moved && region.childElementCount && typeof region.showPopover === "function") region.showPopover();
   }
 }, true);
 
@@ -8533,6 +8673,116 @@ function pencilIconMarkup() {
   return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"></path><path d="m16.5 3.5 1.4-1.4a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z"></path></svg>';
 }
 
+function characterFavoriteIconMarkup() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3Z"></path></svg>';
+}
+
+function characterFavoriteButton(item) {
+  const isFavorite = item.isFavorite === true;
+  const canFavorite = canEditModule("characters");
+  const action = isFavorite ? "取消收藏" : "收藏";
+  const title = canFavorite ? action : "当前账户没有角色模块写入权限";
+  return `<button class="character-favorite-button${isFavorite ? " is-favorite" : ""}" type="button" data-character-favorite="${esc(item.id)}" aria-label="${action}角色“${esc(item.name)}”" aria-pressed="${isFavorite}" title="${title}" ${canFavorite ? "" : "disabled"}>${characterFavoriteIconMarkup()}</button>`;
+}
+
+const recordFavoriteConfigs = Object.freeze({
+  character: { module: "characters", resource: "characters", label: "角色", nameField: "name" },
+  draft: { module: "drafts", resource: "drafts", label: "想法", nameField: "title" },
+  setting: { module: "settings", resource: "settings", label: "设定", nameField: "title" },
+  organization: { module: "organizations", resource: "organizations", label: "组织", nameField: "name" }
+});
+
+function recordFavoriteButton(type, item, { cardControl = false } = {}) {
+  const config = recordFavoriteConfigs[type];
+  if (!config) return "";
+  const isFavorite = item.isFavorite === true;
+  const canFavorite = canEditModule(config.module);
+  const action = isFavorite ? "取消收藏" : "收藏";
+  const title = canFavorite ? action : `当前账户没有${config.label}模块写入权限`;
+  const name = String(item[config.nameField] ?? "");
+  return `<button class="record-favorite-button${cardControl ? " is-card-control" : ""}${isFavorite ? " is-favorite" : ""}" type="button" data-record-favorite="${esc(item.id)}" data-record-favorite-type="${esc(type)}" aria-label="${action}${config.label}“${esc(name)}”" aria-pressed="${isFavorite}" title="${title}" ${canFavorite ? "" : "disabled"}>${characterFavoriteIconMarkup()}</button>`;
+}
+
+async function toggleRecordFavorite(type, item, render) {
+  const config = recordFavoriteConfigs[type];
+  if (!config) return;
+  const updated = await api(`/api/${config.resource}/${encodeURIComponent(item.id)}/favorite`, {
+    method: "PATCH",
+    body: { isFavorite: item.isFavorite !== true }
+  });
+  await render();
+  const favoriteButton = [...$("#module-content").querySelectorAll("[data-record-favorite]")].find((button) => (
+    button.dataset.recordFavoriteType === type && button.dataset.recordFavorite === String(updated.id)
+  ));
+  favoriteButton?.focus({ preventScroll: true });
+  const name = String(updated[config.nameField] ?? "");
+  toast(updated.isFavorite ? `已收藏${config.label}“${name}”` : `已取消收藏${config.label}“${name}”`);
+}
+
+function bindRecordFavoriteButtons(type, items, render) {
+  const config = recordFavoriteConfigs[type];
+  if (!config) return;
+  $("#module-content").querySelectorAll(`[data-record-favorite-type="${type}"]`).forEach((button) => button.addEventListener("click", async () => {
+    const item = items.find((candidate) => candidate.id === button.dataset.recordFavorite);
+    if (!item || !canEditModule(config.module)) return;
+    button.disabled = true;
+    try {
+      await toggleRecordFavorite(type, item, render);
+    } catch (error) {
+      button.disabled = false;
+      toast(`${config.label}收藏状态更新失败：${error.message}`, "error");
+    }
+  }));
+}
+
+function syncEntityDetailFavoriteButton(button, type, item) {
+  const config = recordFavoriteConfigs[type];
+  const visible = Boolean(config && item);
+  button.classList.toggle("hidden", !visible);
+  button.innerHTML = characterFavoriteIconMarkup();
+  if (!visible) {
+    button.disabled = true;
+    button.classList.remove("is-favorite");
+    button.setAttribute("aria-pressed", "false");
+    button.removeAttribute("aria-label");
+    button.removeAttribute("title");
+    return;
+  }
+  const isFavorite = item.isFavorite === true;
+  const canFavorite = canEditModule(config.module);
+  const action = isFavorite ? "取消收藏" : "收藏";
+  const name = String(item[config.nameField] ?? "");
+  button.classList.toggle("is-favorite", isFavorite);
+  button.setAttribute("aria-pressed", String(isFavorite));
+  button.setAttribute("aria-label", `${action}${config.label}“${name}”`);
+  button.title = canFavorite ? action : `当前账户没有${config.label}模块写入权限`;
+  button.disabled = !canFavorite;
+}
+
+function bindEntityDetailFavoriteButton(button, type, getItem, onUpdated) {
+  syncEntityDetailFavoriteButton(button, type, getItem());
+  button.onclick = async () => {
+    const config = recordFavoriteConfigs[type];
+    const item = getItem();
+    if (!config || !item || !canEditModule(config.module)) return;
+    button.disabled = true;
+    try {
+      const updated = await api(`/api/${config.resource}/${encodeURIComponent(item.id)}/favorite`, {
+        method: "PATCH",
+        body: { isFavorite: item.isFavorite !== true }
+      });
+      onUpdated(updated);
+      syncEntityDetailFavoriteButton(button, type, getItem() ?? updated);
+      button.focus({ preventScroll: true });
+      const name = String(updated[config.nameField] ?? "");
+      toast(updated.isFavorite ? `已收藏${config.label}“${name}”` : `已取消收藏${config.label}“${name}”`);
+    } catch (error) {
+      syncEntityDetailFavoriteButton(button, type, getItem());
+      toast(`${config.label}收藏状态更新失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+    }
+  };
+}
+
 function recordCardEditButton(attribute, id, label) {
   return `<button class="record-card-edit" type="button" data-${attribute}="${esc(id)}" aria-label="编辑${esc(label)}" title="编辑">${pencilIconMarkup()}</button>`;
 }
@@ -8868,9 +9118,10 @@ function openReviewDetailDialog(item) {
 }
 
 function settingRecordActions(item) {
-  return canEditModule("settings")
+  const recordAction = canEditModule("settings")
     ? recordCardEditButton("edit-setting", item.id, `设定“${item.title}”`)
     : recordHistoryButton("setting", item.id, item.title);
+  return `${recordFavoriteButton("setting", item)}${recordAction}`;
 }
 
 function draftTypeLabel(draftType) {
@@ -8924,6 +9175,7 @@ async function deleteDraft(item) {
 }
 
 function openDraftDialog(item = null, { readOnly = false } = {}) {
+  let draftDialogItem = item;
   const viewOnly = readOnly || !canEditModule("drafts");
   const volumeOptions = [["", "全局（不绑定分卷）"], ...(state.work?.volumes ?? []).map((volume) => [volume.id, volume.title])];
   const settingModuleOptions = [["", "全局（不绑定设定模块）"], ...draftSettingModules];
@@ -8981,6 +9233,18 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
       else control.readOnly = true;
     });
   }
+  if (item && viewOnly) {
+    const headerActions = $("#dialog-context-actions");
+    headerActions.innerHTML = `<button id="draft-dialog-favorite" class="entity-detail-favorite-button" type="button" aria-pressed="false"></button>${canEditModule("drafts") ? '<button id="draft-dialog-edit" class="ghost-button" type="button">编辑想法</button>' : ""}`;
+    bindEntityDetailFavoriteButton($("#draft-dialog-favorite"), "draft", () => draftDialogItem, (updated) => {
+      draftDialogItem = updated;
+      void renderDrafts(moduleListPages.drafts).catch((error) => toast(`想法列表刷新失败：${error instanceof Error ? error.message : "未知错误"}`, "error"));
+    });
+    $("#draft-dialog-edit")?.addEventListener("click", () => {
+      $("#form-dialog").close();
+      openDraftDialog(draftDialogItem);
+    });
+  }
 }
 
 async function renderDrafts(page = moduleListPages.drafts) {
@@ -9014,9 +9278,9 @@ async function renderDrafts(page = moduleListPages.drafts) {
     <details class="character-filter-dropdown"><summary><span>按绑定位置筛选</span><strong>${selectedBindingKeys.size ? `已选 ${selectedBindingKeys.size} 项` : "全部位置"}</strong></summary><div id="draft-binding-filter" class="character-filter-options">${bindingOptions.map(([value, label]) => `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedBindingKeys.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`).join("")}</div></details>
     <div class="character-filter-toolbar-actions">${hasDraftFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${drafts.length} 条想法</span>` : ""}<button id="clear-draft-filters" class="ghost-button" type="button" ${hasDraftFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
-  const actions = (item) => canEditModule("drafts")
+  const actions = (item) => `${recordFavoriteButton("draft", item)}${canEditModule("drafts")
     ? `${recordCardEditButton("edit-draft", item.id, `想法“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}`
-    : recordHistoryButton("draft", item.id, item.title);
+    : recordHistoryButton("draft", item.id, item.title)}`;
   const cards = `<div class="card-grid">${pageResult.items.map((item) => `
     <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看想法 ${esc(item.title)}">
       <small>${esc(draftTypeLabel(item.draftType))} · ${esc(draftBindingLabel(item))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
@@ -9072,6 +9336,10 @@ async function renderDrafts(page = moduleListPages.drafts) {
   $("#module-content").querySelectorAll("[data-edit-draft]").forEach((button) => button.addEventListener("click", async () => {
     openDraftDialog(await api(`/api/drafts/${encodeURIComponent(button.dataset.editDraft)}`));
   }));
+  bindRecordFavoriteButtons("draft", pageResult.items, async () => {
+    moduleListPages.drafts = 1;
+    await renderDrafts(1);
+  });
   bindEntityHistoryButtons(() => renderDrafts(pageResult.page));
 }
 
@@ -9135,6 +9403,10 @@ async function renderSettings(page = moduleListPages.settings) {
     bindModulePagination("settings", renderSettingResults);
     const openSetting = async (id, readOnly) => openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly });
     $("#setting-filter-results").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => { void openSetting(button.dataset.editSetting, false); }));
+    bindRecordFavoriteButtons("setting", pageResult.items, async () => {
+      moduleListPages.settings = 1;
+      await renderSettings(1);
+    });
     bindEntityHistoryButtons(async () => { await renderSettings(pageResult.page); await loadAiReferences(); });
   };
 
@@ -9171,6 +9443,21 @@ async function renderSettings(page = moduleListPages.settings) {
   renderSettingResults(page);
 }
 
+async function toggleCharacterFavorite(item) {
+  const updated = await api(`/api/characters/${encodeURIComponent(item.id)}/favorite`, {
+    method: "PATCH",
+    body: { isFavorite: item.isFavorite !== true }
+  });
+  if (loadedAiReferencesWorkId === state.work?.id) {
+    state.characters = upsertEntityCollection(state.characters, updated);
+    renderAiRoleplayCharacterSelect();
+  }
+  characterListPage = 1;
+  await renderCharacters(1);
+  $("#module-content").querySelector(`[data-character-favorite="${CSS.escape(String(updated.id))}"]`)?.focus({ preventScroll: true });
+  toast(updated.isFavorite ? `已收藏角色“${updated.name}”` : `已取消收藏角色“${updated.name}”`);
+}
+
 async function renderCharacters(page = characterListPage) {
   const hasCharacterFilters = characterFilters.raceIds.length > 0
     || characterFilters.organizationIds.length > 0
@@ -9193,14 +9480,14 @@ async function renderCharacters(page = characterListPage) {
   [state.races, state.organizations] = [races, organizations];
   mountModuleCount(characterPage.total);
   const layout = readModuleLayout();
-  const characterActions = (item) => recordCardEditButton("edit-character", item.id, `角色“${item.name}”`);
+  const characterActions = (item) => `${characterFavoriteButton(item)}${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}`;
   const characterLockBadge = (item) => item.lockedFields.length
     ? `<span class="character-lock-badge" aria-label="${item.lockedFields.length} 个锁定字段" title="锁定字段：${esc(item.lockedFields.join("、"))}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><span>${item.lockedFields.length}</span></span>`
     : "";
   const characterCards = () => `<div class="card-grid">${pageCharacters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
-    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
+    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${characterFavoriteButton(item)}${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
     <div class="character-card-heading">${characterAvatarHtml(item)}<h3>${esc(item.name)}</h3>${entityLifecycleBadge(item.isDead, "已死亡")}${characterLockBadge(item)}</div>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     <div class="character-gender"><b>性别</b><span class="pill">${esc(characterGenderLabel(item.gender))}</span></div>
@@ -9266,6 +9553,17 @@ async function renderCharacters(page = characterListPage) {
     ? `${layout === "rows" ? characterRows() : characterCards()}${pagination}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   bindModuleLayoutToggle(renderCharacters);
+  $("#module-content").querySelectorAll("[data-character-favorite]").forEach((button) => button.addEventListener("click", async () => {
+    const item = pageCharacters.find((candidate) => candidate.id === button.dataset.characterFavorite);
+    if (!item || !canEditModule("characters")) return;
+    button.disabled = true;
+    try {
+      await toggleCharacterFavorite(item);
+    } catch (error) {
+      button.disabled = false;
+      toast(`角色收藏状态更新失败：${error.message}`, "error");
+    }
+  }));
   const readSelectedValues = (selector) => [...$(selector).querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
   $("#character-race-filter").addEventListener("change", async () => {
     characterFiltersPanelOpen = true;
@@ -9420,14 +9718,14 @@ async function renderOrganizations(page = moduleListPages.organizations) {
   moduleListPages.organizations = pageResult.page;
   const layout = readModuleLayout();
   const canEditOrganizations = canEditModule("organizations");
-  const organizationActions = (item) => canEditOrganizations
+  const organizationActions = (item, { cardControl = false } = {}) => `${recordFavoriteButton("organization", item, { cardControl })}${canEditOrganizations
     ? recordCardEditButton("edit-organization", item.id, `组织“${item.name}”`)
-    : recordHistoryButton("organization", item.id, item.name);
+    : recordHistoryButton("organization", item.id, item.name)}`;
   const organizationCardActions = (item) => canEditOrganizations
-    ? organizationActions(item)
+    ? organizationActions(item, { cardControl: true })
     : `<div class="card-actions">${organizationActions(item)}</div>`;
   const organizationCards = () => `<div class="card-grid organization-grid">${pageResult.items.map((item) => `
-    <article class="record-card organization-card preview-record-card${canEditOrganizations ? " has-card-edit" : ""}" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"><small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
+    <article class="record-card organization-card preview-record-card${canEditOrganizations ? " has-card-edit has-favorite-control" : ""}" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"><small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
       <h3>${esc(item.name)}${entityLifecycleBadge(item.isDissolved, "已解散")}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
       <div class="organization-settings">${item.settingsCount ? `<span class="pill">${item.settingsCount} 条组织设定，打开查看详情</span>` : '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
@@ -9452,6 +9750,10 @@ async function renderOrganizations(page = moduleListPages.organizations) {
   bindModulePagination("organizations", renderOrganizations);
   const openOrganization = async (id, readOnly) => openOrganizationDialog(await api(`/api/organizations/${encodeURIComponent(id)}`), { readOnly });
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => { void openOrganization(button.dataset.editOrganization, false); }));
+  bindRecordFavoriteButtons("organization", pageResult.items, async () => {
+    moduleListPages.organizations = 1;
+    await renderOrganizations(1);
+  });
   bindEntityHistoryButtons(async () => { await renderOrganizations(pageResult.page); await loadAiReferences(); });
 }
 
@@ -11743,6 +12045,9 @@ function appendTokenUsageDetailRow(parent, label, usage, isSummary = false) {
     cell.textContent = tokenUsageDetailCount(usage?.[key]);
     row.append(cell);
   });
+  const price = document.createElement("td");
+  price.textContent = formatEstimatedCost(usage?.estimatedCost);
+  row.append(price);
   parent.append(row);
 }
 
@@ -11778,7 +12083,7 @@ function showTokenUsageDetails(usage, title, trigger) {
   const description = document.createElement("p");
   description.id = "token-usage-details-description";
   description.className = "token-usage-details-note";
-  description.textContent = "Raw Input 为不含缓存的输入 Token；Cache Write 与 Cache Read 也是输入组成部分，并已包含在总计中。汇总行包含当前范围内全部模型。";
+  description.textContent = "Raw Input 为不含缓存的输入 Token；Cache Write 与 Cache Read 也是输入组成部分，并已包含在总计中。估算价格按美元显示，未匹配价格的模型显示为暂无价格。汇总行包含当前范围内全部模型。";
   body.append(description);
 
   const tableScroll = document.createElement("div");
@@ -11790,7 +12095,7 @@ function showTokenUsageDetails(usage, title, trigger) {
   table.append(caption);
   const head = document.createElement("thead");
   const headRow = document.createElement("tr");
-  ["模型", "Raw Input", "Cache Write", "Cache Read", "Output", "总计", "调用", "估算调用"].forEach((label) => {
+  ["模型", "Raw Input", "Cache Write", "Cache Read", "Output", "总计", "调用", "估算调用", "估算价格"].forEach((label) => {
     const cell = document.createElement("th");
     cell.scope = "col";
     cell.textContent = label;
@@ -11804,7 +12109,7 @@ function showTokenUsageDetails(usage, title, trigger) {
   if (!models.length) {
     const emptyRow = document.createElement("tr");
     const emptyCell = document.createElement("td");
-    emptyCell.colSpan = 8;
+    emptyCell.colSpan = 9;
     emptyCell.textContent = "还没有模型用量记录。";
     emptyRow.append(emptyCell);
     bodyRows.append(emptyRow);
@@ -11977,7 +12282,7 @@ async function renderBookAiSettings() {
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",
-    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label><label><input name="agent-tool" type="checkbox" value="calculate_time" ${agentTools.has("calculate_time") ? "checked" : ""}><span><strong>计算日期</strong><small>计算日期差值，或从起始日期推算目标日期，不读取作品内容。</small></span></label>`
+    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label><label><input name="agent-tool" type="checkbox" value="calculate_time" ${agentTools.has("calculate_time") ? "checked" : ""}><span><strong>计算日期</strong><small>计算两个 YYYY-MM-DD 日期之间的天数差，不读取作品内容。</small></span></label>`
   );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
@@ -12691,6 +12996,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   const submitLabel = options.submitLabel ?? "保存";
   let submitting = false;
   let disabledStates = [];
+  $("#dialog-context-actions").replaceChildren();
   $("#dialog-title").textContent = title;
   $("#dialog-title").classList.toggle("hidden", Boolean(options.titleInput));
   titleInput.classList.toggle("hidden", !options.titleInput);
@@ -13160,6 +13466,10 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   const editButton = $("#setting-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("settings"));
   editButton.onclick = () => openSettingEditor(settingEditorItem);
+  bindEntityDetailFavoriteButton($("#setting-editor-favorite"), "setting", () => viewOnly ? settingEditorItem : null, (updated) => {
+    settingEditorItem = updated;
+    state.settings = upsertEntityCollection(state.settings, updated);
+  });
   const statusButtons = [$("#setting-editor-confirm"), $("#setting-editor-deprecate")];
   syncSettingEditorChrome(viewOnly);
   $("#setting-editor-history").onclick = async () => {
@@ -14186,11 +14496,12 @@ function renderCharacterEditorFields(item) {
       (canReadModule("editor")
         ? field("firstChapterId", "首次登场章节", "select", item?.firstChapterId ?? "", chapterOptions)
         : '<div class="character-editor-empty-field"><b>首次登场章节</b><span>当前账户没有正文读取权限，原有绑定不会被修改。</span></div>')),
-    characterEditorSection("profile", "人物档案", "记录人物定位、行为动力和便于创作时快速理解的简介。",
+    characterEditorSection("profile", "人物档案", "记录人物定位、行为动力、公开人设和便于创作时快速理解的简介。",
       field("code", "编号", "text", item?.code) +
       field("identity", "身份与定位", "text", item?.attributes?.identity) +
       field("motivation", "核心动机", "textarea", item?.profile?.motivation) +
-      field("summary", "人物简介", "textarea", item?.profile?.summary)),
+      field("summary", "人物简介", "textarea", item?.profile?.summary) +
+      '<div class="form-field"><span>人设摘要</span><small>关系扮演时作为公开人设注入对方可见的角色卡，不会包含私密档案或 Markdown 章节。</small><textarea name="personaSummary" maxlength="20000" aria-label="人设摘要">' + esc(item?.profile?.personaSummary ?? "") + "</textarea></div>"),
     characterEditorSection("settings", "扩展设定", "可用短属性和 Markdown 长章节承载形态、能力、生态、经历与研究记录。",
       field("details", "扩展属性", "key-value-list", item?.attributes?.details) +
       '<div id="character-markdown-sections" class="character-markdown-sections"></div>'),
@@ -14238,7 +14549,8 @@ function collectCharacterBody(form) {
     profile: {
       ...profile,
       motivation: String(form.get("motivation") ?? "").trim(),
-      summary: String(form.get("summary") ?? "").trim()
+      summary: String(form.get("summary") ?? "").trim(),
+      personaSummary: String(form.get("personaSummary") ?? "").trim()
     },
     currentState: buildCharacterState(form.getAll("stateKey"), form.getAll("stateValue"), item?.currentState ?? {}),
     lockedFields: form.getAll("lockedFields").map((value) => String(value).trim()).filter(Boolean),
@@ -14390,6 +14702,13 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   const editButton = $("#character-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("characters"));
   editButton.onclick = () => void openCharacterEditor(characterEditorItem);
+  bindEntityDetailFavoriteButton($("#character-editor-favorite"), "character", () => viewOnly ? characterEditorItem : null, (updated) => {
+    characterEditorItem = updated;
+    if (loadedAiReferencesWorkId === state.work?.id) {
+      state.characters = upsertEntityCollection(state.characters, updated);
+      renderAiRoleplayCharacterSelect();
+    }
+  });
   document.querySelectorAll("[data-character-editor-tab]").forEach((button) => {
     button.onclick = () => activateCharacterEditorTab(button.dataset.characterEditorTab);
   });
@@ -14576,6 +14895,10 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   editButton.textContent = `编辑${label}`;
   editButton.classList.toggle("hidden", !readOnly || !canEditModule(module));
   editButton.onclick = () => void openKnowledgeEditor(kind, knowledgeEditorItem);
+  bindEntityDetailFavoriteButton($("#knowledge-editor-favorite"), "organization", () => !isRace && viewOnly ? knowledgeEditorItem : null, (updated) => {
+    knowledgeEditorItem = updated;
+    state.organizations = upsertEntityCollection(state.organizations, updated);
+  });
   const form = $("#knowledge-editor-form");
   form.onsubmit = async (event) => {
     event.preventDefault();
@@ -15679,10 +16002,25 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
   if (aiRequestManager.hasActive(tab.id)) return;
   const composerSnapshot = captureAiPromptComposer();
   const requestComposerSnapshot = retry
-    ? { text: retry.prompt, citations: retry.citations ?? [], references: [], images: retry.images ?? [] }
+    ? {
+      text: retry.prompt,
+      citations: retry.citations ?? [],
+      references: [],
+      images: retry.images ?? [],
+      sceneDirection: retry.sceneDirection ?? "",
+      scenePin: captureAiScenePin()
+    }
     : composerSnapshot;
   const instruction = requestComposerSnapshot.text.trim();
-  if (!instruction) return toast("请输入指令", "error");
+  const sceneDirection = $("#ai-task").value === "roleplay"
+    ? String(requestComposerSnapshot.sceneDirection ?? "").trim()
+    : "";
+  const scenePin = $("#ai-task").value === "roleplay"
+    ? normalizeRoleplayScenePin(requestComposerSnapshot.scenePin)
+    : emptyRoleplayScenePin();
+  if (!instruction && !sceneDirection) {
+    return toast($("#ai-task").value === "roleplay" ? "请输入台词或场景旁白" : "请输入指令", "error");
+  }
   if ($("#ai-task").value === "roleplay" && !state.aiRoleplayCharacter) return toast("请先选择角色卡", "error");
   const requestScope = currentAiRequestScope();
   if (!requestScope) return toast("请先选择章节", "error");
@@ -15779,6 +16117,8 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
     if (taskType === "chat") {
       const streamed = await streamChat(requestHolder, aiRetryStreamRequestBody({
         instruction,
+        ...(sceneDirection ? { sceneDirection } : {}),
+        ...($("#ai-task").value === "roleplay" ? { scenePin } : {}),
         scope,
         modelId,
         citations,
@@ -16269,9 +16609,10 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   const isInterrupted = role === "assistant" && metadata?.interrupted === true;
   const interruptionCode = typeof metadata?.interruptionCode === "string" ? metadata.interruptionCode : "AI_STREAM_FAILED";
   message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure || isInterrupted ? " is-error" : ""}`;
+  const parsedUserTurn = role === "user" ? parseRoleplayUserTurn(text) : null;
   const messageBody = isFailure
     ? `<p class="ai-error-text">${esc(text)}</p>${aiToolCallSettingsLinkMarkup(text)}`
-    : renderMarkdown(text);
+    : renderMarkdown(parsedUserTurn?.hasMarkup ? parsedUserTurn.userMessage : text);
   message.innerHTML = `<div class="message-body">${messageBody}</div>`;
   message.querySelector("[data-ai-tool-call-settings-link]")?.addEventListener("click", (event) => {
     event.preventDefault();
@@ -16292,6 +16633,18 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     failureBadge.textContent = isInterrupted ? "中断" : "失败";
     failureBadge.setAttribute("aria-label", `消息状态：${isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : "失败"}`);
     heading.firstElementChild?.append(failureBadge);
+  }
+  if (parsedUserTurn?.hasMarkup && parsedUserTurn.sceneDirection) {
+    const scene = document.createElement("div");
+    scene.className = "user-message-scene";
+    const sceneLabel = document.createElement("span");
+    sceneLabel.className = "user-message-scene-label";
+    sceneLabel.textContent = "旁白 / 场景";
+    const sceneBody = document.createElement("div");
+    sceneBody.className = "user-message-scene-body";
+    sceneBody.textContent = parsedUserTurn.sceneDirection;
+    scene.append(sceneLabel, sceneBody);
+    message.querySelector(".message-body")?.before(scene);
   }
   const mentionGroups = role === "user"
     ? [
@@ -16348,7 +16701,8 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     );
     message.dataset.aiImageAttachmentIds = JSON.stringify(imageAttachments.map((attachment) => attachment.id));
     appendAiMessageImageAttachments(message, imageAttachments);
-    attachUserCopyAction(message, text);
+    attachUserCopyAction(message, parsedUserTurn?.hasMarkup ? parsedUserTurn.userMessage : text);
+    if (parsedUserTurn?.hasMarkup) message.dataset.sceneDirection = parsedUserTurn.sceneDirection;
   }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModelId = tab?.modelId ?? tab?.selectedModelId ?? $("#ai-model").value;
@@ -17012,16 +17366,12 @@ $("#account-settings-button").addEventListener("click", () => {
   $("#profile-display-name").value = state.user?.displayName ?? "";
   renderProfileAvatar();
   $("#password-form").reset();
-  $("#api-key-result").classList.add("hidden");
-  $("#api-key-value").value = "";
   $("#account-dialog").showModal();
   api("/api/auth/api-key").then((status) => {
-    $("#api-key-status").textContent = status.configured
-      ? `已配置 ${status.prefix}…${status.lastUsedAt ? `，最近使用：${formatDateTime(status.lastUsedAt)}` : "，尚未使用"}`
-      : "尚未生成 API Key。";
-    $("#api-key-reset-button").textContent = status.configured ? "重置 API Key" : "生成 API Key";
+    paintApiKeyStatus(status);
   }).catch((error) => {
     $("#api-key-status").textContent = error.message;
+    $("#api-key-copy-button").hidden = true;
   });
 });
 $("#account-dialog-close").addEventListener("click", () => $("#account-dialog").close());
@@ -17458,6 +17808,17 @@ function validatePasswordChangeConfirmation() {
 }
 $("#password-form input[name='newPassword']").addEventListener("input", validatePasswordChangeConfirmation);
 $("#password-form input[name='passwordConfirmation']").addEventListener("input", validatePasswordChangeConfirmation);
+function paintApiKeyStatus(status) {
+  const copyButton = $("#api-key-copy-button");
+  copyButton.hidden = !status.configured;
+  if (status.configured) {
+    $("#api-key-status").textContent = `已配置 ${status.prefix}…${status.lastUsedAt ? `，最近使用：${formatDateTime(status.lastUsedAt)}` : "，尚未使用"}`;
+    $("#api-key-reset-button").textContent = "重置 API Key";
+    return;
+  }
+  $("#api-key-status").textContent = "尚未生成 API Key。";
+  $("#api-key-reset-button").textContent = "生成 API Key";
+}
 $("#api-key-reset-button").addEventListener("click", async () => {
   if ($("#api-key-reset-button").textContent.includes("重置") && !(await confirmToast(
     "重置后，所有使用旧 API Key 的 CLI 会立刻退出登录。确定继续吗？",
@@ -17465,25 +17826,31 @@ $("#api-key-reset-button").addEventListener("click", async () => {
   ))) return;
   try {
     const result = await api("/api/auth/api-key/reset", { method: "POST", body: {} });
-    $("#api-key-status").textContent = `已配置 ${result.prefix}…，尚未使用`;
-    $("#api-key-reset-button").textContent = "重置 API Key";
-    $("#api-key-value").value = result.apiKey;
-    $("#api-key-result").classList.remove("hidden");
-    $("#api-key-value").focus();
-    $("#api-key-value").select();
-    toast("新的 API Key 已生成，请立即保存");
+    paintApiKeyStatus({
+      configured: true,
+      prefix: result.prefix,
+      lastUsedAt: null,
+      copyable: result.copyable !== false
+    });
+    toast("新的 API Key 已生成，可点击复制");
   } catch (error) { toast(error.message, "error"); }
 });
 $("#api-key-copy-button").addEventListener("click", async () => {
-  const value = $("#api-key-value").value;
-  if (!value) return;
+  const button = $("#api-key-copy-button");
+  if (button.hidden || button.disabled) return;
+  button.disabled = true;
   try {
-    await navigator.clipboard.writeText(value);
-    toast("API Key 已复制");
-  } catch {
-    $("#api-key-value").focus();
-    $("#api-key-value").select();
-    toast("无法自动复制，请手动复制", "error");
+    const result = await api("/api/auth/api-key/reveal", { method: "POST", body: {} });
+    try {
+      await navigator.clipboard.writeText(result.apiKey);
+      toast("API Key 已复制");
+    } catch {
+      toast("无法自动复制，请检查浏览器剪贴板权限", "error");
+    }
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
   }
 });
 $("#logout-button").addEventListener("click", async () => {
@@ -18087,6 +18454,15 @@ $("#module-create-button").addEventListener("click", () => ({ drafts: openDraftD
     }
     $("#ai-attachment-input").click();
   });
+  $("#ai-scene-button").addEventListener("click", () => {
+    toggleAiScenePanel();
+  });
+  for (const field of ["#ai-scene-direction", "#ai-scene-location", "#ai-scene-present", "#ai-scene-time"]) {
+    $(field)?.addEventListener("input", () => {
+      syncAiSceneComposer();
+      persistActiveAiChatTab();
+    });
+  }
   $("#ai-attachment-input").addEventListener("change", (event) => {
     const input = event.currentTarget;
     void addAiImageFiles(input.files).finally(() => { input.value = ""; });

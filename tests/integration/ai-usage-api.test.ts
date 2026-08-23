@@ -114,7 +114,8 @@ describe("AI Token 用量统计 API", () => {
         cacheWriteInputTokens: 0,
         outputTokens: 50,
         requestCount: 1,
-        estimatedRequestCount: 0
+        estimatedRequestCount: 0,
+        estimatedCost: null
       }),
       expect.objectContaining({
         modelId: "deepseek-chat",
@@ -125,7 +126,8 @@ describe("AI Token 用量统计 API", () => {
         cacheWriteInputTokens: 0,
         outputTokens: 30,
         requestCount: 2,
-        estimatedRequestCount: 1
+        estimatedRequestCount: 1,
+        estimatedCost: 0.00003892
       })
     ]);
     expect(platform.body.data.works).toEqual([
@@ -160,7 +162,8 @@ describe("AI Token 用量统计 API", () => {
         cacheWriteInputTokens: 0,
         outputTokens: 30,
         requestCount: 2,
-        estimatedRequestCount: 1
+        estimatedRequestCount: 1,
+        estimatedCost: 0.00003892
       })
     ]);
     expect(work.body.data).not.toHaveProperty("works");

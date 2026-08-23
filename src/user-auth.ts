@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import type { Request, RequestHandler, Response } from "express";
+import type { CredentialVault } from "./credential-vault.js";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import { HYBRID_SEARCH_PERMISSION_MODULES, hybridSearchPermissionModule } from "./hybrid-search.js";
@@ -78,6 +79,7 @@ export type ApiKeyStatus = {
   createdAt: string | null;
   rotatedAt: string | null;
   lastUsedAt: string | null;
+  copyable: boolean;
 };
 
 declare global {
@@ -243,8 +245,19 @@ function workIdFromPath(database: Database, pathname: string): string | null {
   return null;
 }
 
+function apiKeyCiphertext(row: Row | undefined): { encrypted: string; iv: string; tag: string } | null {
+  const encrypted = String(row?.key_encrypted ?? "");
+  const iv = String(row?.key_iv ?? "");
+  const tag = String(row?.key_tag ?? "");
+  if (!encrypted || !iv || !tag) return null;
+  return { encrypted, iv, tag };
+}
+
 export class UserAuthService {
-  constructor(private readonly database: Database) {
+  constructor(
+    private readonly database: Database,
+    private readonly vault: CredentialVault
+  ) {
     const revokedAt = new Date().toISOString();
     const result = this.database.run(
       "UPDATE user_sessions SET revoked_at = ? WHERE revoked_at IS NULL",
@@ -405,14 +418,15 @@ export class UserAuthService {
     this.getUser(userId);
     const row = this.database.get("SELECT * FROM user_api_keys WHERE user_id = ?", userId);
     if (!row) {
-      return { configured: false, prefix: null, createdAt: null, rotatedAt: null, lastUsedAt: null };
+      return { configured: false, prefix: null, createdAt: null, rotatedAt: null, lastUsedAt: null, copyable: false };
     }
     return {
       configured: true,
       prefix: String(row.key_prefix),
       createdAt: String(row.created_at),
       rotatedAt: String(row.rotated_at),
-      lastUsedAt: row.last_used_at === null ? null : String(row.last_used_at)
+      lastUsedAt: row.last_used_at === null ? null : String(row.last_used_at),
+      copyable: apiKeyCiphertext(row) !== null
     };
   }
 
@@ -421,21 +435,41 @@ export class UserAuthService {
     const apiKey = `${apiKeyPrefix}${randomBytes(32).toString("base64url")}`;
     const prefix = apiKey.slice(0, 13);
     const timestamp = new Date().toISOString();
+    const encrypted = this.vault.encrypt(apiKey);
     this.database.run(
-      `INSERT INTO user_api_keys (user_id, key_hash, key_prefix, created_at, rotated_at, last_used_at)
-       VALUES (?, ?, ?, ?, ?, NULL)
+      `INSERT INTO user_api_keys (user_id, key_hash, key_prefix, created_at, rotated_at, last_used_at, key_encrypted, key_iv, key_tag)
+       VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)
        ON CONFLICT(user_id) DO UPDATE SET
          key_hash = excluded.key_hash,
          key_prefix = excluded.key_prefix,
          rotated_at = excluded.rotated_at,
-         last_used_at = NULL`,
+         last_used_at = NULL,
+         key_encrypted = excluded.key_encrypted,
+         key_iv = excluded.key_iv,
+         key_tag = excluded.key_tag`,
       userId,
       sha256(apiKey),
       prefix,
       timestamp,
-      timestamp
+      timestamp,
+      encrypted.encrypted,
+      encrypted.iv,
+      encrypted.tag
     );
     return { ...this.getApiKeyStatus(userId), apiKey };
+  }
+
+  revealApiKey(userId: string): { apiKey: string; prefix: string } {
+    this.getUser(userId);
+    const row = this.database.get("SELECT * FROM user_api_keys WHERE user_id = ?", userId);
+    if (!row) throw new AppError(404, "API_KEY_NOT_CONFIGURED", "尚未生成 API Key");
+    const ciphertext = apiKeyCiphertext(row);
+    if (!ciphertext) throw new AppError(409, "API_KEY_NOT_RECOVERABLE", "当前 API Key 无法复制，请重置后再试");
+    try {
+      return { apiKey: this.vault.decrypt(ciphertext), prefix: String(row.key_prefix) };
+    } catch {
+      throw new AppError(409, "API_KEY_NOT_RECOVERABLE", "当前 API Key 无法复制，请重置后再试");
+    }
   }
 
   revoke(sessionId: string): void {

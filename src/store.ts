@@ -37,6 +37,12 @@ import {
 import { buildWritingCalendar, writingDateKey } from "./writing-progress-time.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_SECONDS, normalizeAiStreamIdleTimeoutSeconds } from "./ai-stream-timeout.js";
+import {
+  normalizeRoleplayScenePin,
+  roleplayUserTurnDisplayText,
+  roleplayUserTurnTitleSource,
+  type RoleplayScenePin
+} from "./roleplay-turn.js";
 
 type WorkInput = {
   title: string;
@@ -643,7 +649,7 @@ export const aiConversationTaskTypes = ["chat", "roleplay", "continue", "polish"
 export type AiConversationTaskType = typeof aiConversationTaskTypes[number];
 
 export function defaultAiConversationTitle(prompt: string): string {
-  const normalized = prompt.replace(/\s+/gu, " ").trim();
+  const normalized = roleplayUserTurnTitleSource(prompt).replace(/\s+/gu, " ").trim();
   return Array.from(normalized).slice(0, 15).join("") || "新对话";
 }
 
@@ -656,6 +662,7 @@ export type AiConversationContext = {
   totalMessageCount: number;
   warningPending: boolean;
   injectedEntities: AiInjectedEntities;
+  scenePin: RoleplayScenePin;
   messages: Array<{
     id: string;
     role: "user" | "assistant";
@@ -5229,7 +5236,7 @@ export class Store {
       `SELECT draft.*, volume.title AS volume_title FROM drafts draft
        LEFT JOIN volumes volume ON volume.id = draft.volume_id
        WHERE draft.work_id = ? AND (? IS NULL OR draft.draft_type = ?)
-       ORDER BY draft.updated_at DESC, draft.title`,
+       ORDER BY draft.is_favorite DESC, draft.updated_at DESC, draft.title`,
       workId,
       draftType ?? null,
       draftType ?? null
@@ -5248,7 +5255,7 @@ export class Store {
       `SELECT draft.*, volume.title AS volume_title FROM drafts draft
        LEFT JOIN volumes volume ON volume.id = draft.volume_id
        WHERE draft.work_id = ? AND (? IS NULL OR draft.draft_type = ?)
-       ORDER BY draft.updated_at DESC, draft.title${page.sql}`,
+       ORDER BY draft.is_favorite DESC, draft.updated_at DESC, draft.title${page.sql}`,
       workId,
       draftType ?? null,
       draftType ?? null,
@@ -5307,6 +5314,21 @@ export class Store {
     return this.mapDraft(row, true);
   }
 
+  setDraftFavorite(draftId: string, isFavorite: boolean): Record<string, unknown> {
+    const draft = this.db.get("SELECT id, work_id, is_favorite FROM drafts WHERE id = ?", draftId);
+    if (!draft) throw notFound("想法");
+    const workId = requiredString(draft, "work_id");
+    const previousFavorite = booleanValue(draft, "is_favorite");
+    this.db.transaction(() => {
+      this.db.run("UPDATE drafts SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, draftId);
+      this.audit(workId, "draft.favorite-updated", "draft", draftId, {
+        previousFavorite,
+        isFavorite
+      });
+    });
+    return this.getDraft(draftId);
+  }
+
   updateDraft(
     draftId: string,
     input: Partial<DraftInput>,
@@ -5363,6 +5385,7 @@ export class Store {
       volumeTitle: optionalString(row, "volume_title"),
       settingModule: optionalString(row, "setting_module"),
       title: requiredString(row, "title"),
+      isFavorite: booleanValue(row, "is_favorite"),
       ...(includeContent ? { content } : { contentPreview: content.replace(/\s+/gu, " ").trim().slice(0, 320) }),
       versionNo: this.currentEntityVersionNo("draft", requiredString(row, "id")),
       createdAt: requiredString(row, "created_at"),
@@ -5467,13 +5490,13 @@ export class Store {
 
   listSettings(workId: string, includeContent = true): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM settings WHERE work_id = ? ORDER BY locked DESC, category, title", workId).map((row) => this.mapSetting(row, includeContent));
+    return this.db.all("SELECT * FROM settings WHERE work_id = ? ORDER BY is_favorite DESC, locked DESC, category, title", workId).map((row) => this.mapSetting(row, includeContent));
   }
 
   listSettingsPage(workId: string, pagination: Pagination, includeContent = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
-    const rows = this.db.all(`SELECT * FROM settings WHERE work_id = ? ORDER BY locked DESC, category, title${page.sql}`, workId, ...page.params);
+    const rows = this.db.all(`SELECT * FROM settings WHERE work_id = ? ORDER BY is_favorite DESC, locked DESC, category, title${page.sql}`, workId, ...page.params);
     return paginated(rows.map((row) => this.mapSetting(row, includeContent)), pagination);
   }
 
@@ -5481,6 +5504,21 @@ export class Store {
     const row = this.db.get("SELECT * FROM settings WHERE id = ?", settingId);
     if (!row) throw notFound("设定");
     return this.mapSetting(row);
+  }
+
+  setSettingFavorite(settingId: string, isFavorite: boolean): Record<string, unknown> {
+    const setting = this.db.get("SELECT id, work_id, is_favorite FROM settings WHERE id = ?", settingId);
+    if (!setting) throw notFound("设定");
+    const workId = requiredString(setting, "work_id");
+    const previousFavorite = booleanValue(setting, "is_favorite");
+    this.db.transaction(() => {
+      this.db.run("UPDATE settings SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, settingId);
+      this.audit(workId, "setting.favorite-updated", "setting", settingId, {
+        previousFavorite,
+        isFavorite
+      });
+    });
+    return this.getSetting(settingId);
   }
 
   updateSetting(
@@ -5539,6 +5577,7 @@ export class Store {
       tags: json(requiredString(row, "tags_json"), []),
       status: requiredString(row, "status"),
       locked: booleanValue(row, "locked"),
+      isFavorite: booleanValue(row, "is_favorite"),
       evidence: json(requiredString(row, "evidence_json"), []),
       scope: json(requiredString(row, "scope_json"), {}),
       authorNote: requiredString(row, "author_note"),
@@ -5934,7 +5973,7 @@ export class Store {
 
   listOrganizations(workId: string, includeMarkdown = true): Record<string, unknown>[] {
     this.getWork(workId);
-    const rows = this.db.all("SELECT * FROM organizations WHERE work_id = ? ORDER BY name", workId);
+    const rows = this.db.all("SELECT * FROM organizations WHERE work_id = ? ORDER BY is_favorite DESC, name", workId);
     const batch = this.organizationListBatch(rows);
     return rows.map((row) => this.mapOrganization(row, includeMarkdown, batch));
   }
@@ -5942,7 +5981,7 @@ export class Store {
   listOrganizationsPage(workId: string, pagination: Pagination, includeMarkdown = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
-    const rows = this.db.all(`SELECT * FROM organizations WHERE work_id = ? ORDER BY name${page.sql}`, workId, ...page.params);
+    const rows = this.db.all(`SELECT * FROM organizations WHERE work_id = ? ORDER BY is_favorite DESC, name${page.sql}`, workId, ...page.params);
     const batch = this.organizationListBatch(rows);
     return paginated(rows.map((row) => this.mapOrganization(row, includeMarkdown, batch)), pagination);
   }
@@ -5951,6 +5990,21 @@ export class Store {
     const row = this.db.get("SELECT * FROM organizations WHERE id = ?", organizationId);
     if (!row) throw notFound("组织");
     return this.mapOrganization(row);
+  }
+
+  setOrganizationFavorite(organizationId: string, isFavorite: boolean): Record<string, unknown> {
+    const organization = this.db.get("SELECT id, work_id, is_favorite FROM organizations WHERE id = ?", organizationId);
+    if (!organization) throw notFound("组织");
+    const workId = requiredString(organization, "work_id");
+    const previousFavorite = booleanValue(organization, "is_favorite");
+    this.db.transaction(() => {
+      this.db.run("UPDATE organizations SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, organizationId);
+      this.audit(workId, "organization.favorite-updated", "organization", organizationId, {
+        previousFavorite,
+        isFavorite
+      });
+    });
+    return this.getOrganization(organizationId);
   }
 
   updateOrganization(
@@ -6125,6 +6179,7 @@ export class Store {
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
       isDissolved: booleanValue(row, "is_dissolved"),
+      isFavorite: booleanValue(row, "is_favorite"),
       ...(includeMarkdown
         ? { settings, settingsMarkdown: settingsMarkdownFromList(settings), settingsSections }
         : { settings: [], settingsCount: settingsSections.length }),
@@ -6314,7 +6369,7 @@ export class Store {
   listCharacters(workId: string, includeProfileSections = false, includeMerged = false, includeRaceMarkdown = true): Record<string, unknown>[] {
     this.getWork(workId);
     return this.db.all(
-      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY name`,
+      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY is_favorite DESC, name`,
       workId
     )
       .map((row) => this.mapCharacter(row, includeProfileSections, includeRaceMarkdown));
@@ -6328,7 +6383,7 @@ export class Store {
       workId
     );
     const rows = this.db.all(
-      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY name${page.sql}`,
+      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY is_favorite DESC, name${page.sql}`,
       workId,
       ...page.params
     );
@@ -7022,6 +7077,25 @@ export class Store {
     return this.mapCharacter(row);
   }
 
+  setCharacterFavorite(characterId: string, isFavorite: boolean): Record<string, unknown> {
+    const character = this.db.get("SELECT id, work_id, is_favorite, merged_into_character_id FROM characters WHERE id = ?", characterId);
+    if (!character) throw notFound("角色");
+    if (optionalString(character, "merged_into_character_id")) {
+      throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能收藏");
+    }
+    const workId = requiredString(character, "work_id");
+    const previousFavorite = booleanValue(character, "is_favorite");
+    if (previousFavorite === isFavorite) return this.getCharacter(characterId);
+    this.db.transaction(() => {
+      this.db.run("UPDATE characters SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, characterId);
+      this.audit(workId, "character.favorite-updated", "character", characterId, {
+        previousFavorite,
+        isFavorite
+      });
+    });
+    return this.getCharacter(characterId);
+  }
+
   getCharacterAvatar(characterId: string): CharacterAvatarMetadata | null {
     const character = this.db.get("SELECT id FROM characters WHERE id = ?", characterId);
     if (!character) throw notFound("角色");
@@ -7385,6 +7459,7 @@ export class Store {
       profileSectionCount,
       currentState: json(requiredString(row, "current_state_json"), {}),
       isDead: booleanValue(row, "is_dead"),
+      isFavorite: booleanValue(row, "is_favorite"),
       avatarUrl: avatarSha256
         ? `/api/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
         : null,
@@ -8606,6 +8681,7 @@ export class Store {
       totalMessageCount,
       warningPending: Boolean(optionalString(conversation, "context_warning_at")),
       injectedEntities: parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES),
+      scenePin: normalizeRoleplayScenePin(json(optionalString(conversation, "scene_pin_json") ?? "{}", {})),
       messages: rows.filter((message) => requiredString(message, "id") !== excludeMessageId)
         .map((message) => ({
           id: requiredString(message, "id"),
@@ -8698,6 +8774,20 @@ export class Store {
     );
     const refreshed = this.db.get("SELECT system_clock_text FROM ai_conversations WHERE id = ?", conversationId);
     return (optionalString(refreshed ?? {}, "system_clock_text") ?? clock).trim() || clock;
+  }
+
+  setAiConversationScenePin(conversationId: string, workId: string, pin: unknown): RoleplayScenePin {
+    const conversation = this.db.get("SELECT work_id FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const normalized = normalizeRoleplayScenePin(pin);
+    this.db.run(
+      "UPDATE ai_conversations SET scene_pin_json = ?, updated_at = ? WHERE id = ?",
+      JSON.stringify(normalized),
+      now(),
+      conversationId
+    );
+    return normalized;
   }
 
   listCharacterNameEntries(workId: string): Array<{ characterId: string; normalizedName: string; displayName: string; kind: "primary" | "alias" }> {
@@ -9292,9 +9382,10 @@ export class Store {
     const injectedEntitiesJson = optionalString(conversation, "injected_entities_json")
       ?? JSON.stringify(EMPTY_AI_INJECTED_ENTITIES);
     const systemClockText = optionalString(conversation, "system_clock_text") ?? "";
+    const scenePinJson = optionalString(conversation, "scene_pin_json") ?? "{}";
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, roleplay_user_character_id, task_type, context_scope_json, title, compacted_summary, compacted_message_count, agent_tools_json, injected_entities_json, system_clock_text, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, roleplay_user_character_id, task_type, context_scope_json, title, compacted_summary, compacted_message_count, agent_tools_json, injected_entities_json, system_clock_text, scene_pin_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
         workId,
         optionalString(conversation, "roleplay_character_id"),
@@ -9309,6 +9400,7 @@ export class Store {
           : String(conversation.agent_tools_json),
         injectedEntitiesJson,
         systemClockText,
+        scenePinJson,
         timestamp,
         timestamp,
         currentRequestActor()?.userId ?? null
@@ -9405,7 +9497,7 @@ export class Store {
       title: requiredString(row, "title"),
       isFavorite: booleanValue(row, "is_favorite"),
       messageCount: numberValue(row, "message_count"),
-      preview: requiredString(row, "preview"),
+      preview: roleplayUserTurnDisplayText(requiredString(row, "preview")),
       compactedMessageCount: numberValue(row, "compacted_message_count"),
       hasCompactedSummary: Boolean(requiredString(row, "compacted_summary")),
       contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
@@ -9413,6 +9505,7 @@ export class Store {
       ...(lockedModelId ? { modelId: lockedModelId } : {}),
       ...(hasImageAttachments ? { hasImageAttachments: true, modelLockedByImage: true } : {}),
       contextScope: json<ContextScope>(optionalString(row, "context_scope_json") ?? "", { type: "none" }),
+      scenePin: normalizeRoleplayScenePin(json(optionalString(row, "scene_pin_json") ?? "{}", {})),
       roleplayCharacter: roleplayCharacter ? {
         id: requiredString(roleplayCharacter, "id"),
         name: requiredString(roleplayCharacter, "name"),

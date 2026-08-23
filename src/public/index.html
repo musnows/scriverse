@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=task-auto-run-ring-center-v3&feature=character-relationship-delete-v1&feature=ai-assistant-workspace-v2&feature=mobile-module-tab-position-v1&feature=volume-detail-icon-v1&feature=editor-actions-flow-v1&feature=reader-controls-subpanel-v1&feature=reader-focus-ring-v1&feature=ai-message-actions-v1&feature=assistant-responsive-navigation-v2&feature=ai-composer-square-controls-v2&feature=annotation-line-counts-v1&feature=line-number-gutter-fill-v1&feature=ai-relationship-roleplay-v1&feature=ai-model-picker-v1&feature=markdown-word-count-five-digit-v2&feature=ai-stream-character-count-stable-v1&feature=annotation-marker-offset-v1&feature=mobile-ai-entry-hidden-v1&feature=phone-client-entry-v1&feature=ai-stream-idle-timeout-v1&feature=ai-user-message-width-v2&feature=ai-chat-image-attachments-v9&feature=ai-message-image-preview-v1&feature=ai-thinking-scroll-v2&feature=toast-click-dismiss-v3&feature=character-avatar-v6&feature=admin-ai-conversations-v1&feature=ai-usage-pricing-v1&feature=ai-usage-pricing-badge-v2&feature=ai-token-quota-positive-v5&feature=ai-token-usage-details-v1&feature=ai-token-usage-details-centered-v1&feature=ai-stream-connection-seconds-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=task-auto-run-ring-center-v3&feature=character-relationship-delete-v1&feature=ai-assistant-workspace-v2&feature=mobile-module-tab-position-v1&feature=volume-detail-icon-v1&feature=editor-actions-flow-v1&feature=reader-controls-subpanel-v1&feature=reader-focus-ring-v1&feature=ai-message-actions-v1&feature=assistant-responsive-navigation-v2&feature=ai-composer-square-controls-v2&feature=annotation-line-counts-v1&feature=line-number-gutter-fill-v1&feature=ai-relationship-roleplay-v1&feature=ai-model-picker-v1&feature=markdown-word-count-five-digit-v2&feature=ai-stream-character-count-stable-v1&feature=annotation-marker-offset-v1&feature=mobile-ai-entry-hidden-v1&feature=phone-client-entry-v1&feature=ai-stream-idle-timeout-v1&feature=ai-user-message-width-v2&feature=ai-chat-image-attachments-v9&feature=ai-message-image-preview-v1&feature=ai-thinking-scroll-v2&feature=toast-click-dismiss-v3&feature=character-avatar-v6&feature=admin-ai-conversations-v1&feature=ai-usage-pricing-v1&feature=ai-usage-pricing-badge-v2&feature=ai-token-quota-positive-v5&feature=ai-token-usage-details-v1&feature=ai-token-usage-details-centered-v1&feature=ai-stream-connection-seconds-v1&feature=ai-token-usage-estimated-price-v1&feature=record-favorites-v1&feature=entity-detail-favorites-v1&feature=character-persona-summary-v1&feature=ai-roleplay-scene-turn-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -386,7 +386,18 @@
           </div>
           <div class="prompt-composer">
             <div id="ai-image-attachments" class="ai-image-attachments hidden" aria-label="待发送的图片附件" aria-live="polite"></div>
-            <button id="ai-attachment-button" class="ai-attachment-button hidden" type="button" aria-label="添加图片附件" title="添加图片附件"><svg class="ai-image-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="2"></rect><circle cx="9" cy="10" r="1.5"></circle><path d="m5.5 17 4.4-4.4 3.3 3.1 2.2-2.2 3.1 3.5"></path></svg></button>
+            <section id="ai-scene-panel" class="ai-scene-panel hidden" aria-label="旁白与场景">
+              <div class="ai-scene-pin-fields">
+                <label for="ai-scene-location">地点<input id="ai-scene-location" maxlength="200" autocomplete="off"></label>
+                <label for="ai-scene-present">在场人物<input id="ai-scene-present" maxlength="500" autocomplete="off"></label>
+                <label for="ai-scene-time">故事时间<input id="ai-scene-time" maxlength="200" autocomplete="off"></label>
+              </div>
+              <label for="ai-scene-direction">旁白 / 场景<textarea id="ai-scene-direction" rows="3" maxlength="20000" placeholder="写下本轮旁白或场景推进，会随下一条台词一起发送"></textarea></label>
+            </section>
+            <div class="prompt-composer-leading">
+              <button id="ai-attachment-button" class="ai-attachment-button hidden" type="button" aria-label="添加图片附件" title="添加图片附件"><svg class="ai-image-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="2"></rect><circle cx="9" cy="10" r="1.5"></circle><path d="m5.5 17 4.4-4.4 3.3 3.1 2.2-2.2 3.1 3.5"></path></svg></button>
+              <button id="ai-scene-button" class="ai-scene-button hidden" type="button" aria-label="旁白与场景" title="旁白与场景" aria-expanded="false" aria-controls="ai-scene-panel"><svg class="ai-scene-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4.5" y="6.5" width="15" height="13" rx="1.5"></rect><path d="M8 10.5h8M8 14h5.5"></path></svg></button>
+            </div>
             <input id="ai-attachment-input" class="ai-attachment-input" type="file" accept="image/png,image/jpeg,.jpg,.jpeg" multiple aria-label="选择图片附件">
             <div id="ai-prompt" class="ai-prompt" contenteditable="true" role="textbox" aria-multiline="true" aria-autocomplete="list" aria-controls="ai-mention-menu" aria-haspopup="listbox" aria-expanded="false" aria-keyshortcuts="Enter" title="Enter 发送，Shift+Enter 换行" data-placeholder="告诉 AI 你想讨论或修改什么……"></div>
             <div id="ai-mention-menu" class="ai-mention-menu hidden" role="listbox" aria-label="引用角色、设定、章节或上下文能力"></div>
@@ -556,7 +567,7 @@
       <form id="dynamic-form" method="dialog">
         <div class="dialog-header">
           <div><span id="dialog-eyebrow" class="eyebrow">新增</span><h2 id="dialog-title">创建记录</h2><input id="dialog-title-input" class="dialog-title-input hidden" type="text" autocomplete="off" aria-label="记录标题"><p id="dialog-meta" class="dialog-header-meta hidden"></p></div>
-          <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
+          <div class="settings-dialog-header-actions"><div id="dialog-context-actions" class="dialog-context-actions"></div><button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button></div>
         </div>
         <div id="dialog-fields" class="dialog-fields"></div>
         <div id="dialog-submit-status" class="dialog-submit-status hidden" role="status" aria-live="polite">
@@ -647,6 +658,7 @@
             </div>
           </div>
           <div class="entity-editor-mode-actions">
+            <button id="setting-editor-favorite" class="entity-detail-favorite-button hidden" type="button" aria-pressed="false"></button>
             <button id="setting-editor-edit" class="ghost-button hidden" type="button">编辑设定</button>
             <button id="setting-editor-confirm" class="ghost-button hidden" type="button">确认候选</button>
             <button id="setting-editor-deprecate" class="ghost-button hidden" type="button">弃用</button>
@@ -673,6 +685,7 @@
             <div class="character-editor-title-row"><h1 id="character-editor-title">新建角色</h1><span id="character-editor-version" class="character-version-badge">新档案</span><span id="character-editor-readonly-badge" class="entity-editor-readonly-badge hidden">只读模式</span></div>
           </div>
           <div class="character-editor-header-actions">
+            <button id="character-editor-favorite" class="entity-detail-favorite-button hidden" type="button" aria-pressed="false"></button>
             <button id="character-editor-edit" class="primary-button hidden" type="button">编辑角色</button>
             <button id="character-history-button" class="ghost-button" type="button" aria-controls="character-history-panel" aria-expanded="false">版本历史</button>
             <button id="character-merge-button" class="ghost-button hidden" type="button">合并角色</button>
@@ -682,7 +695,7 @@
         <div class="character-editor-workspace">
           <nav class="character-editor-nav" role="tablist" aria-label="人物档案编辑分区">
             <button type="button" role="tab" data-character-editor-tab="basic" aria-selected="true">基础资料<small>名称、种族与归属</small></button>
-            <button type="button" role="tab" data-character-editor-tab="profile" aria-selected="false">人物档案<small>简介、身份与动机</small></button>
+            <button type="button" role="tab" data-character-editor-tab="profile" aria-selected="false">人物档案<small>简介、人设摘要、身份与动机</small></button>
             <button type="button" role="tab" data-character-editor-tab="settings" aria-selected="false">扩展设定<small>属性与长篇章节</small></button>
             <button type="button" role="tab" data-character-editor-tab="state" aria-selected="false">状态与约束<small>当前状态与锁定项</small></button>
             <button type="button" role="tab" data-character-editor-tab="relationships" aria-selected="false">人物关系<small>关联人物与关系关键词</small></button>
@@ -708,6 +721,7 @@
           </div>
           <div class="character-editor-header-actions">
             <span id="knowledge-editor-header-note" class="knowledge-editor-header-note">独立资料页</span>
+            <button id="knowledge-editor-favorite" class="entity-detail-favorite-button hidden" type="button" aria-pressed="false"></button>
             <button id="knowledge-editor-edit" class="primary-button hidden" type="button">编辑档案</button>
             <button id="knowledge-editor-history" class="ghost-button hidden" type="button">版本历史</button>
             <button id="knowledge-editor-merge" class="ghost-button hidden" type="button">合并档案</button>
@@ -1077,13 +1091,12 @@
           <form id="password-form" class="account-settings-form password-settings-form" method="post" action="/api/auth/password"><label>当前密码<input name="currentPassword" type="password" autocomplete="current-password" maxlength="200" required></label><label>新密码<input name="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label><label>确认新密码<input name="passwordConfirmation" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label><button class="primary-button" type="submit">更新密码</button></form>
         </section>
         <section class="account-settings-section" aria-labelledby="api-key-settings-title">
-          <header class="account-settings-section-header"><h3 id="api-key-settings-title">CLI API Key</h3><p>用于 CLI 登录。服务端只保存摘要，重置后旧 Key 会立即失效，新 Key 仅显示一次。</p></header>
+          <header class="account-settings-section-header"><h3 id="api-key-settings-title">CLI API Key</h3><p>用于 CLI 登录。完整 Key 不会显示在页面上，可随时复制；重置后旧 Key 会立即失效。</p></header>
           <div class="api-key-settings">
             <p id="api-key-status">正在读取 API Key 状态…</p>
-            <button id="api-key-reset-button" class="primary-button" type="button">生成 API Key</button>
-            <div id="api-key-result" class="api-key-result hidden">
-              <label>请立即保存<input id="api-key-value" readonly spellcheck="false"></label>
-              <button id="api-key-copy-button" class="ghost-button" type="button"><svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>复制</button>
+            <div class="api-key-actions">
+              <button id="api-key-copy-button" class="ghost-button" type="button" hidden aria-label="复制 API Key"><svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>复制</button>
+              <button id="api-key-reset-button" class="primary-button" type="button">生成 API Key</button>
             </div>
           </div>
         </section>
@@ -1245,6 +1258,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1&feature=calculate-time-tool-v1&feature=analysis-task-expired-toast-v1&feature=global-replace-volume-v1&feature=chapter-search-replace-v1&feature=chapter-save-toast-v1&feature=character-relationship-delete-v1&feature=character-relationship-group-v1&feature=analysis-task-stability-delay-v1&feature=ai-assistant-workspace-v2&feature=volume-detail-icon-v1&feature=volume-story-order-v1&feature=reader-manual-chapter-navigation-v1&feature=ai-message-reference-badges-v1&feature=ai-message-actions-v1&feature=assistant-responsive-navigation-v3&feature=annotation-permissions-v1&feature=annotation-line-counts-v1&feature=ai-relationship-roleplay-v1&feature=ai-roleplay-user-character-visibility-v1&feature=ai-roleplay-story-recall-v1&feature=ai-model-picker-v1&feature=ai-fork-model-unlock-v1&feature=context-percent-format-v1&feature=annotation-precise-locate-v1&feature=markdown-word-count-stable-v1&feature=ai-stream-character-count-stable-v2&feature=ai-process-empty-intermediate-v1&feature=ai-feed-scroll-follow-v1&feature=ai-message-retry-v1&feature=ai-stream-idle-timeout-v2&feature=ai-config-delete-v1&feature=ai-provider-protocol-options-v1&feature=ai-provider-thinking-type-v1&feature=ai-chat-image-attachments-v8&feature=ai-message-image-preview-v1&feature=ai-thinking-scroll-v2&feature=ai-image-conversation-model-lock-v1&feature=toast-click-dismiss-v2&feature=system-restart-dialog-delay-v1&feature=character-avatar-v6&feature=character-death-position-v1&feature=admin-ai-conversations-v1&feature=ai-usage-pricing-v1&feature=ai-usage-pricing-badge-v2&feature=ai-usage-pricing-label-v1&feature=ai-usage-token-breakdown-v1&feature=ai-usage-pricing-cache-v2&feature=ai-usage-pricing-manual-refresh-v1&feature=ai-monthly-token-quota-v1&feature=ai-provider-token-quota-v1&feature=ai-token-quota-positive-v6&feature=ai-model-thinking-label-v1&feature=ai-model-picker-focus-v1&feature=ai-provider-model-import-v1&feature=ai-assistant-brain-icon-v1&feature=ai-token-usage-details-v1&feature=ai-token-usage-details-centered-v1&feature=ai-token-usage-raw-input-v1&feature=ai-stream-connection-seconds-v1&feature=phone-client-entry-v1&feature=ai-usage-pricing-cache-v1&feature=ai-model-thinking-label-v3&feature=ai-roleplay-speaker-label-v1"></script>
+    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1&feature=calculate-time-tool-v2&feature=analysis-task-expired-toast-v1&feature=global-replace-volume-v1&feature=chapter-search-replace-v1&feature=chapter-save-toast-v1&feature=character-relationship-delete-v1&feature=character-relationship-group-v1&feature=analysis-task-stability-delay-v1&feature=ai-assistant-workspace-v2&feature=volume-detail-icon-v1&feature=volume-story-order-v1&feature=reader-manual-chapter-navigation-v1&feature=ai-message-reference-badges-v1&feature=ai-message-actions-v1&feature=assistant-responsive-navigation-v3&feature=annotation-permissions-v1&feature=annotation-line-counts-v1&feature=ai-relationship-roleplay-v1&feature=ai-roleplay-user-character-visibility-v1&feature=ai-roleplay-story-recall-v1&feature=ai-model-picker-v1&feature=ai-fork-model-unlock-v1&feature=context-percent-format-v1&feature=annotation-precise-locate-v1&feature=markdown-word-count-stable-v1&feature=ai-stream-character-count-stable-v2&feature=ai-process-empty-intermediate-v1&feature=ai-feed-scroll-follow-v1&feature=ai-message-retry-v1&feature=ai-stream-idle-timeout-v2&feature=ai-config-delete-v1&feature=ai-provider-protocol-options-v1&feature=ai-provider-thinking-type-v1&feature=ai-chat-image-attachments-v8&feature=ai-message-image-preview-v1&feature=ai-thinking-scroll-v2&feature=ai-image-conversation-model-lock-v1&feature=toast-click-dismiss-v2&feature=system-restart-dialog-delay-v1&feature=character-avatar-v6&feature=character-death-position-v1&feature=admin-ai-conversations-v1&feature=ai-usage-pricing-v1&feature=ai-usage-pricing-badge-v2&feature=ai-usage-pricing-label-v1&feature=ai-usage-token-breakdown-v1&feature=ai-usage-pricing-cache-v2&feature=ai-usage-pricing-manual-refresh-v1&feature=ai-monthly-token-quota-v1&feature=ai-provider-token-quota-v1&feature=ai-token-quota-positive-v6&feature=ai-model-thinking-label-v1&feature=ai-model-picker-focus-v1&feature=ai-provider-model-import-v1&feature=ai-assistant-brain-icon-v1&feature=ai-token-usage-details-v1&feature=ai-token-usage-details-centered-v1&feature=ai-token-usage-raw-input-v1&feature=ai-stream-connection-seconds-v1&feature=phone-client-entry-v1&feature=ai-usage-pricing-cache-v1&feature=ai-model-thinking-label-v3&feature=ai-roleplay-speaker-label-v1&feature=toast-modal-host-v1&feature=api-key-copy-existing-v1&feature=character-favorite-v1&feature=record-favorites-v1&feature=ai-token-usage-estimated-price-v1&feature=entity-detail-favorites-v1&feature=roleplay-favorite-label-v1&feature=ai-roleplay-knowledge-tools-v1&feature=character-persona-summary-v1&feature=ai-roleplay-scene-turn-v2"></script>
   </body>
 </html>

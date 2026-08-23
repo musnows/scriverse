@@ -13,7 +13,11 @@ describe("系统 Toast 图层", () => {
 
     expect(page).toContain('id="toast-region"');
     expect(page).toContain('popover="manual"');
+    expect(page).toContain("feature=toast-modal-host-v1");
     expect(application).toContain("function raiseToastRegion()");
+    expect(application).toContain("function syncToastRegionHost()");
+    expect(application).toContain("resolveToastRegionHost([...document.querySelectorAll(\"dialog[open]\")], document.body)");
+    expect(application).toContain("/toast-layer.js?v=20260822-toast-modal-host-v1");
     expect(application).toContain("function dismissToastElement(element)");
     expect(application).toContain('element.addEventListener("click", () => dismissToastElement(element), { once: true })');
     expect(application).toContain("setTimeout(() => dismissToastElement(element), 3600)");
@@ -24,7 +28,8 @@ describe("系统 Toast 图层", () => {
     expect(application).toContain('region.matches(":popover-open")');
     expect(application).toContain("region.showPopover()");
     expect(application).toContain('document.addEventListener("toggle"');
-    expect(application).toContain("target instanceof HTMLDialogElement && target.open");
+    expect(application).toContain("target instanceof HTMLDialogElement");
+    expect(application).toContain("syncToastRegionHost()");
     expect(styles).toContain("z-index: 2147483647");
     expect(styles).toContain("pointer-events: none");
   });
@@ -45,6 +50,9 @@ describe("系统 Toast 图层", () => {
     expect(application).toContain('body.setAttribute("tabindex", "-1")');
     expect(application).toContain("restoreToastFocus(previousFocus);");
     expect(application).toContain("function confirmToast(message");
+    expect(application).toContain("region.append(element)");
+    expect(application).toContain("raiseToastRegion()");
+    expect(application).toContain("cancel.focus()");
     expect(application).toContain("function inputToast(message");
     expect(application).toContain("async function confirmDiscardChanges(");
     expect(application).toContain('title: "放弃未保存修改"');
