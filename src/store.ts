@@ -9880,9 +9880,10 @@ export class Store {
       if (targetCharacters.length > 0) scope.targetCharacters = targetCharacters;
     }
     const sourceVersions = this.analysisTaskSourceVersions(workId, scope);
+    const actor = currentRequestActor();
     this.db.run(
-      `INSERT INTO analysis_tasks (id, work_id, model_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id)
-       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+      `INSERT INTO analysis_tasks (id, work_id, model_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id, created_via_api_key)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
       taskId,
       workId,
       input.modelId ?? null,
@@ -9891,7 +9892,8 @@ export class Store {
       JSON.stringify(sourceVersions),
       timestamp,
       timestamp,
-      currentRequestActor()?.userId ?? null
+      actor?.userId ?? null,
+      actor?.authentication === "api-key" ? 1 : 0
     );
     this.audit(workId, "task.created", "analysis-task", taskId, {
       taskType: input.taskType,
