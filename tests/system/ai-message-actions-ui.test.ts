@@ -17,7 +17,7 @@ describe("AI 消息操作区", () => {
     expect(application).toContain('message.dataset.rawMarkdown ?? message.dataset.copyText ?? ""');
     expect(application).toContain('isUserMessage ? "复制用户指令" : "复制 AI 回复"');
     expect(application).toContain('if (role === "user") {');
-    expect(application).toContain('attachUserCopyAction(message, text);');
+    expect(application).toContain("attachUserCopyAction(message, parsedUserTurn?.hasMarkup ? parsedUserTurn.userMessage : text);");
     expect(styles).toContain(".assistant-message .message-card-actions { right: auto; left: 0; }");
     expect(styles).toContain(".user-message .message-card-actions { right: 0; left: auto; }");
   });

@@ -2,6 +2,14 @@ import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate,
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
+import {
+  emptyRoleplayScenePin,
+  normalizeRoleplayScenePin,
+  parseRoleplayUserTurn,
+  roleplayScenePinHasContent,
+  roleplayUserTurnDisplayText,
+  roleplayUserTurnTitleSource
+} from "/roleplay-turn.js?v=20260823-ai-roleplay-scene-turn-v2";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { createAiChatTabManager, normalizeAiChatTabLimit } from "/ai-chat-tabs.js?v=20260816-ai-chat-switcher-v2";
 import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260816-ai-chat-tabs-v1";
@@ -462,6 +470,10 @@ function applyWorkAccessMode() {
   $(".ai-panel").classList.toggle("permission-hidden", aiHidden);
   $("#ai-prompt").readOnly = aiReadOnly;
   $("#ai-prompt").setAttribute("aria-readonly", String(aiReadOnly));
+  $("#ai-scene-direction").readOnly = aiReadOnly;
+  $("#ai-scene-location").readOnly = aiReadOnly;
+  $("#ai-scene-present").readOnly = aiReadOnly;
+  $("#ai-scene-time").readOnly = aiReadOnly;
   $("#ai-send").classList.toggle("permission-hidden", aiReadOnly);
   renderAiRoleplayCharacterSelect();
   updateBackgroundTaskCenterVisibility();
@@ -2083,7 +2095,7 @@ function createAiChatTabState(input = {}) {
     roleplayUserCharacter: input.roleplayUserCharacter ?? null,
     citations: input.citations ?? [],
     references: input.references ?? [],
-    composer: input.composer ?? { text: "", citations: [], references: [], images: [] },
+    composer: input.composer ?? { text: "", citations: [], references: [], images: [], sceneDirection: "", scenePin: emptyRoleplayScenePin() },
     contextUsage: input.contextUsage ?? null,
     contextWarning: input.contextWarning === true,
     lastMessageAt: input.lastMessageAt ?? null,
@@ -2125,12 +2137,21 @@ function setAiChatTabComposerSnapshot(tab, snapshot) {
     text: snapshot.text,
     citations: tab.citations.map((citation) => ({ ...citation })),
     references: tab.references.map((reference) => ({ ...reference })),
-    images: normalizeAiChatImageAttachments(snapshot.images)
+    images: normalizeAiChatImageAttachments(snapshot.images),
+    sceneDirection: String(snapshot.sceneDirection ?? ""),
+    scenePin: normalizeRoleplayScenePin(snapshot.scenePin)
   };
 }
 
 function clearAiChatTabComposer(tab) {
-  setAiChatTabComposerSnapshot(tab, { text: "", citations: [], references: [], images: [] });
+  setAiChatTabComposerSnapshot(tab, {
+    text: "",
+    citations: [],
+    references: [],
+    images: [],
+    sceneDirection: "",
+    scenePin: normalizeRoleplayScenePin(tab.composer?.scenePin)
+  });
 }
 
 function applyAiChatTabState(tab) {
@@ -2150,6 +2171,7 @@ function applyAiChatTabState(tab) {
   if (selectedModelId && state.models.some((model) => model.id === selectedModelId)) $("#ai-model").value = selectedModelId;
   syncAiModelPicker();
   setAiPromptText(tab.composer.text);
+  restoreAiSceneComposer(tab.composer);
   renderAiCitations();
   renderAiReferences();
   renderAiImageAttachments();
@@ -2171,7 +2193,9 @@ function aiChatTabIsReplaceable(tab = activeAiChatTab()) {
     && !(tab.composer?.text || "").trim()
     && !(tab.composer?.citations?.length)
     && !(tab.composer?.references?.length)
-    && !(tab.composer?.images?.length));
+    && !(tab.composer?.images?.length)
+    && !(tab.composer?.sceneDirection || "").trim()
+    && !roleplayScenePinHasContent(tab.composer?.scenePin));
 }
 
 function aiChatTabOpeningSlot() {
@@ -2444,7 +2468,7 @@ function resetAiFeed(
   const roleplayName = roleplayCharacter?.name;
   const roleplayUserName = roleplayUserCharacter?.name;
   feed.innerHTML = roleplayName
-    ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我可以通过角色卡、人物关系和故事正文回答。"}</p></div></div>`
+    ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我可以通过角色卡、人物关系、知情设定和故事正文回答。"}</p></div></div>`
     : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
 }
 
@@ -2522,8 +2546,9 @@ async function retryAiMessage(message) {
   const sourceTab = aiChatTabManager.get(message.closest(".ai-feed")?.dataset.aiTabId);
   const userMessage = findAiRetryUserMessage(message);
   const prompt = userMessage?.dataset.copyText ?? "";
+  const sceneDirection = userMessage?.dataset.sceneDirection ?? "";
   const userMessageId = userMessage?.dataset.messageId ?? "";
-  if (!sourceTab?.conversationId || !userMessageId || !prompt.trim()) {
+  if (!sourceTab?.conversationId || !userMessageId || !(prompt.trim() || sceneDirection.trim())) {
     toast("找不到需要重试的用户指令", "error");
     return;
   }
@@ -2536,6 +2561,7 @@ async function retryAiMessage(message) {
     retry: {
       message,
       prompt,
+      sceneDirection,
       citations: aiMessageCitations(userMessage),
       images: aiMessageImageAttachments(userMessage),
       userMessageId
@@ -2671,6 +2697,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   recall_self: "回忆自身",
   image: "读取设定图片",
   recall_relationship: "回忆人物关系",
+  recall_other: "回忆相识角色",
+  recall_known: "回忆知情设定",
   recall_story: "回忆故事",
   calculate_time: "计算日期"
 };
@@ -2684,9 +2712,11 @@ const AI_TOOL_DESCRIPTIONS = {
   search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。",
   recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。",
   image: "读取设定正文引用的图片附件，并返回多模态模型的理解内容。",
-  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。",
-  recall_story: "查询当前作品已保存正文中的关键词，返回匹配段落及章节信息。",
-  calculate_time: "计算日期差值，或从起始日期推算目标日期。"
+  recall_relationship: "不传角色列表时读取有关系的角色公开摘要；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。",
+  recall_other: "读取自己通过关系、同一组织或共同参与时间线而认识的其他角色公开摘要。",
+  recall_known: "读取自己所属种族、组织，以及与自己身份相关的世界设定。",
+  recall_story: "查询自己姓名或别名出现过的正文段落，避免全知回忆。",
+  calculate_time: "计算两个 YYYY-MM-DD 日期之间的天数差。"
 };
 
 const aiFeedScrollFrames = new WeakMap();
@@ -3184,7 +3214,7 @@ function renderAiConversationHistory() {
 }
 
 function defaultAiConversationTitle(prompt) {
-  const normalized = String(prompt ?? "").replace(/\s+/gu, " ").trim();
+  const normalized = roleplayUserTurnTitleSource(String(prompt ?? "")).replace(/\s+/gu, " ").trim();
   return Array.from(normalized).slice(0, 15).join("") || "新对话";
 }
 
@@ -3192,7 +3222,7 @@ function upsertAiConversationSummary(conversation) {
   if (!conversation?.id) return;
   const current = state.aiConversations.find((item) => item.id === conversation.id);
   const lastMessage = Array.isArray(conversation.messages) ? conversation.messages.at(-1) : null;
-  const summary = { ...current, ...conversation, ...(lastMessage ? { preview: lastMessage.content } : {}) };
+  const summary = { ...current, ...conversation, ...(lastMessage ? { preview: roleplayUserTurnDisplayText(lastMessage.content) } : {}) };
   delete summary.messages;
   delete summary.messagesPage;
   if (!current && loadedAiConversationsWorkId === state.work?.id) {
@@ -3215,7 +3245,7 @@ function updateAiConversationSummaryFromMessage(message) {
     ...current,
     title: current.title === "新对话" && message.role === "user" ? defaultAiConversationTitle(message.content) : current.title,
     messageCount: Number(current.messageCount ?? 0) + 1,
-    preview: message.content,
+    preview: roleplayUserTurnDisplayText(message.content),
     ...(aiConversationMessageHasImages(message) ? { hasImageAttachments: true, modelLockedByImage: true } : {}),
     updatedAt: message.createdAt ?? current.updatedAt
   });
@@ -3350,7 +3380,14 @@ function applyConversationToAiChatTab(tab, conversation) {
   tab.roleplayUserCharacter = conversation.roleplayUserCharacter ?? null;
   tab.citations = [];
   tab.references = [];
-  tab.composer = { text: "", citations: [], references: [], images: [] };
+  tab.composer = {
+    text: "",
+    citations: [],
+    references: [],
+    images: [],
+    sceneDirection: "",
+    scenePin: normalizeRoleplayScenePin(conversation.scenePin)
+  };
   tab.contextUsage = null;
   tab.contextWarning = conversation.contextWarningPending === true;
   resetAiFeed(tab.feed, tab.roleplayCharacter, tab.roleplayUserCharacter);
@@ -3440,7 +3477,7 @@ function renderAiRoleplayCharacterSelect() {
   select.title = canSelectCharacter
     ? state.aiPromptSent
       ? aiConversationOptionLockedMessage
-      : "为当前对话选择角色卡；角色扮演时 Agent 可以查询角色记忆、人物关系和故事正文"
+      : "为当前对话选择角色卡；角色扮演时 Agent 可以查询角色记忆、相识角色、知情设定、故事正文和设定图片"
     : "当前账户没有角色模块读取权限";
   renderAiRoleplayUserCharacterSelect();
 }
@@ -3476,7 +3513,7 @@ function renderAiRoleplayUserCharacterSelect() {
       ? "请先选择 AI 扮演的角色"
       : state.aiPromptSent
         ? aiConversationOptionLockedMessage
-        : "选择后，AI 会将每条用户消息视为该角色的发言或行动";
+        : "选择后，主输入是该角色的台词或行动；旁白请写在场景框";
 }
 
 const aiConversationOptionLockedMessage = "会话选项在会话开始后不支持修改，若需要修改，请新建会话";
@@ -3615,8 +3652,9 @@ function syncAiTaskOptions() {
   $("#ai-scope").disabled = interactionBusy || roleplaySelected;
   $("#ai-scope").title = state.aiPromptSent
     ? aiConversationOptionLockedMessage
-    : roleplaySelected ? "角色扮演模式可以查询角色记忆、人物关系和故事正文" : "";
+    : roleplaySelected ? "角色扮演模式可以查询角色记忆、相识角色、知情设定、故事正文和设定图片" : "";
   syncAiModelPicker();
+  syncAiSceneComposer();
 }
 
 function applyAiConversationTaskType(taskType) {
@@ -3653,8 +3691,8 @@ function applyAiRoleplayCharacter(character, userCharacter = null) {
   $(".ai-panel").classList.toggle("is-roleplaying", active);
   $("#ai-prompt").dataset.placeholder = active
     ? state.aiRoleplayUserCharacter
-      ? `以 ${String(state.aiRoleplayUserCharacter.name)} 的身份与 ${String(state.aiRoleplayCharacter.name)} 对话……`
-      : `与 ${String(state.aiRoleplayCharacter.name)} 角色开始对话……`
+      ? `以 ${String(state.aiRoleplayUserCharacter.name)} 的身份输入台词或行动……`
+      : `输入对 ${String(state.aiRoleplayCharacter.name)} 说的台词或行动……`
     : "告诉 AI 你想讨论或修改什么……";
   renderAiRoleplayCharacterSelect();
   syncAiTaskOptions();
@@ -3961,9 +3999,11 @@ function clearAiPromptComposer() {
   state.aiReferences = [];
   state.aiImageAttachments = [];
   setAiPromptText("");
+  setAiSceneDirection("");
   renderAiCitations();
   renderAiImageAttachments();
   hideAiMentionMenu();
+  syncAiSceneComposer();
 }
 
 function captureAiPromptComposer() {
@@ -3971,7 +4011,9 @@ function captureAiPromptComposer() {
     text: aiPromptText(),
     citations: state.aiCitations.map((citation) => ({ ...citation })),
     references: state.aiReferences.map((reference) => ({ ...reference })),
-    images: normalizeAiChatImageAttachments(state.aiImageAttachments)
+    images: normalizeAiChatImageAttachments(state.aiImageAttachments),
+    sceneDirection: aiSceneDirectionText(),
+    scenePin: captureAiScenePin()
   };
 }
 
@@ -3980,9 +4022,75 @@ function restoreAiPromptComposer(snapshot) {
   state.aiReferences = snapshot.references.map((reference) => ({ ...reference }));
   state.aiImageAttachments = normalizeAiChatImageAttachments(snapshot.images);
   setAiPromptText(snapshot.text);
+  restoreAiSceneComposer(snapshot);
   renderAiCitations();
   renderAiImageAttachments();
   hideAiMentionMenu();
+}
+
+function aiSceneDirectionText() {
+  return String($("#ai-scene-direction")?.value ?? "");
+}
+
+function setAiSceneDirection(value) {
+  const input = $("#ai-scene-direction");
+  if (input) input.value = String(value ?? "");
+}
+
+function captureAiScenePin() {
+  return normalizeRoleplayScenePin({
+    location: $("#ai-scene-location")?.value ?? "",
+    present: $("#ai-scene-present")?.value ?? "",
+    timeLabel: $("#ai-scene-time")?.value ?? ""
+  });
+}
+
+function setAiScenePin(pin) {
+  const normalized = normalizeRoleplayScenePin(pin);
+  const location = $("#ai-scene-location");
+  const present = $("#ai-scene-present");
+  const timeLabel = $("#ai-scene-time");
+  if (location) location.value = normalized.location;
+  if (present) present.value = normalized.present;
+  if (timeLabel) timeLabel.value = normalized.timeLabel;
+}
+
+function restoreAiSceneComposer(snapshot = {}) {
+  setAiSceneDirection(snapshot.sceneDirection ?? "");
+  setAiScenePin(snapshot.scenePin);
+  syncAiSceneComposer();
+}
+
+function roleplaySceneComposerVisible() {
+  return $("#ai-task").value === "roleplay" && Boolean(state.aiRoleplayCharacter);
+}
+
+function syncAiSceneComposer() {
+  const button = $("#ai-scene-button");
+  const panel = $("#ai-scene-panel");
+  if (!button || !panel) return;
+  const visible = roleplaySceneComposerVisible();
+  const busy = aiInteractionBusy();
+  const readOnly = Boolean(state.work) && !canWritePermissionModule(state.work, "ai-chat");
+  button.classList.toggle("hidden", !visible);
+  button.disabled = !visible || busy || readOnly;
+  button.setAttribute("aria-hidden", String(!visible));
+  if (!visible) {
+    panel.classList.add("hidden");
+    button.setAttribute("aria-expanded", "false");
+  }
+  const hasContent = Boolean(aiSceneDirectionText().trim()) || roleplayScenePinHasContent(captureAiScenePin());
+  button.classList.toggle("is-active", hasContent);
+}
+
+function toggleAiScenePanel() {
+  const button = $("#ai-scene-button");
+  const panel = $("#ai-scene-panel");
+  if (!button || !panel || button.classList.contains("hidden")) return;
+  const willOpen = panel.classList.contains("hidden");
+  panel.classList.toggle("hidden", !willOpen);
+  button.setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) $("#ai-scene-direction")?.focus();
 }
 
 function aiPromptTextBeforeCursor() {
@@ -12174,7 +12282,7 @@ async function renderBookAiSettings() {
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",
-    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label><label><input name="agent-tool" type="checkbox" value="calculate_time" ${agentTools.has("calculate_time") ? "checked" : ""}><span><strong>计算日期</strong><small>计算日期差值，或从起始日期推算目标日期，不读取作品内容。</small></span></label>`
+    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label><label><input name="agent-tool" type="checkbox" value="calculate_time" ${agentTools.has("calculate_time") ? "checked" : ""}><span><strong>计算日期</strong><small>计算两个 YYYY-MM-DD 日期之间的天数差，不读取作品内容。</small></span></label>`
   );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
@@ -14388,11 +14496,12 @@ function renderCharacterEditorFields(item) {
       (canReadModule("editor")
         ? field("firstChapterId", "首次登场章节", "select", item?.firstChapterId ?? "", chapterOptions)
         : '<div class="character-editor-empty-field"><b>首次登场章节</b><span>当前账户没有正文读取权限，原有绑定不会被修改。</span></div>')),
-    characterEditorSection("profile", "人物档案", "记录人物定位、行为动力和便于创作时快速理解的简介。",
+    characterEditorSection("profile", "人物档案", "记录人物定位、行为动力、公开人设和便于创作时快速理解的简介。",
       field("code", "编号", "text", item?.code) +
       field("identity", "身份与定位", "text", item?.attributes?.identity) +
       field("motivation", "核心动机", "textarea", item?.profile?.motivation) +
-      field("summary", "人物简介", "textarea", item?.profile?.summary)),
+      field("summary", "人物简介", "textarea", item?.profile?.summary) +
+      '<div class="form-field"><span>人设摘要</span><small>关系扮演时作为公开人设注入对方可见的角色卡，不会包含私密档案或 Markdown 章节。</small><textarea name="personaSummary" maxlength="20000" aria-label="人设摘要">' + esc(item?.profile?.personaSummary ?? "") + "</textarea></div>"),
     characterEditorSection("settings", "扩展设定", "可用短属性和 Markdown 长章节承载形态、能力、生态、经历与研究记录。",
       field("details", "扩展属性", "key-value-list", item?.attributes?.details) +
       '<div id="character-markdown-sections" class="character-markdown-sections"></div>'),
@@ -14440,7 +14549,8 @@ function collectCharacterBody(form) {
     profile: {
       ...profile,
       motivation: String(form.get("motivation") ?? "").trim(),
-      summary: String(form.get("summary") ?? "").trim()
+      summary: String(form.get("summary") ?? "").trim(),
+      personaSummary: String(form.get("personaSummary") ?? "").trim()
     },
     currentState: buildCharacterState(form.getAll("stateKey"), form.getAll("stateValue"), item?.currentState ?? {}),
     lockedFields: form.getAll("lockedFields").map((value) => String(value).trim()).filter(Boolean),
@@ -15892,10 +16002,25 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
   if (aiRequestManager.hasActive(tab.id)) return;
   const composerSnapshot = captureAiPromptComposer();
   const requestComposerSnapshot = retry
-    ? { text: retry.prompt, citations: retry.citations ?? [], references: [], images: retry.images ?? [] }
+    ? {
+      text: retry.prompt,
+      citations: retry.citations ?? [],
+      references: [],
+      images: retry.images ?? [],
+      sceneDirection: retry.sceneDirection ?? "",
+      scenePin: captureAiScenePin()
+    }
     : composerSnapshot;
   const instruction = requestComposerSnapshot.text.trim();
-  if (!instruction) return toast("请输入指令", "error");
+  const sceneDirection = $("#ai-task").value === "roleplay"
+    ? String(requestComposerSnapshot.sceneDirection ?? "").trim()
+    : "";
+  const scenePin = $("#ai-task").value === "roleplay"
+    ? normalizeRoleplayScenePin(requestComposerSnapshot.scenePin)
+    : emptyRoleplayScenePin();
+  if (!instruction && !sceneDirection) {
+    return toast($("#ai-task").value === "roleplay" ? "请输入台词或场景旁白" : "请输入指令", "error");
+  }
   if ($("#ai-task").value === "roleplay" && !state.aiRoleplayCharacter) return toast("请先选择角色卡", "error");
   const requestScope = currentAiRequestScope();
   if (!requestScope) return toast("请先选择章节", "error");
@@ -15992,6 +16117,8 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
     if (taskType === "chat") {
       const streamed = await streamChat(requestHolder, aiRetryStreamRequestBody({
         instruction,
+        ...(sceneDirection ? { sceneDirection } : {}),
+        ...($("#ai-task").value === "roleplay" ? { scenePin } : {}),
         scope,
         modelId,
         citations,
@@ -16482,9 +16609,10 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   const isInterrupted = role === "assistant" && metadata?.interrupted === true;
   const interruptionCode = typeof metadata?.interruptionCode === "string" ? metadata.interruptionCode : "AI_STREAM_FAILED";
   message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure || isInterrupted ? " is-error" : ""}`;
+  const parsedUserTurn = role === "user" ? parseRoleplayUserTurn(text) : null;
   const messageBody = isFailure
     ? `<p class="ai-error-text">${esc(text)}</p>${aiToolCallSettingsLinkMarkup(text)}`
-    : renderMarkdown(text);
+    : renderMarkdown(parsedUserTurn?.hasMarkup ? parsedUserTurn.userMessage : text);
   message.innerHTML = `<div class="message-body">${messageBody}</div>`;
   message.querySelector("[data-ai-tool-call-settings-link]")?.addEventListener("click", (event) => {
     event.preventDefault();
@@ -16505,6 +16633,18 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     failureBadge.textContent = isInterrupted ? "中断" : "失败";
     failureBadge.setAttribute("aria-label", `消息状态：${isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : "失败"}`);
     heading.firstElementChild?.append(failureBadge);
+  }
+  if (parsedUserTurn?.hasMarkup && parsedUserTurn.sceneDirection) {
+    const scene = document.createElement("div");
+    scene.className = "user-message-scene";
+    const sceneLabel = document.createElement("span");
+    sceneLabel.className = "user-message-scene-label";
+    sceneLabel.textContent = "旁白 / 场景";
+    const sceneBody = document.createElement("div");
+    sceneBody.className = "user-message-scene-body";
+    sceneBody.textContent = parsedUserTurn.sceneDirection;
+    scene.append(sceneLabel, sceneBody);
+    message.querySelector(".message-body")?.before(scene);
   }
   const mentionGroups = role === "user"
     ? [
@@ -16561,7 +16701,8 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     );
     message.dataset.aiImageAttachmentIds = JSON.stringify(imageAttachments.map((attachment) => attachment.id));
     appendAiMessageImageAttachments(message, imageAttachments);
-    attachUserCopyAction(message, text);
+    attachUserCopyAction(message, parsedUserTurn?.hasMarkup ? parsedUserTurn.userMessage : text);
+    if (parsedUserTurn?.hasMarkup) message.dataset.sceneDirection = parsedUserTurn.sceneDirection;
   }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModelId = tab?.modelId ?? tab?.selectedModelId ?? $("#ai-model").value;
@@ -18313,6 +18454,15 @@ $("#module-create-button").addEventListener("click", () => ({ drafts: openDraftD
     }
     $("#ai-attachment-input").click();
   });
+  $("#ai-scene-button").addEventListener("click", () => {
+    toggleAiScenePanel();
+  });
+  for (const field of ["#ai-scene-direction", "#ai-scene-location", "#ai-scene-present", "#ai-scene-time"]) {
+    $(field)?.addEventListener("input", () => {
+      syncAiSceneComposer();
+      persistActiveAiChatTab();
+    });
+  }
   $("#ai-attachment-input").addEventListener("change", (event) => {
     const input = event.currentTarget;
     void addAiImageFiles(input.files).finally(() => { input.value = ""; });

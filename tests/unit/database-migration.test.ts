@@ -334,7 +334,8 @@ describe("数据库版本化迁移", () => {
         "roleplay_user_character_id",
         "task_type",
         "context_scope_json",
-        "is_favorite"
+        "is_favorite",
+        "scene_pin_json"
       ])
     );
     expect(first.all("PRAGMA index_list(ai_conversations)").some((index) => index.name === "idx_ai_conversations_roleplay_character")).toBe(true);
