@@ -421,7 +421,11 @@ export async function aiEndpointUsesPrivateNetwork(value: string): Promise<boole
   }
 }
 
-export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = false): Promise<SafeAiEndpointAddress[]> {
+export async function assertSafeAiEndpoint(
+  value: string,
+  allowPrivateNetwork = false,
+  trustResolvedNetwork = false
+): Promise<SafeAiEndpointAddress[]> {
   const endpoint = new URL(value);
   if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
     throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
@@ -431,7 +435,7 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
   if (!addresses.length) throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商域名无法解析");
   for (const { address } of addresses) {
     const kind = unsafeIpKind(address);
-    if (kind === "blocked" || (kind === "private" && !allowPrivateNetwork)) {
+    if (!trustResolvedNetwork && (kind === "blocked" || (kind === "private" && !allowPrivateNetwork))) {
       logger.warn("security.ai_endpoint.blocked", { hostname, addressKind: kind });
       throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址指向受保护的本机、内网或链路本地网络");
     }

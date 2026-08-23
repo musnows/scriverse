@@ -21,6 +21,8 @@ export type LocalServerOptions = {
   dataDirectory: string;
   databasePath: string;
   env: NodeJS.ProcessEnv;
+  /** 仅由受信任的本机嵌入端设置，不从 Server 环境变量读取。 */
+  trustAiEndpointNetwork?: boolean;
 };
 
 export type RunningLocalServer = {
@@ -241,6 +243,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       masterSecret: loadMasterSecret(join(options.dataDirectory, "master.key"), options.env.AI_NOVEL_MASTER_KEY),
       publicPath,
       security,
+      trustAiEndpointNetwork: options.trustAiEndpointNetwork === true,
       disableUserAuth: devAuthBypass,
       devAuthBypass,
       developmentServer: isDevelopmentServer(options.env),

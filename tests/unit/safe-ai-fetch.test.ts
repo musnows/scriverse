@@ -28,6 +28,12 @@ describe("assertSafeAiEndpoint", () => {
     });
   });
 
+  it("受信任本机运行时允许代理 fake-IP 保留网段", async () => {
+    await expect(assertSafeAiEndpoint("https://198.18.0.1/v1", true, true)).resolves.toEqual([
+      { address: "198.18.0.1", family: 4 }
+    ]);
+  });
+
   it("识别本机与内网供应商地址", async () => {
     await expect(aiEndpointUsesPrivateNetwork("http://127.0.0.1:11434/v1")).resolves.toBe(true);
     await expect(aiEndpointUsesPrivateNetwork("https://192.168.1.10/v1")).resolves.toBe(true);

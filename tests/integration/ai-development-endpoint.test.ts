@@ -11,6 +11,7 @@ afterEach(async () => {
 async function testProviderConnection(options: {
   developmentServer: boolean;
   allowPrivateAiEndpoints?: boolean;
+  trustAiEndpointNetwork?: boolean;
   baseUrl: string;
 }): Promise<{
   result: Record<string, unknown>;
@@ -35,6 +36,7 @@ async function testProviderConnection(options: {
       allowPrivateAiEndpoints: options.allowPrivateAiEndpoints === true,
       enforceSameOrigin: false
     },
+    trustAiEndpointNetwork: options.trustAiEndpointNetwork === true,
     developmentServer: options.developmentServer
   });
   runtimes.push(runtime);
@@ -117,5 +119,20 @@ describe("私有网络 AI 供应商地址", () => {
     expect(result.result.error).toContain("AI 供应商地址指向受保护的本机、内网或链路本地网络");
     expect(result.result.privateNetworkAllowed).toBeUndefined();
     expect(result.requestedUrls).toEqual([]);
+  });
+
+  it("受信任本机运行时允许代理 fake-IP 保留网段", async () => {
+    const result = await testProviderConnection({
+      developmentServer: false,
+      allowPrivateAiEndpoints: true,
+      trustAiEndpointNetwork: true,
+      baseUrl: "https://198.18.0.7/v1"
+    });
+
+    expect(result.result).toMatchObject({ ok: true, availableModels: ["development-model"] });
+    expect(result.requestedUrls).toEqual([
+      "https://198.18.0.7/v1/models",
+      "https://198.18.0.7/v1/chat/completions"
+    ]);
   });
 });
