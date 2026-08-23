@@ -32,6 +32,7 @@ export type AuthUser = RequestActor & {
   createdAt: string;
   avatarUrl: string | null;
   onboardingCompleted: boolean;
+  isSystemAdmin: boolean;
 };
 
 export type UserAvatar = {
@@ -174,17 +175,19 @@ function mapUser(row: Row): AuthUser {
   const avatarSha256 = row.avatar_sha256 === null || row.avatar_sha256 === undefined
     ? null
     : String(row.avatar_sha256);
+  const isSystemAdmin = String(row.role) === "admin";
   return {
     userId: String(row.id),
     username: String(row.username),
     displayName: String(row.display_name),
-    role: String(row.role) === "admin" ? "admin" : "user",
+    role: isSystemAdmin ? "admin" : "user",
     status: String(row.status) === "disabled" ? "disabled" : "active",
     createdAt: String(row.created_at),
     avatarUrl: avatarSha256
       ? `/api/user-avatars/${encodeURIComponent(String(row.id))}?v=${encodeURIComponent(avatarSha256)}`
       : null,
-    onboardingCompleted: row.onboarding_completed_at !== null && row.onboarding_completed_at !== undefined
+    onboardingCompleted: row.onboarding_completed_at !== null && row.onboarding_completed_at !== undefined,
+    isSystemAdmin
   };
 }
 

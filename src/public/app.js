@@ -5143,11 +5143,19 @@ function showAuth(setupRequired, registrationOpen = false, setupTokenRequired = 
 function applyAuthenticatedUser(session) {
   state.user = session.user;
   state.csrfToken = session.csrfToken;
+  const isSystemAdmin = session.user.isSystemAdmin === true;
+  const accountButton = $("#account-button");
   $("#account-name").textContent = session.user.displayName;
   renderUserAvatar($("#account-avatar"), session.user);
+  accountButton.classList.toggle("is-system-admin", isSystemAdmin);
+  accountButton.setAttribute("aria-label", isSystemAdmin
+    ? `账户：${session.user.displayName}，系统管理员`
+    : `账户：${session.user.displayName}`);
+  $("#account-admin-mark").classList.toggle("hidden", !isSystemAdmin);
+  $("#account-admin-label").classList.toggle("hidden", !isSystemAdmin);
   $("#account-menu-display-name").textContent = session.user.displayName;
   $("#account-menu-username").textContent = `@${session.user.username}`;
-  $("#account-menu-role").textContent = session.user.role === "admin" ? "系统管理员" : "普通用户";
+  $("#account-menu-role").textContent = isSystemAdmin ? "系统管理员" : "普通用户";
   $("#auth-view").classList.add("hidden");
   document.documentElement.classList.remove("login-route");
   if (!session.csrfToken) document.body.classList.remove("auth-pending");
