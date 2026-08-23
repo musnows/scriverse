@@ -91,12 +91,13 @@ describe("AI 供应商、模型与建议 API", () => {
     runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", contextWindow, modelId);
   }
 
-  it("为 Desktop 本地模型准备 Server Prompt 和作品上下文但不调用远端供应商", async () => {
+  it("让 Desktop 本地模型复用 Server Agent 工具循环且不调用远端供应商", async () => {
     await request(runtime.app).patch("/api/platform/ai/settings").send({
       systemPrompt: "平台远端 Prompt"
     }).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
-      systemPrompt: "作品远端 Prompt"
+      systemPrompt: "作品远端 Prompt",
+      agentTools: ["story_index"]
     }).expect(200);
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = String(conversation.body.data.id);
@@ -113,32 +114,119 @@ describe("AI 供应商、模型与建议 API", () => {
       content: "请结合跃迁限制继续讨论"
     }).expect(201);
 
-    const prepared = await request(runtime.app).post(`/api/works/${workId}/desktop-local-ai/prepare`).send({
+    const started = await request(runtime.app).post(`/api/works/${workId}/desktop-local-ai/runs`).send({
       taskType: "chat",
       instruction: "请结合跃迁限制继续讨论",
       scope: { type: "chapter", chapterId },
-      contextWindow: 128_000,
-      maxOutputTokens: 4_096,
+      runtimeModel: {
+        id: "desktop-local-model",
+        providerId: "desktop-local-provider",
+        providerName: "local/LM Studio",
+        protocol: "openai-chat-completions",
+        maxTokensParameter: "max_tokens",
+        thinkingType: "enabled",
+        concurrencyLimit: 3,
+        rpmLimit: 30,
+        analysisTimeoutSeconds: 300,
+        displayName: "本地模型",
+        modelId: "local-model",
+        purposes: ["chat", "continue", "polish"],
+        contextNote: "",
+        contextWindow: 128_000,
+        outputNote: "",
+        preset: { temperature: 0.4, max_tokens: 4_096 },
+        thinkingEnabled: false,
+        thinkingEffort: "default",
+        multimodalEnabled: false,
+        note: ""
+      },
       conversationId,
       currentMessageId: current.body.data.id
-    }).expect(200);
+    }).expect(202);
+
+    const runId = String(started.body.data.id);
+    const waitForStatus = async (expected: string): Promise<Record<string, unknown>> => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const polled = await request(runtime.app).get(`/api/works/${workId}/desktop-local-ai/runs/${runId}`).expect(200);
+        if (polled.body.data.status === expected) return polled.body.data as Record<string, unknown>;
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      throw new Error(`Desktop local AI run did not reach ${expected}`);
+    };
+
+    const firstRound = await waitForStatus("awaiting-completion");
+    const firstCompletion = firstRound.completion as { requestId: string; body: Record<string, unknown> };
+    const firstBody = firstCompletion.body as {
+      model: string;
+      messages: Array<{ role: string; content: unknown }>;
+      tools: Array<{ function?: { name?: string } }>;
+      tool_choice: string;
+    };
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(prepared.body.data.remoteSystemPrompt).toContain("<platform_system_prompt>");
-    expect(prepared.body.data.remoteSystemPrompt).toContain("平台远端 Prompt");
-    expect(prepared.body.data.remoteSystemPrompt).toContain("<work_system_prompt>");
-    expect(prepared.body.data.remoteSystemPrompt).toContain("作品远端 Prompt");
-    expect(prepared.body.data.remoteSystemPrompt).not.toContain("desktop_local_ai_prompt");
-    expect(prepared.body.data.messages).toEqual(expect.arrayContaining([
-      { role: "user", content: "上一轮问题" },
-      { role: "assistant", content: "上一轮回答" }
-    ]));
-    expect(JSON.stringify(prepared.body.data.messages)).toContain("跃迁后必须冷却十二小时");
-    expect(JSON.stringify(prepared.body.data.messages)).toContain("<author_instruction>");
-    expect(prepared.body.data.contextUsage).toMatchObject({
+    expect(firstBody.model).toBe("local-model");
+    expect(firstBody.tool_choice).toBe("auto");
+    expect(firstBody.tools.some((tool) => tool.function?.name === "story_index")).toBe(true);
+    expect(JSON.stringify(firstBody.messages[0]?.content)).toContain("<platform_system_prompt>");
+    expect(JSON.stringify(firstBody.messages[0]?.content)).toContain("平台远端 Prompt");
+    expect(JSON.stringify(firstBody.messages[0]?.content)).toContain("<work_system_prompt>");
+    expect(JSON.stringify(firstBody.messages[0]?.content)).toContain("作品远端 Prompt");
+    expect(JSON.stringify(firstBody.messages)).toContain("上一轮问题");
+    expect(JSON.stringify(firstBody.messages)).toContain("上一轮回答");
+    expect(JSON.stringify(firstBody.messages)).toContain("跃迁后必须冷却十二小时");
+    expect(JSON.stringify(firstBody.messages)).toContain("<author_instruction>");
+    expect(firstRound.contextUsage).toMatchObject({
       modelId: "desktop-local-model",
       contextWindow: 128_000
     });
+    expect(Number(((firstRound.contextUsage as { tokenDistribution: { functionTokens: number } }).tokenDistribution.functionTokens))).toBeGreaterThan(0);
+
+    await request(runtime.app)
+      .post(`/api/works/${workId}/desktop-local-ai/runs/${runId}/responses`)
+      .send({
+        requestId: firstCompletion.requestId,
+        status: 200,
+        body: JSON.stringify({
+          choices: [{
+            finish_reason: "tool_calls",
+            message: {
+              content: null,
+              tool_calls: [{
+                id: "call-story-index",
+                type: "function",
+                function: { name: "story_index", arguments: "{}" }
+              }]
+            }
+          }]
+        })
+      })
+      .expect(200);
+
+    const secondRound = await waitForStatus("awaiting-completion");
+    const secondCompletion = secondRound.completion as { requestId: string; body: Record<string, unknown> };
+    expect(secondCompletion.requestId).not.toBe(firstCompletion.requestId);
+    expect(JSON.stringify(secondCompletion.body)).toContain('"role":"tool"');
+    expect(JSON.stringify(secondCompletion.body)).toContain("AI 测试作品");
+    expect((secondCompletion.body.tools as unknown[]).length).toBeGreaterThan(0);
+
+    await request(runtime.app)
+      .post(`/api/works/${workId}/desktop-local-ai/runs/${runId}/responses`)
+      .send({
+        requestId: secondCompletion.requestId,
+        status: 200,
+        body: JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "已查询作品目录，跃迁冷却限制仍然有效。" } }] })
+      })
+      .expect(200);
+
+    const completed = await waitForStatus("completed");
+    expect(completed.result).toMatchObject({
+      content: "已查询作品目录，跃迁冷却限制仍然有效。",
+      provider: { scope: "local", name: "local/LM Studio" },
+      model: { id: "desktop-local-model", scope: "local" },
+      toolCalls: [expect.objectContaining({ name: "story_index", status: "completed" })]
+    });
+    expect(Number((((completed.result as { contextUsage: { tokenDistribution: { functionTokens: number } } }).contextUsage.tokenDistribution.functionTokens)))).toBeGreaterThan(0);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it.each([
