@@ -5,7 +5,8 @@ export default defineConfig({
     environment: "node",
     globals: false,
     pool: "forks",
-    fileParallelism: false,
+    maxWorkers: 8,
+    fileParallelism: true,
     include: ["tests/**/*.test.ts"],
     exclude: ["dist/**", "node_modules/**"],
     coverage: {

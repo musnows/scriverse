@@ -39,7 +39,7 @@
     "prepack": "npm run build",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --maxWorkers=1",
+    "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:database-upgrade": "vitest run tests/integration/database-upgrade-fixture.test.ts --maxWorkers=1",
     "test:integration": "vitest run tests/integration",
