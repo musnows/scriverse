@@ -903,8 +903,8 @@ export type RuntimeOptions = {
   serveUi?: boolean;
   publicPath?: string;
   security?: RuntimeSecurityOptions;
-  /** 仅供受信任的本机嵌入运行时：保留 URL/协议校验，但不按 DNS 结果拦截 AI 地址。 */
-  trustAiEndpointNetwork?: boolean;
+  /** 仅供受信任的本机嵌入运行时：完全不安装 AI endpoint validator。 */
+  disableAiEndpointValidation?: boolean;
   disableUserAuth?: boolean;
   /** 开发环境专用：使用已有的第一个活动账户进入工作台，不创建会话。 */
   devAuthBypass?: boolean;
@@ -1474,13 +1474,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     store,
     credentialVault,
     options.fetchImpl ?? fetch,
-    options.developmentServer === true
+    options.developmentServer === true || options.disableAiEndpointValidation === true
       ? undefined
-      : options.security ? (url) => assertSafeAiEndpoint(
-        url,
-        options.security?.allowPrivateAiEndpoints,
-        options.trustAiEndpointNetwork === true
-      ) : undefined,
+      : options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
       const requiredModules = analysisTaskReadModules(task.taskType, task.scope);
       const creator = actor ? null : database.get(

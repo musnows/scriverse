@@ -11,7 +11,7 @@ afterEach(async () => {
 async function testProviderConnection(options: {
   developmentServer: boolean;
   allowPrivateAiEndpoints?: boolean;
-  trustAiEndpointNetwork?: boolean;
+  disableAiEndpointValidation?: boolean;
   baseUrl: string;
 }): Promise<{
   result: Record<string, unknown>;
@@ -36,7 +36,7 @@ async function testProviderConnection(options: {
       allowPrivateAiEndpoints: options.allowPrivateAiEndpoints === true,
       enforceSameOrigin: false
     },
-    trustAiEndpointNetwork: options.trustAiEndpointNetwork === true,
+    disableAiEndpointValidation: options.disableAiEndpointValidation === true,
     developmentServer: options.developmentServer
   });
   runtimes.push(runtime);
@@ -121,11 +121,11 @@ describe("私有网络 AI 供应商地址", () => {
     expect(result.requestedUrls).toEqual([]);
   });
 
-  it("受信任本机运行时允许代理 fake-IP 保留网段", async () => {
+  it("受信任本机运行时完全禁用 AI endpoint validator", async () => {
     const result = await testProviderConnection({
       developmentServer: false,
       allowPrivateAiEndpoints: true,
-      trustAiEndpointNetwork: true,
+      disableAiEndpointValidation: true,
       baseUrl: "https://198.18.0.7/v1"
     });
 
