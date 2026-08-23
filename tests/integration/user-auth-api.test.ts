@@ -12,7 +12,7 @@ type SessionCredentials = {
   agent: ReturnType<typeof request.agent>;
   cookie: string;
   csrfToken: string;
-  user: { userId: string; username: string; displayName: string; role: "admin" | "user" };
+  user: { userId: string; username: string; displayName: string; role: "admin" | "user"; isSystemAdmin: boolean };
 };
 
 const setupToken = "user-auth-test-setup-token-with-at-least-32-characters";
@@ -633,8 +633,12 @@ describe("用户、作品权限与操作者追踪 API", () => {
 
     const admin = await register(runtime, "admin");
     const writer = await register(runtime, "writer");
-    expect(admin.user.role).toBe("admin");
-    expect(writer.user.role).toBe("user");
+    expect(admin.user).toMatchObject({ role: "admin", isSystemAdmin: true });
+    expect(writer.user).toMatchObject({ role: "user", isSystemAdmin: false });
+    const adminSession = await admin.agent.get("/api/auth/session").expect(200);
+    const writerSession = await writer.agent.get("/api/auth/session").expect(200);
+    expect(adminSession.body.data.user).toMatchObject({ role: "admin", isSystemAdmin: true });
+    expect(writerSession.body.data.user).toMatchObject({ role: "user", isSystemAdmin: false });
 
     const adminWork = await admin.agent.post("/api/works").set("X-CSRF-Token", admin.csrfToken).send({ title: "管理员作品" }).expect(201);
     const writerWork = await writer.agent.post("/api/works").set("X-CSRF-Token", writer.csrfToken).send({ title: "作者作品" }).expect(201);
@@ -833,7 +837,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(login.body.data).toMatchObject({
       token: expect.stringMatching(/^scrvd_[A-Za-z0-9_-]{43}$/u),
       expiresAt: expect.any(String),
-      user: { userId: registered.user.userId }
+      user: { userId: registered.user.userId, isSystemAdmin: true }
     });
     const authorization = `Bearer ${String(login.body.data.token)}`;
     const session = await request(runtime.app)
@@ -843,7 +847,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(session.body.data).toMatchObject({
       authenticated: true,
       csrfToken: null,
-      user: { userId: registered.user.userId }
+      user: { userId: registered.user.userId, isSystemAdmin: true }
     });
 
     const work = await request(runtime.app)
