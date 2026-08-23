@@ -265,10 +265,13 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
     const server = runtime.app.listen(options.port, options.host);
     const handleStartupError = (error: Error): void => {
       logger.error("server.start_failed", { host: options.host, port: options.port, error: sanitizeError(error) });
-      void runtime.close().catch((closeError: unknown) => {
-        logger.error("server.runtime_close_failed", { error: sanitizeError(closeError) });
-      });
-      rejectStart(error);
+      void runtime.close().then(
+        () => rejectStart(error),
+        (closeError: unknown) => {
+          logger.error("server.runtime_close_failed", { error: sanitizeError(closeError) });
+          rejectStart(error);
+        }
+      );
     };
     server.once("error", handleStartupError);
     server.once("listening", () => {

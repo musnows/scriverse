@@ -112,6 +112,33 @@ describe("本地服务运行时", () => {
     }
   });
 
+  it("端口监听失败时先完整关闭运行时再返回错误", async () => {
+    const occupiedRoot = mkdtempSync(join(tmpdir(), "scriverse-occupied-port-owner-"));
+    const retryRoot = mkdtempSync(join(tmpdir(), "scriverse-occupied-port-retry-"));
+    roots.push(occupiedRoot, retryRoot);
+    const occupied = await startLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      dataDirectory: occupiedRoot,
+      databasePath: join(occupiedRoot, "novel.db"),
+      env: { NODE_ENV: "test" }
+    });
+    runningServers.push(occupied);
+    const infoSpy = vi.spyOn(logger, "info");
+    try {
+      await expect(startLocalServer({
+        host: "127.0.0.1",
+        port: occupied.port,
+        dataDirectory: retryRoot,
+        databasePath: join(retryRoot, "novel.db"),
+        env: { NODE_ENV: "test" }
+      })).rejects.toMatchObject({ code: "EADDRINUSE" });
+      expect(infoSpy).toHaveBeenCalledWith("database.closed");
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
   it("仅在非生产环境显式开启时允许开发免登录", () => {
     expect(isDevelopmentAuthBypassEnabled({ NODE_ENV: "development", APP_DEV_SKIP_AUTH: "true" }, false)).toBe(true);
     expect(isDevelopmentAuthBypassEnabled({ NODE_ENV: "development", APP_DEV_SKIP_AUTH: "1" }, false)).toBe(true);
