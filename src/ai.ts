@@ -30,6 +30,11 @@ import {
 } from "./ai-protocol.js";
 import { estimateLiteLlmUsageCost, type LiteLlmPriceCache, type ModelTokenUsage } from "./ai-model-pricing.js";
 import {
+  DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS,
+  isLongRunningAiAnalysisTaskType,
+  normalizeAiAnalysisTimeoutSeconds
+} from "./ai-analysis-timeout.js";
+import {
   AGENT_TOOL_RESULT_MAX_CHARS,
   DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER,
   MIN_AGENT_TOOL_CALL_LIMIT,
@@ -127,6 +132,7 @@ type ProviderInput = {
   note?: string;
   concurrencyLimit?: number;
   rpmLimit?: number;
+  analysisTimeoutSeconds?: number;
   dailyTokenQuota?: number | null;
   monthlyTokenQuota?: number | null;
 };
@@ -174,7 +180,6 @@ function connectivityTestErrorForLog(error: unknown): Record<string, unknown> {
 const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
-const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
 const FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT = 95;
 const MIN_OUTPUT_RESERVE_TOKENS = 1_024;
 const MIN_CONTEXT_REMAINING_TOKENS = 5_000;
@@ -606,6 +611,12 @@ function providerProtocol(provider: Row): AiProviderProtocol {
 function providerThinkingType(provider: Row): AiThinkingType {
   const value = stringValue(provider, "thinking_type");
   return (AI_THINKING_TYPES as readonly string[]).includes(value) ? value as AiThinkingType : "enabled";
+}
+
+function providerAnalysisTimeoutSeconds(provider: Row): number {
+  return normalizeAiAnalysisTimeoutSeconds(
+    numberValue(provider, "analysis_timeout_seconds") || DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS
+  );
 }
 
 function supportsMultimodalProviderProtocol(provider: Row): boolean {
@@ -3631,8 +3642,9 @@ export class AiManager {
     if (protocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(baseUrl);
     this.store.db.run(
       `INSERT INTO providers (id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
-       connection_status, concurrency_limit, rpm_limit, daily_token_quota, monthly_token_quota, max_tokens_parameter, thinking_type, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       connection_status, concurrency_limit, rpm_limit, analysis_timeout_seconds, daily_token_quota, monthly_token_quota,
+       max_tokens_parameter, thinking_type, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       providerId,
       PLATFORM_AI_WORK_ID,
       input.name,
@@ -3645,6 +3657,7 @@ export class AiManager {
       input.status ?? "disabled",
       input.concurrencyLimit ?? 10,
       input.rpmLimit ?? 10,
+      input.analysisTimeoutSeconds ?? DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS,
       input.dailyTokenQuota ?? null,
       input.monthlyTokenQuota ?? null,
       maxTokensParameter,
@@ -3653,7 +3666,14 @@ export class AiManager {
       timestamp,
       timestamp
     );
-    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl, protocol, maxTokensParameter, thinkingType: input.thinkingType ?? "enabled" });
+    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, {
+      name: input.name,
+      baseUrl,
+      protocol,
+      maxTokensParameter,
+      thinkingType: input.thinkingType ?? "enabled",
+      analysisTimeoutSeconds: input.analysisTimeoutSeconds ?? DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS
+    });
     return this.getProvider(providerId);
   }
 
@@ -3714,7 +3734,8 @@ export class AiManager {
       : input.monthlyTokenQuota;
     this.store.db.run(
       `UPDATE providers SET name = ?, base_url = ?, protocol = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
-       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, daily_token_quota = ?, monthly_token_quota = ?,
+       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, analysis_timeout_seconds = ?,
+       daily_token_quota = ?, monthly_token_quota = ?,
        max_tokens_parameter = ?, thinking_type = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.name ?? stringValue(row, "name"),
       nextBaseUrl,
@@ -3727,6 +3748,7 @@ export class AiManager {
       connectionStatus,
       input.concurrencyLimit ?? numberValue(row, "concurrency_limit"),
       input.rpmLimit ?? numberValue(row, "rpm_limit"),
+      input.analysisTimeoutSeconds ?? providerAnalysisTimeoutSeconds(row),
       nextDailyTokenQuota,
       nextMonthlyTokenQuota,
       nextMaxTokensParameter,
@@ -8171,8 +8193,8 @@ export class AiManager {
       const { accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider);
       activeSecrets = [credentialSecret, accessToken];
       const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
-      const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis"
-        ? AI_LONG_RUNNING_TIMEOUT_MS
+      const timeoutMs = isLongRunningAiAnalysisTaskType(input.taskType)
+        ? providerAnalysisTimeoutSeconds(provider) * 1_000
         : AI_INTERACTIVE_TIMEOUT_MS;
       const legacyMaximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
       const maximumAttempts = Math.max(
@@ -13100,6 +13122,7 @@ export class AiManager {
       connectionStatus: stringValue(row, "connection_status"),
       concurrencyLimit: numberValue(row, "concurrency_limit") || 10,
       rpmLimit: numberValue(row, "rpm_limit") || 10,
+      analysisTimeoutSeconds: providerAnalysisTimeoutSeconds(row),
       dailyTokenQuota: nullableNumberValue(row, "daily_token_quota"),
       monthlyTokenQuota: nullableNumberValue(row, "monthly_token_quota"),
       defaultModelId: row.default_model_id === null ? null : stringValue(row, "default_model_id"),

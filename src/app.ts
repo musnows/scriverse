@@ -11,6 +11,7 @@ import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOL_OPTIONS, AI_PROVIDER_PROTOCOLS, AI_THINKING_TYPES, MAX_TOKENS_PARAMETERS } from "./ai-protocol.js";
+import { MAX_AI_ANALYSIS_TIMEOUT_SECONDS, MIN_AI_ANALYSIS_TIMEOUT_SECONDS } from "./ai-analysis-timeout.js";
 import { aiConversationExportContentDisposition, exportAiConversationMarkdown } from "./ai-conversation-export.js";
 import { DEFAULT_AI_CHAT_TAB_LIMIT } from "./ai-chat-tab-limit.js";
 import type { AiRetryPolicy } from "./ai-retry.js";
@@ -477,6 +478,7 @@ const providerBaseSchema = z.object({
   note: z.string().max(10_000).optional(),
   concurrencyLimit: z.number().int().min(1).max(100).optional(),
   rpmLimit: z.number().int().min(1).max(10_000).optional(),
+  analysisTimeoutSeconds: z.number().int().min(MIN_AI_ANALYSIS_TIMEOUT_SECONDS).max(MAX_AI_ANALYSIS_TIMEOUT_SECONDS).optional(),
   dailyTokenQuota: z.number().int().min(1, "Token 额度必须设置大于 0").max(2_000_000_000).nullable().optional(),
   monthlyTokenQuota: z.number().int().min(1, "Token 额度必须设置大于 0").max(2_000_000_000).nullable().optional()
 });

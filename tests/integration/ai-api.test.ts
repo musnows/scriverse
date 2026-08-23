@@ -66,6 +66,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(provider.body.data).toMatchObject({
       concurrencyLimit: 10,
       rpmLimit: 10,
+      analysisTimeoutSeconds: 300,
       dailyTokenQuota: null,
       monthlyTokenQuota: null,
       maxTokensParameter: "max_tokens",
@@ -1021,6 +1022,21 @@ describe("AI 供应商、模型与建议 API", () => {
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(201);
+  });
+
+  it("供应商可配置长分析请求超时并拒绝范围外数值", async () => {
+    const { providerId } = await configureAi();
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ analysisTimeoutSeconds: 29 }).expect(400);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ analysisTimeoutSeconds: 3_601 }).expect(400);
+
+    const updated = await request(runtime.app)
+      .patch(`/api/providers/${providerId}`)
+      .send({ analysisTimeoutSeconds: 900 })
+      .expect(200);
+    expect(updated.body.data.analysisTimeoutSeconds).toBe(900);
+    expect(runtime.database.get("SELECT analysis_timeout_seconds FROM providers WHERE id = ?", providerId)).toEqual({
+      analysis_timeout_seconds: 900
+    });
   });
 
   it("Kimi 模型默认温度为 1 并保留用户手动设置", async () => {
@@ -4101,5 +4117,31 @@ describe("AI 供应商、模型与建议 API", () => {
     await rejection;
     const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);
     expect(calls.body.data[0]).toMatchObject({ status: "failed" });
+  });
+
+  it("全书分析使用供应商配置的单次请求超时", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ analysisTimeoutSeconds: 30 }).expect(200);
+    fetchMock.mockImplementation(async (_input, init) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), { once: true });
+      }
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.useFakeTimers();
+    const call = runtime.ai.generate({
+      workId,
+      taskType: "book-analysis",
+      instruction: "等待供应商分析超时",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      maxAttempts: 1
+    });
+    const rejection = expect(call).rejects.toMatchObject({
+      message: "AI 调用失败",
+      details: { failure: "AI 请求超时（30 秒）" }
+    });
+    await vi.advanceTimersByTimeAsync(30_001);
+    await rejection;
   });
 });

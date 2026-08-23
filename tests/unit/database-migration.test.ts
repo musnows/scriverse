@@ -187,6 +187,7 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "daily_token_quota", "monthly_token_quota", "max_tokens"].includes(String(column.name)))).toHaveLength(5);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "protocol" && column.dflt_value === "'openai-chat-completions'")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "thinking_type" && column.dflt_value === "'enabled'")).toBe(true);
+    expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "analysis_timeout_seconds" && column.dflt_value === "300")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_connectivity_test_states)").map((column) => column.name)).toEqual([
       "object_type",
       "object_id",
@@ -1845,6 +1846,37 @@ describe("数据库版本化迁移", () => {
       thinking_type: "enabled"
     });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 106")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 118 为既有供应商补充默认分析请求超时并保留数据", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-provider-analysis-timeout-"));
+    roots.push(root);
+    const filename = join(root, "provider-analysis-timeout.db");
+    const timestamp = "2026-08-24T00:00:00.000Z";
+    const current = new Database(filename);
+    current.run(
+      `INSERT INTO providers (
+        id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status, created_at, updated_at
+      ) VALUES (
+        'provider-analysis-timeout', '__scriverse_platform_ai__', '分析超时迁移供应商', 'https://analysis-timeout.test/v1',
+        'openai-chat-completions', 'encrypted', 'iv', 'tag', '***', 'disabled', ?, ?
+      )`,
+      timestamp,
+      timestamp
+    );
+    current.raw.exec("ALTER TABLE providers DROP COLUMN analysis_timeout_seconds");
+    current.run("DELETE FROM schema_migrations WHERE version = 118");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT name, analysis_timeout_seconds FROM providers WHERE id = 'provider-analysis-timeout'")).toEqual({
+      name: "分析超时迁移供应商",
+      analysis_timeout_seconds: 300
+    });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 118")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
