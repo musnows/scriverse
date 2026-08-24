@@ -30,6 +30,11 @@ import {
 } from "./ai-protocol.js";
 import { estimateLiteLlmUsageCost, type LiteLlmPriceCache, type ModelTokenUsage } from "./ai-model-pricing.js";
 import {
+  DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS,
+  isLongRunningAiAnalysisTaskType,
+  normalizeAiAnalysisTimeoutSeconds
+} from "./ai-analysis-timeout.js";
+import {
   AGENT_TOOL_RESULT_MAX_CHARS,
   DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER,
   MIN_AGENT_TOOL_CALL_LIMIT,
@@ -89,7 +94,7 @@ import {
 } from "./hybrid-search.js";
 import { logger, sanitizeError } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
-import { currentRequestActor } from "./request-context.js";
+import { currentRequestActor, runWithRequestActor, type RequestActor } from "./request-context.js";
 import { aiEndpointUsesPrivateNetwork, fetchSafeAiEndpoint } from "./security.js";
 import { defaultAiConversationTitle, normalizeCharacterName, Store, type AiConversationContext, type AiConversationTitleContext } from "./store.js";
 import {
@@ -127,6 +132,7 @@ type ProviderInput = {
   note?: string;
   concurrencyLimit?: number;
   rpmLimit?: number;
+  analysisTimeoutSeconds?: number;
   dailyTokenQuota?: number | null;
   monthlyTokenQuota?: number | null;
 };
@@ -174,7 +180,6 @@ function connectivityTestErrorForLog(error: unknown): Record<string, unknown> {
 const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
-const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
 const FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT = 95;
 const MIN_OUTPUT_RESERVE_TOKENS = 1_024;
 const MIN_CONTEXT_REMAINING_TOKENS = 5_000;
@@ -419,6 +424,8 @@ type GenerateInput = {
   imageAttachments?: ChatImageAttachment[];
   conversationImageAttachments?: ReadonlyMap<string, ChatImageAttachment[]>;
   sceneDirection?: string;
+  runtime?: DesktopLocalAiGenerateRuntime;
+  onPrepared?: (contextUsage: Record<string, unknown>) => void;
 };
 
 type GenerateResult = {
@@ -435,6 +442,99 @@ type GenerateResult = {
   processSteps: AiProcessStep[];
   contextUsage: Record<string, unknown>;
 };
+
+export type DesktopLocalAiRuntimeModelInput = {
+  id: string;
+  providerId: string;
+  providerName: string;
+  protocol: "openai-chat-completions";
+  maxTokensParameter: MaxTokensParameter;
+  thinkingType: AiThinkingType;
+  concurrencyLimit: number;
+  rpmLimit: number;
+  analysisTimeoutSeconds: number;
+  displayName: string;
+  modelId: string;
+  purposes: TaskType[];
+  contextNote: string;
+  contextWindow: number;
+  outputNote: string;
+  preset: {
+    temperature: number;
+    max_tokens: number;
+  };
+  thinkingEnabled: boolean;
+  thinkingEffort: string;
+  multimodalEnabled: boolean;
+  note: string;
+};
+
+export type DesktopLocalAiRunInput = {
+  workId: string;
+  taskType: "chat" | "continue" | "polish";
+  instruction: string;
+  scope: ContextScope;
+  runtimeModel: DesktopLocalAiRuntimeModelInput;
+  conversationId?: string;
+  excludeConversationMessageId?: string;
+  imageAttachmentIds?: string[];
+  sceneDirection?: string;
+};
+
+export type DesktopLocalAiCompletionResponseInput = {
+  requestId: string;
+  status: number;
+  body: string;
+  retryAfter?: string;
+};
+
+type DesktopLocalAiCompletionTransportRequest = {
+  requestId: string;
+  localModelId: string;
+  taskType: TaskType;
+  purpose: "generation" | "tool-context-compaction";
+  body: Record<string, unknown>;
+  timeoutMs: number;
+};
+
+type DesktopLocalAiCompletionTransportResponse = {
+  status: number;
+  body: string;
+  retryAfter: string | null;
+};
+
+type DesktopLocalAiGenerateRuntime = {
+  provider: ProviderRow;
+  model: ModelRow;
+  localModelId: string;
+  completionTransport: (request: DesktopLocalAiCompletionTransportRequest) => Promise<DesktopLocalAiCompletionTransportResponse>;
+};
+
+type DesktopLocalAiPendingCompletion = {
+  request: DesktopLocalAiCompletionTransportRequest;
+  resolve: (response: DesktopLocalAiCompletionTransportResponse) => void;
+  reject: (error: Error) => void;
+  dispose: () => void;
+};
+
+type DesktopLocalAiRunRecord = {
+  id: string;
+  workId: string;
+  actorScope: string;
+  actor: RequestActor | null;
+  status: "running" | "awaiting-completion" | "completed" | "failed" | "cancelled";
+  createdAt: number;
+  updatedAt: number;
+  controller: AbortController;
+  contextUsage: Record<string, unknown> | null;
+  pending: DesktopLocalAiPendingCompletion | null;
+  result: Record<string, unknown> | null;
+  error: { status: number; code: string; message: string } | null;
+};
+
+const DESKTOP_LOCAL_AI_RUN_LIMIT = 20;
+const DESKTOP_LOCAL_AI_RUN_RETENTION_MS = 10 * 60_000;
+const DESKTOP_LOCAL_AI_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 
 export type AiContextCompactionEvent = {
   contextUsage: Record<string, unknown>;
@@ -589,6 +689,12 @@ function providerProtocol(provider: Row): AiProviderProtocol {
 function providerThinkingType(provider: Row): AiThinkingType {
   const value = stringValue(provider, "thinking_type");
   return (AI_THINKING_TYPES as readonly string[]).includes(value) ? value as AiThinkingType : "enabled";
+}
+
+function providerAnalysisTimeoutSeconds(provider: Row): number {
+  return normalizeAiAnalysisTimeoutSeconds(
+    numberValue(provider, "analysis_timeout_seconds") || DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS
+  );
 }
 
 function supportsMultimodalProviderProtocol(provider: Row): boolean {
@@ -2492,6 +2598,7 @@ export class AiManager {
     }>;
     timer: ReturnType<typeof setTimeout> | null;
   }>();
+  private readonly desktopLocalAiRuns = new Map<string, DesktopLocalAiRunRecord>();
   private readonly vertexTokenCache = new GoogleVertexTokenCache();
   private readonly connectivityTestGate: AiConnectivityTestGate;
   private readonly allowPrivateAiEndpoints: boolean;
@@ -3347,6 +3454,12 @@ export class AiManager {
 
   dispose(): void {
     logger.info("ai.manager.disposing", { scheduledWorks: this.autoRunTimers.size, activeTasks: this.taskControllers.size });
+    for (const run of this.desktopLocalAiRuns.values()) {
+      run.pending?.dispose();
+      run.pending?.reject(new Error("AI manager disposed"));
+      run.controller.abort(new Error("AI manager disposed"));
+    }
+    this.desktopLocalAiRuns.clear();
     if (this.autoRunStartupTimer) clearTimeout(this.autoRunStartupTimer);
     this.autoRunStartupTimer = null;
     for (const timer of this.autoRunTimers.values()) clearTimeout(timer);
@@ -3614,8 +3727,9 @@ export class AiManager {
     if (protocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(baseUrl);
     this.store.db.run(
       `INSERT INTO providers (id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
-       connection_status, concurrency_limit, rpm_limit, daily_token_quota, monthly_token_quota, max_tokens_parameter, thinking_type, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       connection_status, concurrency_limit, rpm_limit, analysis_timeout_seconds, daily_token_quota, monthly_token_quota,
+       max_tokens_parameter, thinking_type, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       providerId,
       PLATFORM_AI_WORK_ID,
       input.name,
@@ -3628,6 +3742,7 @@ export class AiManager {
       input.status ?? "disabled",
       input.concurrencyLimit ?? 10,
       input.rpmLimit ?? 10,
+      input.analysisTimeoutSeconds ?? DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS,
       input.dailyTokenQuota ?? null,
       input.monthlyTokenQuota ?? null,
       maxTokensParameter,
@@ -3636,7 +3751,14 @@ export class AiManager {
       timestamp,
       timestamp
     );
-    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl, protocol, maxTokensParameter, thinkingType: input.thinkingType ?? "enabled" });
+    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, {
+      name: input.name,
+      baseUrl,
+      protocol,
+      maxTokensParameter,
+      thinkingType: input.thinkingType ?? "enabled",
+      analysisTimeoutSeconds: input.analysisTimeoutSeconds ?? DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS
+    });
     return this.getProvider(providerId);
   }
 
@@ -3697,7 +3819,8 @@ export class AiManager {
       : input.monthlyTokenQuota;
     this.store.db.run(
       `UPDATE providers SET name = ?, base_url = ?, protocol = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
-       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, daily_token_quota = ?, monthly_token_quota = ?,
+       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, analysis_timeout_seconds = ?,
+       daily_token_quota = ?, monthly_token_quota = ?,
        max_tokens_parameter = ?, thinking_type = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.name ?? stringValue(row, "name"),
       nextBaseUrl,
@@ -3710,6 +3833,7 @@ export class AiManager {
       connectionStatus,
       input.concurrencyLimit ?? numberValue(row, "concurrency_limit"),
       input.rpmLimit ?? numberValue(row, "rpm_limit"),
+      input.analysisTimeoutSeconds ?? providerAnalysisTimeoutSeconds(row),
       nextDailyTokenQuota,
       nextMonthlyTokenQuota,
       nextMaxTokensParameter,
@@ -5142,7 +5266,7 @@ export class AiManager {
       now(),
       currentRequestActor()?.userId ?? null
     );
-    if (input.taskType === "continue") await this.runSuggestionGuard(suggestionId);
+    if (input.taskType === "continue") await this.runSuggestionGuardWithRuntime(suggestionId, undefined, effectiveInput.runtime);
     return {
       ...this.getSuggestion(suggestionId),
       outputTokens: generated.outputTokens,
@@ -5316,6 +5440,14 @@ export class AiManager {
   }
 
   async runSuggestionGuard(suggestionId: string, candidateContent?: string): Promise<Record<string, unknown>> {
+    return this.runSuggestionGuardWithRuntime(suggestionId, candidateContent);
+  }
+
+  private async runSuggestionGuardWithRuntime(
+    suggestionId: string,
+    candidateContent?: string,
+    runtime?: DesktopLocalAiGenerateRuntime
+  ): Promise<Record<string, unknown>> {
     const suggestion = this.getSuggestion(suggestionId);
     if (suggestion.taskType !== "continue" || !suggestion.chapterId) {
       throw new AppError(409, "GUARD_NOT_APPLICABLE", "只有续写建议可以运行一致性守卫");
@@ -5346,7 +5478,8 @@ export class AiManager {
           "续写候选：",
           content
         ].join("\n\n"),
-        extraSystemPrompt: "你是续写一致性守卫。必须逐项对照人物状态、地点、时间、世界观硬约束、章节大纲和未回收伏笔。"
+        extraSystemPrompt: "你是续写一致性守卫。必须逐项对照人物状态、地点、时间、世界观硬约束、章节大纲和未回收伏笔。",
+        ...(runtime ? { runtime } : {})
       });
       const issues = parseGuardIssues(generated.content);
       return this.store.createContinuationGuard({
@@ -5459,44 +5592,15 @@ export class AiManager {
 
   listCalls(workId: string): Record<string, unknown>[] {
     this.store.getWork(workId);
-    return this.store.db.all("SELECT * FROM ai_calls WHERE work_id = ? ORDER BY created_at DESC LIMIT 200", workId).map((row) => ({
-      id: stringValue(row, "id"),
-      workId: stringValue(row, "work_id"),
-      taskId: row.task_id === null ? null : stringValue(row, "task_id"),
-      taskType: stringValue(row, "task_type"),
-      provider: this.getProvider(stringValue(row, "provider_id")),
-      model: this.getModel(stringValue(row, "model_id")),
-      contextScope: json(stringValue(row, "context_scope_json"), {}),
-      parameters: json(stringValue(row, "parameters_json"), {}),
-      status: stringValue(row, "status"),
-      failure: row.failure === null ? null : stringValue(row, "failure"),
-      inputChars: numberValue(row, "input_chars"),
-      outputChars: numberValue(row, "output_chars"),
-      createdAt: stringValue(row, "created_at"),
-      completedAt: row.completed_at === null ? null : stringValue(row, "completed_at")
-    }));
+    return this.store.db.all("SELECT * FROM ai_calls WHERE work_id = ? ORDER BY created_at DESC LIMIT 200", workId)
+      .map((row) => this.mapCall(row));
   }
 
   listCallsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
     this.store.getWork(workId);
     const page = paginationSql(pagination);
     const rows = this.store.db.all(`SELECT * FROM ai_calls WHERE work_id = ? ORDER BY created_at DESC${page.sql}`, workId, ...page.params);
-    return paginated(rows.map((row) => ({
-      id: stringValue(row, "id"),
-      workId: stringValue(row, "work_id"),
-      taskId: row.task_id === null ? null : stringValue(row, "task_id"),
-      taskType: stringValue(row, "task_type"),
-      provider: this.getProvider(stringValue(row, "provider_id")),
-      model: this.getModel(stringValue(row, "model_id")),
-      contextScope: json(stringValue(row, "context_scope_json"), {}),
-      parameters: json(stringValue(row, "parameters_json"), {}),
-      status: stringValue(row, "status"),
-      failure: row.failure === null ? null : stringValue(row, "failure"),
-      inputChars: numberValue(row, "input_chars"),
-      outputChars: numberValue(row, "output_chars"),
-      createdAt: stringValue(row, "created_at"),
-      completedAt: row.completed_at === null ? null : stringValue(row, "completed_at")
-    })), pagination);
+    return paginated(rows.map((row) => this.mapCall(row)), pagination);
   }
 
   getTaskTrace(taskId: string): Record<string, unknown> {
@@ -5755,6 +5859,13 @@ export class AiManager {
 
   getContextUsage(input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">): Record<string, unknown> {
     const { model } = this.resolveModel(input.workId, input.taskType, input.modelId);
+    return this.contextUsageForModel(input, model);
+  }
+
+  private contextUsageForModel(
+    input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">,
+    model: ModelRow
+  ): Record<string, unknown> {
     const budget = this.contextBudget(input, model);
     const conversation = budget.conversation as AiConversationContext | null;
     const contextPlan = this.buildContextPlan(input, model, budget);
@@ -5815,6 +5926,252 @@ export class AiManager {
     };
   }
 
+  async startDesktopLocalAiRun(
+    input: DesktopLocalAiRunInput,
+    actorScope: string,
+    actor: RequestActor | null,
+    permissions: WorkModulePermissions
+  ): Promise<Record<string, unknown>> {
+    this.pruneDesktopLocalAiRuns();
+    if (this.desktopLocalAiRuns.size >= DESKTOP_LOCAL_AI_RUN_LIMIT) {
+      throw new AppError(429, "DESKTOP_LOCAL_AI_RUN_LIMIT", "当前正在处理的 Desktop 本地 AI 请求过多，请稍后再试");
+    }
+    const { provider, model } = this.desktopLocalAiRuntimeRows(input.runtimeModel);
+    const imageAttachments = await this.prepareChatImageAttachmentsForModel(
+      input.workId,
+      model,
+      provider,
+      input.imageAttachmentIds ?? [],
+      permissions
+    );
+    const runId = id("desktop-local-ai-run");
+    const timestamp = Date.now();
+    const run: DesktopLocalAiRunRecord = {
+      id: runId,
+      workId: input.workId,
+      actorScope,
+      actor,
+      status: "running",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      controller: new AbortController(),
+      contextUsage: null,
+      pending: null,
+      result: null,
+      error: null
+    };
+    const runtime: DesktopLocalAiGenerateRuntime = {
+      provider,
+      model,
+      localModelId: input.runtimeModel.id,
+      completionTransport: (request) => this.awaitDesktopLocalAiCompletion(run, request)
+    };
+    this.desktopLocalAiRuns.set(runId, run);
+    const updateContextUsage = (contextUsage: Record<string, unknown>): void => {
+      run.contextUsage = contextUsage;
+      run.updatedAt = Date.now();
+    };
+    void Promise.resolve().then(() => runWithRequestActor(actor, () => this.createSuggestion({
+      workId: input.workId,
+      taskType: input.taskType,
+      instruction: input.instruction,
+      scope: input.scope,
+      modelId: input.runtimeModel.id,
+      signal: run.controller.signal,
+      runtime,
+      onPrepared: updateContextUsage,
+      onContextCompacted: (event) => updateContextUsage(event.contextUsage),
+      ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+      ...(input.excludeConversationMessageId ? { excludeConversationMessageId: input.excludeConversationMessageId } : {}),
+      ...(imageAttachments.length > 0 ? { imageAttachments } : {}),
+      ...(input.sceneDirection ? { sceneDirection: input.sceneDirection } : {})
+    }))).then((result) => {
+      if (run.status === "cancelled") return;
+      run.status = "completed";
+      run.result = result;
+      run.contextUsage = result.contextUsage && typeof result.contextUsage === "object" && !Array.isArray(result.contextUsage)
+        ? result.contextUsage as Record<string, unknown>
+        : run.contextUsage;
+      run.updatedAt = Date.now();
+    }).catch((error) => {
+      if (run.status === "cancelled") return;
+      const appError = error instanceof AppError ? error : null;
+      run.status = "failed";
+      run.error = {
+        status: appError?.status ?? 502,
+        code: appError?.code ?? "AI_CALL_FAILED",
+        message: appError?.message ?? "AI 调用失败"
+      };
+      run.updatedAt = Date.now();
+    });
+    return this.desktopLocalAiRunStatus(runId, input.workId, actorScope);
+  }
+
+  desktopLocalAiRunStatus(runId: string, workId: string, actorScope: string): Record<string, unknown> {
+    this.pruneDesktopLocalAiRuns();
+    const run = this.desktopLocalAiRun(runId, workId, actorScope);
+    return {
+      id: run.id,
+      status: run.status,
+      ...(run.contextUsage ? { contextUsage: run.contextUsage } : {}),
+      ...(run.pending ? { completion: run.pending.request } : {}),
+      ...(run.result ? { result: run.result } : {}),
+      ...(run.error ? { error: run.error } : {})
+    };
+  }
+
+  submitDesktopLocalAiCompletion(
+    runId: string,
+    workId: string,
+    actorScope: string,
+    input: DesktopLocalAiCompletionResponseInput
+  ): Record<string, unknown> {
+    const run = this.desktopLocalAiRun(runId, workId, actorScope);
+    const pending = run.pending;
+    if (!pending || run.status !== "awaiting-completion") {
+      throw new AppError(409, "DESKTOP_LOCAL_AI_NOT_AWAITING", "当前 Desktop 本地 AI 请求不等待模型响应");
+    }
+    if (pending.request.requestId !== input.requestId) {
+      throw new AppError(409, "DESKTOP_LOCAL_AI_REQUEST_MISMATCH", "Desktop 本地 AI 响应与当前请求不匹配");
+    }
+    if (Buffer.byteLength(input.body, "utf8") > DESKTOP_LOCAL_AI_RESPONSE_MAX_BYTES) {
+      throw new AppError(413, "DESKTOP_LOCAL_AI_RESPONSE_TOO_LARGE", "Desktop 本地 AI 响应过大");
+    }
+    run.pending = null;
+    run.status = "running";
+    run.updatedAt = Date.now();
+    pending.dispose();
+    pending.resolve({
+      status: input.status,
+      body: input.body,
+      retryAfter: input.retryAfter ?? null
+    });
+    return this.desktopLocalAiRunStatus(runId, workId, actorScope);
+  }
+
+  cancelDesktopLocalAiRun(runId: string, workId: string, actorScope: string): Record<string, unknown> {
+    const run = this.desktopLocalAiRun(runId, workId, actorScope);
+    if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
+      return this.desktopLocalAiRunStatus(runId, workId, actorScope);
+    }
+    run.status = "cancelled";
+    run.updatedAt = Date.now();
+    run.pending?.dispose();
+    run.pending?.reject(new Error("Desktop local AI run cancelled"));
+    run.pending = null;
+    run.controller.abort(new Error("Desktop local AI run cancelled"));
+    return this.desktopLocalAiRunStatus(runId, workId, actorScope);
+  }
+
+  private desktopLocalAiRuntimeRows(input: DesktopLocalAiRuntimeModelInput): { provider: ProviderRow; model: ModelRow } {
+    const timestamp = now();
+    return {
+      provider: {
+        id: input.providerId,
+        work_id: PLATFORM_AI_WORK_ID,
+        name: input.providerName,
+        base_url: "",
+        protocol: input.protocol,
+        encrypted_key: "",
+        key_iv: "",
+        key_tag: "",
+        key_hint: "",
+        status: "enabled",
+        connection_status: "success",
+        max_tokens_parameter: input.maxTokensParameter,
+        thinking_type: input.thinkingType,
+        concurrency_limit: input.concurrencyLimit,
+        rpm_limit: input.rpmLimit,
+        analysis_timeout_seconds: input.analysisTimeoutSeconds,
+        daily_token_quota: null,
+        monthly_token_quota: null,
+        default_model_id: input.id,
+        note: input.note,
+        last_error: null,
+        last_success_at: timestamp,
+        created_at: timestamp,
+        updated_at: timestamp,
+        desktop_local: 1
+      },
+      model: {
+        id: input.id,
+        provider_id: input.providerId,
+        display_name: input.displayName,
+        model_id: input.modelId,
+        enabled: 1,
+        purposes_json: JSON.stringify(input.purposes),
+        context_note: input.contextNote,
+        context_window: input.contextWindow,
+        output_note: input.outputNote,
+        preset_json: JSON.stringify(input.preset),
+        thinking_enabled: input.thinkingEnabled ? 1 : 0,
+        thinking_effort: input.thinkingEffort,
+        multimodal_enabled: input.multimodalEnabled ? 1 : 0,
+        note: input.note,
+        created_at: timestamp,
+        updated_at: timestamp,
+        desktop_local: 1
+      }
+    };
+  }
+
+  private desktopLocalAiRun(runId: string, workId: string, actorScope: string): DesktopLocalAiRunRecord {
+    const run = this.desktopLocalAiRuns.get(runId);
+    if (!run || run.workId !== workId || run.actorScope !== actorScope) throw notFound("Desktop 本地 AI 请求");
+    return run;
+  }
+
+  private awaitDesktopLocalAiCompletion(
+    run: DesktopLocalAiRunRecord,
+    request: DesktopLocalAiCompletionTransportRequest
+  ): Promise<DesktopLocalAiCompletionTransportResponse> {
+    if (run.controller.signal.aborted) return Promise.reject(new Error("Desktop local AI run cancelled"));
+    if (run.pending) return Promise.reject(new Error("Desktop local AI run already has a pending completion"));
+    return new Promise<DesktopLocalAiCompletionTransportResponse>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (run.pending?.request.requestId !== request.requestId) return;
+        run.pending = null;
+        run.status = "running";
+        run.updatedAt = Date.now();
+        run.controller.signal.removeEventListener("abort", onAbort);
+        reject(new Error(`AI 请求超时（${Math.round(request.timeoutMs / 1_000)} 秒）`));
+      }, request.timeoutMs);
+      const onAbort = (): void => {
+        if (run.pending?.request.requestId !== request.requestId) return;
+        run.pending = null;
+        clearTimeout(timeout);
+        reject(new Error("Desktop local AI run cancelled"));
+      };
+      const dispose = (): void => {
+        clearTimeout(timeout);
+        run.controller.signal.removeEventListener("abort", onAbort);
+      };
+      run.controller.signal.addEventListener("abort", onAbort, { once: true });
+      run.pending = {
+        request,
+        resolve: (response) => {
+          dispose();
+          resolve(response);
+        },
+        reject: (error) => {
+          dispose();
+          reject(error);
+        },
+        dispose
+      };
+      run.status = "awaiting-completion";
+      run.updatedAt = Date.now();
+    });
+  }
+
+  private pruneDesktopLocalAiRuns(): void {
+    const cutoff = Date.now() - DESKTOP_LOCAL_AI_RUN_RETENTION_MS;
+    for (const [runId, run] of this.desktopLocalAiRuns) {
+      if (run.updatedAt >= cutoff || run.status === "running" || run.status === "awaiting-completion") continue;
+      this.desktopLocalAiRuns.delete(runId);
+    }
+  }
+
   private completionContextUsage(
     input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">,
     model: ModelRow,
@@ -5822,7 +6179,7 @@ export class AiManager {
     tools: Record<string, unknown>[],
     reportedUsage?: unknown
   ): Record<string, unknown> {
-    const baseUsage = this.getContextUsage(input);
+    const baseUsage = this.contextUsageForModel(input, model);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const serializedMessageTokens = estimateCompletionMessageTokens(messages);
     const systemPromptTokens = messages
@@ -5975,10 +6332,20 @@ export class AiManager {
     attachmentIds: string[],
     permissions: WorkModulePermissions
   ): Promise<ChatImageAttachment[]> {
+    const { model, provider } = this.resolveModel(workId, "chat", modelId);
+    return this.prepareChatImageAttachmentsForModel(workId, model, provider, attachmentIds, permissions);
+  }
+
+  private async prepareChatImageAttachmentsForModel(
+    workId: string,
+    model: ModelRow,
+    provider: ProviderRow,
+    attachmentIds: string[],
+    permissions: WorkModulePermissions
+  ): Promise<ChatImageAttachment[]> {
     const ids = [...new Set(attachmentIds.map((attachmentId) => String(attachmentId).trim()).filter(Boolean))];
     if (ids.length === 0) return [];
     if (ids.length > 4) throw new AppError(400, "AI_CHAT_IMAGE_LIMIT", "一次最多添加 4 张图片附件");
-    const { model, provider } = this.resolveModel(workId, "chat", modelId);
     if (!boolValue(model, "multimodal_enabled")) {
       throw new AppError(400, "MODEL_NOT_MULTIMODAL", "当前选择的模型不是多模态模型，无法处理图片附件");
     }
@@ -6024,12 +6391,12 @@ export class AiManager {
 
   private async prepareConversationImageAttachments(
     workId: string,
-    modelId: string,
+    model: ModelRow,
+    provider: ProviderRow,
     conversation: AiConversationContext | null
   ): Promise<ReadonlyMap<string, ChatImageAttachment[]>> {
     const preparedByMessage = new Map<string, ChatImageAttachment[]>();
     if (!conversation) return preparedByMessage;
-    const { model, provider } = this.resolveModel(workId, "chat", modelId);
     if (!boolValue(model, "multimodal_enabled") || !supportsMultimodalProviderProtocol(provider)) {
       return preparedByMessage;
     }
@@ -6042,7 +6409,7 @@ export class AiManager {
       if (ids.length === 0) continue;
       preparedByMessage.set(
         message.id,
-        await this.prepareChatImageAttachments(workId, modelId, ids, permissions)
+        await this.prepareChatImageAttachmentsForModel(workId, model, provider, ids, permissions)
       );
     }
     return preparedByMessage;
@@ -6570,8 +6937,9 @@ export class AiManager {
       ? this.roleplayCharacterId(workId, conversationId)
       : roleplayCharacterIdOverride;
     const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
+    const requested = requestedToolIds ? new Set(requestedToolIds) : null;
+    if (requested?.size === 0) return [];
     if (roleplayCharacterId) {
-      const requested = requestedToolIds ? new Set(requestedToolIds) : null;
       if (!canReadWorkModule(permissions, "characters")) return [];
       const roleplayTools: AgentToolId[] = [];
       if (!requested || requested.has("recall_self")) roleplayTools.push("recall_self");
@@ -6604,7 +6972,6 @@ export class AiManager {
       : this.store.getWorkAiSettings(workId).agentTools;
     const enabled = new Set((sourceTools as unknown[])
       .filter((item): item is ConfiguredAgentToolId => typeof item === "string" && CONFIGURED_AGENT_TOOL_IDS.includes(item as ConfiguredAgentToolId)));
-    const requested = requestedToolIds ? new Set(requestedToolIds) : null;
     return CONFIGURED_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)
       && (!requested || requested.has(toolId))
       && this.canReadWithAgentTool(permissions, toolId));
@@ -7826,14 +8193,15 @@ export class AiManager {
     messages: CompletionMessage[],
     parameters: Record<string, unknown>,
     tools: Record<string, unknown>[] = [],
-    additionalUsedTokens = 0
+    additionalUsedTokens = 0,
+    includeProviderQuota = true
   ): Record<string, unknown> {
     const workStatus = this.getWorkTokenQuotaStatus(workId);
-    const providerStatus = this.getProviderTokenQuotaStatus(stringValue(provider, "id"));
+    const providerStatus = includeProviderQuota ? this.getProviderTokenQuotaStatus(stringValue(provider, "id")) : null;
     const dailyTokenQuota = workStatus.dailyTokenQuota === null ? null : Number(workStatus.dailyTokenQuota);
     const monthlyTokenQuota = workStatus.monthlyTokenQuota === null ? null : Number(workStatus.monthlyTokenQuota);
-    const providerDailyTokenQuota = providerStatus.dailyTokenQuota === null ? null : Number(providerStatus.dailyTokenQuota);
-    const providerMonthlyTokenQuota = providerStatus.monthlyTokenQuota === null ? null : Number(providerStatus.monthlyTokenQuota);
+    const providerDailyTokenQuota = providerStatus?.dailyTokenQuota === null || !providerStatus ? null : Number(providerStatus.dailyTokenQuota);
+    const providerMonthlyTokenQuota = providerStatus?.monthlyTokenQuota === null || !providerStatus ? null : Number(providerStatus.monthlyTokenQuota);
     if (dailyTokenQuota === null && monthlyTokenQuota === null && providerDailyTokenQuota === null && providerMonthlyTokenQuota === null) return parameters;
     const additionalTokens = Math.max(0, additionalUsedTokens);
     const estimatedInputTokens = estimateCompletionMessageTokens(messages)
@@ -7867,30 +8235,34 @@ export class AiManager {
         resetsAt: String(workStatus.monthlyResetsAt),
         startedAt: String(workStatus.monthStartedAt),
         timezone: String(workStatus.timezone)
-      },
-      {
-        scope: "provider",
-        period: "daily" as const,
-        quota: providerDailyTokenQuota,
-        usedTokens: Number(providerStatus.usedTokens) + additionalTokens,
-        resetsAt: String(providerStatus.resetsAt),
-        startedAt: String(providerStatus.dayStartedAt),
-        timezone: String(providerStatus.timezone),
-        providerId: stringValue(provider, "id"),
-        providerName: stringValue(provider, "name")
-      },
-      {
-        scope: "provider",
-        period: "monthly" as const,
-        quota: providerMonthlyTokenQuota,
-        usedTokens: Number(providerStatus.monthlyUsedTokens) + additionalTokens,
-        resetsAt: String(providerStatus.monthlyResetsAt),
-        startedAt: String(providerStatus.monthStartedAt),
-        timezone: String(providerStatus.timezone),
-        providerId: stringValue(provider, "id"),
-        providerName: stringValue(provider, "name")
       }
     ];
+    if (providerStatus) {
+      quotas.push(
+        {
+          scope: "provider",
+          period: "daily",
+          quota: providerDailyTokenQuota,
+          usedTokens: Number(providerStatus.usedTokens) + additionalTokens,
+          resetsAt: String(providerStatus.resetsAt),
+          startedAt: String(providerStatus.dayStartedAt),
+          timezone: String(providerStatus.timezone),
+          providerId: stringValue(provider, "id"),
+          providerName: stringValue(provider, "name")
+        },
+        {
+          scope: "provider",
+          period: "monthly",
+          quota: providerMonthlyTokenQuota,
+          usedTokens: Number(providerStatus.monthlyUsedTokens) + additionalTokens,
+          resetsAt: String(providerStatus.monthlyResetsAt),
+          startedAt: String(providerStatus.monthStartedAt),
+          timezone: String(providerStatus.timezone),
+          providerId: stringValue(provider, "id"),
+          providerName: stringValue(provider, "name")
+        }
+      );
+    }
     for (const item of quotas) {
       if (item.quota === null) continue;
       const availableTokens = Math.max(0, item.quota - item.usedTokens);
@@ -7955,10 +8327,11 @@ export class AiManager {
       ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
       : null;
     const generationRoleplayCharacterId = this.roleplayCharacterIdFromConversation(input.workId, conversation);
-    const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
+    const { model, provider } = input.runtime ?? this.resolveModel(input.workId, input.taskType, input.modelId);
     const conversationImageAttachments = await this.prepareConversationImageAttachments(
       input.workId,
-      String(model.id),
+      model,
+      provider,
       conversation
     );
     const preset = safeJsonObject(stringValue(model, "preset_json"));
@@ -8002,11 +8375,29 @@ export class AiManager {
         modelId: stringValue(model, "id")
       });
     }
-    parameters = this.constrainParametersForTokenQuota(input.workId, provider, messages, parameters, tools);
+    parameters = this.constrainParametersForTokenQuota(
+      input.workId,
+      provider,
+      messages,
+      parameters,
+      tools,
+      0,
+      input.runtime === undefined
+    );
+    input.onPrepared?.(this.completionContextUsage(effectiveInput, model, messages, tools));
     const completionMessages: CompletionMessage[] = [...messages];
     const callId = id("call");
     const timestamp = now();
     const traceRounds: AiCallTraceRound[] = [];
+    const storedParameters = input.runtime
+      ? {
+          ...parameters,
+          __desktopLocalAi: {
+            provider: this.mapProvider(provider),
+            model: this.mapModel(model)
+          }
+        }
+      : parameters;
     this.store.db.transaction(() => {
       this.store.db.run(
         `INSERT INTO ai_calls (id, work_id, task_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
@@ -8018,7 +8409,7 @@ export class AiManager {
         stringValue(provider, "id"),
         stringValue(model, "id"),
         JSON.stringify(input.scope),
-        JSON.stringify(parameters),
+        JSON.stringify(storedParameters),
         context.length + input.instruction.length,
         timestamp,
         currentRequestActor()?.userId ?? null
@@ -8083,11 +8474,16 @@ export class AiManager {
       return "mixed";
     };
     try {
-      const { accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider);
-      activeSecrets = [credentialSecret, accessToken];
-      const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
-      const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis"
-        ? AI_LONG_RUNNING_TIMEOUT_MS
+      let accessToken = "";
+      let endpoint = "";
+      if (!input.runtime) {
+        const credential = await this.resolveProviderAccessToken(provider);
+        accessToken = credential.accessToken;
+        activeSecrets = [credential.credentialSecret, credential.accessToken];
+        endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
+      }
+      const timeoutMs = isLongRunningAiAnalysisTaskType(input.taskType)
+        ? providerAnalysisTimeoutSeconds(provider) * 1_000
         : AI_INTERACTIVE_TIMEOUT_MS;
       const legacyMaximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
       const maximumAttempts = Math.max(
@@ -8115,7 +8511,7 @@ export class AiManager {
         const requestParameters = options.parameters ?? parameters;
         const purpose = options.purpose ?? "generation";
         const requestTools = toolChoice === "auto" ? tools : [];
-        const streamResponse = Boolean(onDelta) && purpose === "generation";
+        const streamResponse = !input.runtime && Boolean(onDelta) && purpose === "generation";
         const processRound = streamResponse ? streamingGenerationRound + 1 : 0;
         if (streamResponse) streamingGenerationRound = processRound;
         const roundParameters = this.constrainParametersForTokenQuota(
@@ -8124,7 +8520,8 @@ export class AiManager {
           requestMessages,
           this.constrainParametersForContext(model, requestMessages, requestParameters, requestTools),
           requestTools,
-          trackedInputTokens + trackedOutputTokens
+          trackedInputTokens + trackedOutputTokens,
+          input.runtime === undefined
         );
         const traceRound: AiCallTraceRound = {
           round: traceRounds.length + 1,
@@ -8140,6 +8537,16 @@ export class AiManager {
           attempts: [],
           toolExecutions: []
         };
+        const completionRequestBody = buildCompletionRequestBody({
+          protocol,
+          model: stringValue(model, "model_id"),
+          messages: requestMessages,
+          parameters: roundParameters,
+          maxTokensParameter: providerMaxTokensParameter(provider),
+          tools: requestTools,
+          toolChoice,
+          ...(streamResponse ? { stream: true } : {})
+        });
         traceRounds.push(traceRound);
         saveTrace();
         let streamedThinkingStep: {
@@ -8167,6 +8574,30 @@ export class AiManager {
           let streamedRoundContent = "";
           try {
             const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
+              if (input.runtime) {
+                const response = await input.runtime.completionTransport({
+                  requestId: id("desktop-local-ai-completion"),
+                  localModelId: input.runtime.localModelId,
+                  taskType: input.taskType,
+                  purpose,
+                  body: completionRequestBody,
+                  timeoutMs
+                });
+                if (response.status < 200 || response.status >= 300) {
+                  return {
+                    ok: false as const,
+                    status: response.status,
+                    body: response.body,
+                    retryAfter: response.retryAfter
+                  };
+                }
+                try {
+                  const payload = parseCompletionPayload(protocol, JSON.parse(response.body));
+                  return { ok: true as const, status: response.status, payload, delivery: "json" as const };
+                } catch {
+                  throw new Error(`${providerProtocolLabelText(protocol)} returned invalid JSON: ${response.body.slice(0, 500)}`);
+                }
+              }
               const controller = new AbortController();
               const forwardAbort = (): void => controller.abort(input.signal?.reason);
               if (input.signal?.aborted) forwardAbort();
@@ -8183,16 +8614,7 @@ export class AiManager {
                 const response = await this.outboundFetch(endpoint, {
                   method: "POST",
                   headers: providerRequestHeaders(protocol, accessToken, streamResponse ? "text/event-stream" : "application/json"),
-                  body: JSON.stringify(buildCompletionRequestBody({
-                    protocol,
-                    model: stringValue(model, "model_id"),
-                    messages: requestMessages,
-                    parameters: roundParameters,
-                    maxTokensParameter: providerMaxTokensParameter(provider),
-                    tools: requestTools,
-                    toolChoice,
-                    ...(streamResponse ? { stream: true } : {})
-                  })),
+                  body: JSON.stringify(completionRequestBody),
                   signal: controller.signal
                 });
                 responseReceived = true;
@@ -12995,18 +13417,21 @@ export class AiManager {
   }
 
   private mapProvider(row: Row): Record<string, unknown> {
+    const desktopLocal = boolValue(row, "desktop_local");
     let apiKeyHint = stringValue(row, "key_hint");
-    try {
-      const secret = this.decryptKey(row);
-      apiKeyHint = providerCredentialHint(providerProtocol(row), secret);
-    } catch {
-      // 凭据无法解密时保留数据库中的旧掩码，避免影响供应商列表展示。
+    if (!desktopLocal) {
+      try {
+        const secret = this.decryptKey(row);
+        apiKeyHint = providerCredentialHint(providerProtocol(row), secret);
+      } catch {
+        // 凭据无法解密时保留数据库中的旧掩码，避免影响供应商列表展示。
+      }
     }
     return {
       id: stringValue(row, "id"),
-      scope: "platform",
+      scope: desktopLocal ? "local" : "platform",
       name: stringValue(row, "name"),
-      baseUrl: stringValue(row, "base_url"),
+      baseUrl: desktopLocal ? "" : stringValue(row, "base_url"),
       protocol: providerProtocol(row),
       maxTokensParameter: providerMaxTokensParameter(row),
       thinkingType: providerThinkingType(row),
@@ -13015,6 +13440,7 @@ export class AiManager {
       connectionStatus: stringValue(row, "connection_status"),
       concurrencyLimit: numberValue(row, "concurrency_limit") || 10,
       rpmLimit: numberValue(row, "rpm_limit") || 10,
+      analysisTimeoutSeconds: providerAnalysisTimeoutSeconds(row),
       dailyTokenQuota: nullableNumberValue(row, "daily_token_quota"),
       monthlyTokenQuota: nullableNumberValue(row, "monthly_token_quota"),
       defaultModelId: row.default_model_id === null ? null : stringValue(row, "default_model_id"),
@@ -13027,8 +13453,10 @@ export class AiManager {
   }
 
   private mapModel(row: Row): Record<string, unknown> {
+    const desktopLocal = boolValue(row, "desktop_local");
     return {
       id: stringValue(row, "id"),
+      ...(desktopLocal ? { scope: "local" } : {}),
       providerId: stringValue(row, "provider_id"),
       displayName: stringValue(row, "display_name"),
       modelId: stringValue(row, "model_id"),
@@ -13040,7 +13468,7 @@ export class AiManager {
       thinkingEnabled: boolValue(row, "thinking_enabled"),
       thinkingEffort: stringValue(row, "thinking_effort") || "default",
       multimodalEnabled: boolValue(row, "multimodal_enabled"),
-      imageToolDefault: String(this.store.getPlatformAiSettings().imageToolModelId ?? "") === stringValue(row, "id"),
+      imageToolDefault: !desktopLocal && String(this.store.getPlatformAiSettings().imageToolModelId ?? "") === stringValue(row, "id"),
       enabled: boolValue(row, "enabled"),
       note: stringValue(row, "note"),
       createdAt: stringValue(row, "created_at"),
@@ -13048,8 +13476,55 @@ export class AiManager {
     };
   }
 
+  private aiCallTarget(row: Row): { provider: Record<string, unknown>; model: Record<string, unknown> } {
+    const parameters = safeJsonObject(stringValue(row, "parameters_json"));
+    const desktopLocal = parameters.__desktopLocalAi;
+    if (desktopLocal && typeof desktopLocal === "object" && !Array.isArray(desktopLocal)) {
+      const snapshot = desktopLocal as Record<string, unknown>;
+      if (
+        snapshot.provider && typeof snapshot.provider === "object" && !Array.isArray(snapshot.provider)
+        && snapshot.model && typeof snapshot.model === "object" && !Array.isArray(snapshot.model)
+      ) {
+        return {
+          provider: structuredClone(snapshot.provider as Record<string, unknown>),
+          model: structuredClone(snapshot.model as Record<string, unknown>)
+        };
+      }
+    }
+    return {
+      provider: this.getProvider(stringValue(row, "provider_id")),
+      model: this.getModel(stringValue(row, "model_id"))
+    };
+  }
+
+  private publicAiCallParameters(row: Row): Record<string, unknown> {
+    const { __desktopLocalAi: _desktopLocalAi, ...parameters } = safeJsonObject(stringValue(row, "parameters_json"));
+    return parameters;
+  }
+
+  private mapCall(row: Row): Record<string, unknown> {
+    const target = this.aiCallTarget(row);
+    return {
+      id: stringValue(row, "id"),
+      workId: stringValue(row, "work_id"),
+      taskId: row.task_id === null ? null : stringValue(row, "task_id"),
+      taskType: stringValue(row, "task_type"),
+      provider: target.provider,
+      model: target.model,
+      contextScope: json(stringValue(row, "context_scope_json"), {}),
+      parameters: this.publicAiCallParameters(row),
+      status: stringValue(row, "status"),
+      failure: row.failure === null ? null : stringValue(row, "failure"),
+      inputChars: numberValue(row, "input_chars"),
+      outputChars: numberValue(row, "output_chars"),
+      createdAt: stringValue(row, "created_at"),
+      completedAt: row.completed_at === null ? null : stringValue(row, "completed_at")
+    };
+  }
+
   private mapSuggestion(row: Row): Record<string, unknown> {
-    const call = this.store.db.get("SELECT provider_id, model_id FROM ai_calls WHERE id = ?", stringValue(row, "call_id"));
+    const call = this.store.db.get("SELECT provider_id, model_id, parameters_json FROM ai_calls WHERE id = ?", stringValue(row, "call_id"));
+    const target = call ? this.aiCallTarget(call) : null;
     const guard = this.store.getLatestContinuationGuard(stringValue(row, "id"));
     return {
       id: stringValue(row, "id"),
@@ -13065,8 +13540,8 @@ export class AiManager {
       status: stringValue(row, "status"),
       outputTokens: estimateAiTokens(stringValue(row, "content")),
       guard,
-      provider: call ? this.getProvider(stringValue(call, "provider_id")) : null,
-      model: call ? this.getModel(stringValue(call, "model_id")) : null,
+      provider: target?.provider ?? null,
+      model: target?.model ?? null,
       createdAt: stringValue(row, "created_at"),
       decidedAt: row.decided_at === null ? null : stringValue(row, "decided_at")
     };

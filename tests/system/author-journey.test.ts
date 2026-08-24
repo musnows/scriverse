@@ -346,6 +346,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; color: #fff; border-radius: 3px; font-weight: 700; }');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(page.text).toContain('feature=ai-provider-thinking-type-v1');
+    expect(page.text).toContain('feature=ai-provider-analysis-timeout-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -985,11 +986,15 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('name="useAdaptiveThinking"');
     expect(application.text).toContain('thinkingType: form.get("useAdaptiveThinking") === "on" ? "adaptive" : "enabled"');
     expect(application.text).toContain("思考类型（开启时）");
+    expect(application.text).toContain('name="analysisTimeoutSeconds"');
+    expect(application.text).toContain('analysisTimeoutSeconds: Number(form.get("analysisTimeoutSeconds"))');
+    expect(application.text).toContain("用于全书分析和关系分析的单次非流式请求");
     expect(application.text).toContain('const supportsMaxCompletionTokens = selectedProtocolOption(protocolSelect.value)?.supportsMaxCompletionTokens !== false');
     expect(application.text).toContain('maxTokensParameterFieldElement.hidden = !supportsMaxCompletionTokens');
     expect(application.text).toContain('maxTokensParameterFieldElement.classList.toggle("hidden", !supportsMaxCompletionTokens)');
     expect(application.text).toContain('最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}');
     expect(application.text).toContain('思考类型：${esc(provider.thinkingType ?? "enabled")}');
+    expect(application.text).toContain('分析请求超时：${Number(provider.analysisTimeoutSeconds ?? DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS).toLocaleString("zh-CN")} 秒');
     expect(application.text).not.toContain('field("maxTokens", "最大输出令牌数", "number", item?.maxTokens ?? 32000)');
     expect(application.text).toContain('item && item.providerStatus === "enabled"');
     expect(application.text).toContain('class="model-connection-test"');

@@ -88,6 +88,45 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA index_list(drafts)").some((index) => index.name === "idx_drafts_favorite")).toBe(true);
     expect(first.all("PRAGMA index_list(settings)").some((index) => index.name === "idx_settings_favorite")).toBe(true);
     expect(first.all("PRAGMA index_list(organizations)").some((index) => index.name === "idx_organizations_favorite")).toBe(true);
+    expect(first.all("PRAGMA table_info(user_desktop_sessions)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "id",
+      "user_id",
+      "token_hash",
+      "desktop_id",
+      "profile_id",
+      "client_version",
+      "expires_at",
+      "revoked_at"
+    ]));
+    expect(first.all("PRAGMA index_list(user_desktop_sessions)").map((index) => index.name)).toEqual(expect.arrayContaining([
+      "idx_user_desktop_sessions_token",
+      "idx_user_desktop_sessions_user",
+      "idx_user_desktop_sessions_active_profile"
+    ]));
+    expect(first.get("SELECT offline_access_enabled FROM works WHERE id = 'work-old'")).toEqual({ offline_access_enabled: 0 });
+    expect(first.all("PRAGMA table_info(sync_changes)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "cursor",
+      "work_id",
+      "entity_type",
+      "entity_id",
+      "operation",
+      "version_no",
+      "changed_by_user_id",
+      "changed_at"
+    ]));
+    expect(first.all("PRAGMA table_info(sync_mutation_results)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "mutation_id",
+      "client_id",
+      "user_id",
+      "work_id",
+      "request_hash",
+      "status",
+      "result_json"
+    ]));
+    expect(first.all("PRAGMA index_list(sync_changes)").map((index) => index.name)).toEqual(expect.arrayContaining([
+      "idx_sync_changes_work_cursor",
+      "idx_sync_changes_entity"
+    ]));
     expect(first.all("PRAGMA table_info(s3_backup_targets)").map((column) => column.name)).toEqual(expect.arrayContaining([
       "id",
       "endpoint",
@@ -148,6 +187,7 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "daily_token_quota", "monthly_token_quota", "max_tokens"].includes(String(column.name)))).toHaveLength(5);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "protocol" && column.dflt_value === "'openai-chat-completions'")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "thinking_type" && column.dflt_value === "'enabled'")).toBe(true);
+    expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "analysis_timeout_seconds" && column.dflt_value === "300")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_connectivity_test_states)").map((column) => column.name)).toEqual([
       "object_type",
       "object_id",
@@ -1806,6 +1846,64 @@ describe("数据库版本化迁移", () => {
       thinking_type: "enabled"
     });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 106")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 118 为既有供应商补充默认分析请求超时并保留数据", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-provider-analysis-timeout-"));
+    roots.push(root);
+    const filename = join(root, "provider-analysis-timeout.db");
+    const timestamp = "2026-08-24T00:00:00.000Z";
+    const current = new Database(filename);
+    current.run(
+      `INSERT INTO providers (
+        id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status, created_at, updated_at
+      ) VALUES (
+        'provider-analysis-timeout', '__scriverse_platform_ai__', '分析超时迁移供应商', 'https://analysis-timeout.test/v1',
+        'openai-chat-completions', 'encrypted', 'iv', 'tag', '***', 'disabled', ?, ?
+      )`,
+      timestamp,
+      timestamp
+    );
+    current.raw.exec("ALTER TABLE providers DROP COLUMN analysis_timeout_seconds");
+    current.run("DELETE FROM schema_migrations WHERE version = 118");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT name, analysis_timeout_seconds FROM providers WHERE id = 'provider-analysis-timeout'")).toEqual({
+      name: "分析超时迁移供应商",
+      analysis_timeout_seconds: 300
+    });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 118")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 119 为既有分析任务补充 API Key 创建来源并保留数据", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-task-api-key-source-"));
+    roots.push(root);
+    const filename = join(root, "task-api-key-source.db");
+    const timestamp = "2026-08-24T00:00:00.000Z";
+    const current = new Database(filename);
+    current.run(
+      `INSERT INTO analysis_tasks (
+        id, work_id, task_type, scope_json, status, created_via_api_key, created_at, updated_at
+      ) VALUES ('task-api-key-source', '__scriverse_platform_ai__', 'book-analysis', '{}', 'pending', 1, ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.raw.exec("ALTER TABLE analysis_tasks DROP COLUMN created_via_api_key");
+    current.run("DELETE FROM schema_migrations WHERE version = 119");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT created_via_api_key FROM analysis_tasks WHERE id = 'task-api-key-source'")).toEqual({
+      created_via_api_key: 0
+    });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 119")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();

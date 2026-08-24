@@ -66,6 +66,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(provider.body.data).toMatchObject({
       concurrencyLimit: 10,
       rpmLimit: 10,
+      analysisTimeoutSeconds: 300,
       dailyTokenQuota: null,
       monthlyTokenQuota: null,
       maxTokensParameter: "max_tokens",
@@ -89,6 +90,144 @@ describe("AI 供应商、模型与建议 API", () => {
   function setLegacyModelContextWindow(modelId: string, contextWindow: number): void {
     runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", contextWindow, modelId);
   }
+
+  it("让 Desktop 本地模型复用 Server Agent 工具循环且不调用远端供应商", async () => {
+    await request(runtime.app).patch("/api/platform/ai/settings").send({
+      systemPrompt: "平台远端 Prompt"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      systemPrompt: "作品远端 Prompt",
+      agentTools: ["story_index"]
+    }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+      role: "user",
+      content: "上一轮问题"
+    }).expect(201);
+    await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+      role: "assistant",
+      content: "上一轮回答"
+    }).expect(201);
+    const current = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+      role: "user",
+      content: "请结合跃迁限制继续讨论"
+    }).expect(201);
+
+    const started = await request(runtime.app).post(`/api/works/${workId}/desktop-local-ai/runs`).send({
+      taskType: "chat",
+      instruction: "请结合跃迁限制继续讨论",
+      scope: { type: "chapter", chapterId },
+      runtimeModel: {
+        id: "desktop-local-model",
+        providerId: "desktop-local-provider",
+        providerName: "local/LM Studio",
+        protocol: "openai-chat-completions",
+        maxTokensParameter: "max_tokens",
+        thinkingType: "enabled",
+        concurrencyLimit: 3,
+        rpmLimit: 30,
+        analysisTimeoutSeconds: 300,
+        displayName: "本地模型",
+        modelId: "local-model",
+        purposes: ["chat", "continue", "polish"],
+        contextNote: "",
+        contextWindow: 128_000,
+        outputNote: "",
+        preset: { temperature: 0.4, max_tokens: 4_096 },
+        thinkingEnabled: false,
+        thinkingEffort: "default",
+        multimodalEnabled: false,
+        note: ""
+      },
+      conversationId,
+      currentMessageId: current.body.data.id
+    }).expect(202);
+
+    const runId = String(started.body.data.id);
+    const waitForStatus = async (expected: string): Promise<Record<string, unknown>> => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const polled = await request(runtime.app).get(`/api/works/${workId}/desktop-local-ai/runs/${runId}`).expect(200);
+        if (polled.body.data.status === expected) return polled.body.data as Record<string, unknown>;
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      throw new Error(`Desktop local AI run did not reach ${expected}`);
+    };
+
+    const firstRound = await waitForStatus("awaiting-completion");
+    const firstCompletion = firstRound.completion as { requestId: string; body: Record<string, unknown> };
+    const firstBody = firstCompletion.body as {
+      model: string;
+      messages: Array<{ role: string; content: unknown }>;
+      tools: Array<{ function?: { name?: string } }>;
+      tool_choice: string;
+    };
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(firstBody.model).toBe("local-model");
+    expect(firstBody.tool_choice).toBe("auto");
+    expect(firstBody.tools.some((tool) => tool.function?.name === "story_index")).toBe(true);
+    expect(JSON.stringify(firstBody.messages[0]?.content)).toContain("<platform_system_prompt>");
+    expect(JSON.stringify(firstBody.messages[0]?.content)).toContain("平台远端 Prompt");
+    expect(JSON.stringify(firstBody.messages[0]?.content)).toContain("<work_system_prompt>");
+    expect(JSON.stringify(firstBody.messages[0]?.content)).toContain("作品远端 Prompt");
+    expect(JSON.stringify(firstBody.messages)).toContain("上一轮问题");
+    expect(JSON.stringify(firstBody.messages)).toContain("上一轮回答");
+    expect(JSON.stringify(firstBody.messages)).toContain("跃迁后必须冷却十二小时");
+    expect(JSON.stringify(firstBody.messages)).toContain("<author_instruction>");
+    expect(firstRound.contextUsage).toMatchObject({
+      modelId: "desktop-local-model",
+      contextWindow: 128_000
+    });
+    expect(Number(((firstRound.contextUsage as { tokenDistribution: { functionTokens: number } }).tokenDistribution.functionTokens))).toBeGreaterThan(0);
+
+    await request(runtime.app)
+      .post(`/api/works/${workId}/desktop-local-ai/runs/${runId}/responses`)
+      .send({
+        requestId: firstCompletion.requestId,
+        status: 200,
+        body: JSON.stringify({
+          choices: [{
+            finish_reason: "tool_calls",
+            message: {
+              content: null,
+              tool_calls: [{
+                id: "call-story-index",
+                type: "function",
+                function: { name: "story_index", arguments: "{}" }
+              }]
+            }
+          }]
+        })
+      })
+      .expect(200);
+
+    const secondRound = await waitForStatus("awaiting-completion");
+    const secondCompletion = secondRound.completion as { requestId: string; body: Record<string, unknown> };
+    expect(secondCompletion.requestId).not.toBe(firstCompletion.requestId);
+    expect(JSON.stringify(secondCompletion.body)).toContain('"role":"tool"');
+    expect(JSON.stringify(secondCompletion.body)).toContain("AI 测试作品");
+    expect((secondCompletion.body.tools as unknown[]).length).toBeGreaterThan(0);
+
+    await request(runtime.app)
+      .post(`/api/works/${workId}/desktop-local-ai/runs/${runId}/responses`)
+      .send({
+        requestId: secondCompletion.requestId,
+        status: 200,
+        body: JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "已查询作品目录，跃迁冷却限制仍然有效。" } }] })
+      })
+      .expect(200);
+
+    const completed = await waitForStatus("completed");
+    expect(completed.result).toMatchObject({
+      content: "已查询作品目录，跃迁冷却限制仍然有效。",
+      provider: { scope: "local", name: "local/LM Studio" },
+      model: { id: "desktop-local-model", scope: "local" },
+      toolCalls: [expect.objectContaining({ name: "story_index", status: "completed" })]
+    });
+    expect(Number((((completed.result as { contextUsage: { tokenDistribution: { functionTokens: number } } }).contextUsage.tokenDistribution.functionTokens)))).toBeGreaterThan(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["openai-chat-completions", "OpenAI Chat"],
@@ -971,6 +1110,21 @@ describe("AI 供应商、模型与建议 API", () => {
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(201);
+  });
+
+  it("供应商可配置长分析请求超时并拒绝范围外数值", async () => {
+    const { providerId } = await configureAi();
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ analysisTimeoutSeconds: 29 }).expect(400);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ analysisTimeoutSeconds: 3_601 }).expect(400);
+
+    const updated = await request(runtime.app)
+      .patch(`/api/providers/${providerId}`)
+      .send({ analysisTimeoutSeconds: 900 })
+      .expect(200);
+    expect(updated.body.data.analysisTimeoutSeconds).toBe(900);
+    expect(runtime.database.get("SELECT analysis_timeout_seconds FROM providers WHERE id = ?", providerId)).toEqual({
+      analysis_timeout_seconds: 900
+    });
   });
 
   it("Kimi 模型默认温度为 1 并保留用户手动设置", async () => {
@@ -4051,5 +4205,31 @@ describe("AI 供应商、模型与建议 API", () => {
     await rejection;
     const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);
     expect(calls.body.data[0]).toMatchObject({ status: "failed" });
+  });
+
+  it("全书分析使用供应商配置的单次请求超时", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ analysisTimeoutSeconds: 30 }).expect(200);
+    fetchMock.mockImplementation(async (_input, init) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), { once: true });
+      }
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.useFakeTimers();
+    const call = runtime.ai.generate({
+      workId,
+      taskType: "book-analysis",
+      instruction: "等待供应商分析超时",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      maxAttempts: 1
+    });
+    const rejection = expect(call).rejects.toMatchObject({
+      message: "AI 调用失败",
+      details: { failure: "AI 请求超时（30 秒）" }
+    });
+    await vi.advanceTimersByTimeAsync(30_001);
+    await rejection;
   });
 });

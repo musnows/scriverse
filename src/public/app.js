@@ -121,6 +121,10 @@ import {
   resizeCropRect
 } from "/avatar-crop.js?v=20260725-avatar-crop";
 
+const DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS = 300;
+const MIN_AI_ANALYSIS_TIMEOUT_SECONDS = 30;
+const MAX_AI_ANALYSIS_TIMEOUT_SECONDS = 3_600;
+
 const defaultPageSizes = Object.freeze({
   drafts: 30,
   settings: 30,
@@ -5143,11 +5147,17 @@ function showAuth(setupRequired, registrationOpen = false, setupTokenRequired = 
 function applyAuthenticatedUser(session) {
   state.user = session.user;
   state.csrfToken = session.csrfToken;
+  const isSystemAdmin = session.user.isSystemAdmin === true;
+  const accountButton = $("#account-button");
   $("#account-name").textContent = session.user.displayName;
   renderUserAvatar($("#account-avatar"), session.user);
+  accountButton.setAttribute("aria-label", isSystemAdmin
+    ? `账户：${session.user.displayName}，系统管理员`
+    : `账户：${session.user.displayName}`);
+  $("#account-admin-mark").classList.toggle("hidden", !isSystemAdmin);
   $("#account-menu-display-name").textContent = session.user.displayName;
   $("#account-menu-username").textContent = `@${session.user.username}`;
-  $("#account-menu-role").textContent = session.user.role === "admin" ? "系统管理员" : "普通用户";
+  $("#account-menu-role").textContent = isSystemAdmin ? "系统管理员" : "普通用户";
   $("#auth-view").classList.add("hidden");
   document.documentElement.classList.remove("login-route");
   if (!session.csrfToken) document.body.classList.remove("auth-pending");
@@ -11375,7 +11385,7 @@ function openTaskDetailDialog(task, trace) {
         <p><strong>状态</strong> ${esc(analysisTaskStatusLabel(task.status))} · 进度 ${Number(task.progress ?? 0)}%</p>
         <p><strong>范围摘要</strong> ${esc(task.scopeSummary || "未指定")}</p>
         <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
-        <div><strong>失败信息</strong>${failureHtml}${identityRepairHtml}</div>
+        <div class="task-detail-failures"><strong>失败信息</strong>${failureHtml}${identityRepairHtml}</div>
         <div><strong>结果摘要</strong>${resultPreview}</div>
         ${canRerunAnalysisTask(task) ? `<div class="task-detail-actions"><button class="primary-button" type="button" data-rerun-task-detail="${esc(task.id)}">按原配置重新执行</button><button class="ghost-button" type="button" data-rerun-task-model="${esc(task.id)}">换模型重试</button><small>新任务会重新读取当前正文、设定和人物资料，旧任务记录保持不变。</small></div>` : ""}
       </section>
@@ -11414,7 +11424,7 @@ function renderProviderCards(providers, models, protocolOptions) {
       : "";
     return `
     <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol, protocolOptions))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
-    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n思考类型：${esc(provider.thinkingType ?? "enabled")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}\n每日 Token 额度：${provider.dailyTokenQuota === null || provider.dailyTokenQuota === undefined ? "未限制" : Number(provider.dailyTokenQuota).toLocaleString("zh-CN")} · 每月 Token 额度：${provider.monthlyTokenQuota === null || provider.monthlyTokenQuota === undefined ? "未限制" : Number(provider.monthlyTokenQuota).toLocaleString("zh-CN")}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
+    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n思考类型：${esc(provider.thinkingType ?? "enabled")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}\n分析请求超时：${Number(provider.analysisTimeoutSeconds ?? DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS).toLocaleString("zh-CN")} 秒\n每日 Token 额度：${provider.dailyTokenQuota === null || provider.dailyTokenQuota === undefined ? "未限制" : Number(provider.dailyTokenQuota).toLocaleString("zh-CN")} · 每月 Token 额度：${provider.monthlyTokenQuota === null || provider.monthlyTokenQuota === undefined ? "未限制" : Number(provider.monthlyTokenQuota).toLocaleString("zh-CN")}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
     <div class="provider-models">${providerModels.map((model) => {
       const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
       const modelStatus = !model.enabled
@@ -15810,6 +15820,7 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
   const monthlyTokenQuota = item?.monthlyTokenQuota ?? null;
   const providerTokenQuotaFields = `<div class="form-field provider-token-quota-fields" data-provider-token-quota-fields><span>供应商 Token 额度</span><small>按服务器部署时区统计该供应商跨所有小说的输入与输出 Token；与单个小说额度独立。额度必须设置为大于 0；低于每日 10,000 或每月 1,000,000 时仅提示风险。</small><div class="provider-token-quota-row"><label class="checkbox-field provider-token-quota-toggle"><input name="dailyTokenQuotaEnabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}><span>启用每日额度</span></label><label class="provider-token-quota-input">每日额度<input name="dailyTokenQuota" type="number" min="1" max="2000000000" step="1" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="供应商每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label></div><div class="provider-token-quota-row"><label class="checkbox-field provider-token-quota-toggle"><input name="monthlyTokenQuotaEnabled" type="checkbox" ${monthlyTokenQuota === null ? "" : "checked"}><span>启用每月额度</span></label><label class="provider-token-quota-input">每月额度<input name="monthlyTokenQuota" type="number" min="1" max="2000000000" step="1" value="${esc(String(monthlyTokenQuota ?? 10000))}" aria-label="供应商每月 Token 额度" ${monthlyTokenQuota === null ? "disabled" : ""}></label></div></div>`;
   const thinkingTypeField = `<div class="form-field provider-thinking-type-field" data-provider-thinking-type-field><span>思考类型（开启时）</span><label class="checkbox-field"><input name="useAdaptiveThinking" type="checkbox" ${useAdaptiveThinking ? "checked" : ""} aria-describedby="provider-thinking-type-hint"><span>使用 adaptive（关闭时发送 enabled）</span></label><small id="provider-thinking-type-hint">关闭模型思考时仍发送 disabled；请只在供应商支持 adaptive 时开启。</small></div>`;
+  const analysisTimeoutField = `<div class="form-field provider-analysis-timeout-field" data-provider-analysis-timeout-field><span>分析请求超时</span><label>单次请求（秒）<input name="analysisTimeoutSeconds" type="number" min="${MIN_AI_ANALYSIS_TIMEOUT_SECONDS}" max="${MAX_AI_ANALYSIS_TIMEOUT_SECONDS}" step="1" value="${esc(String(item?.analysisTimeoutSeconds ?? DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS))}" aria-describedby="provider-analysis-timeout-hint"></label><small id="provider-analysis-timeout-hint">用于全书分析和关系分析的单次非流式请求；默认 300 秒，可设置 30–3600 秒。</small></div>`;
   openDialog(
     item ? "编辑 AI 供应商" : "新建 AI 供应商",
     field("name", "显示名称", "text", item?.name)
@@ -15820,6 +15831,7 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
       + thinkingTypeField
       + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10)
       + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10)
+      + analysisTimeoutField
       + providerTokenQuotaFields
       + field("note", "用途备注", "textarea", item?.note)
       + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true),
@@ -15832,11 +15844,17 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
         thinkingType: form.get("useAdaptiveThinking") === "on" ? "adaptive" : "enabled",
         concurrencyLimit: Number(form.get("concurrencyLimit")),
         rpmLimit: Number(form.get("rpmLimit")),
+        analysisTimeoutSeconds: Number(form.get("analysisTimeoutSeconds")),
         dailyTokenQuota: form.get("dailyTokenQuotaEnabled") === "on" ? Number(form.get("dailyTokenQuota")) : null,
         monthlyTokenQuota: form.get("monthlyTokenQuotaEnabled") === "on" ? Number(form.get("monthlyTokenQuota")) : null,
         note: form.get("note"),
         status: form.get("enabled") === "on" ? "enabled" : "disabled"
       };
+      if (
+        !Number.isInteger(body.analysisTimeoutSeconds)
+        || body.analysisTimeoutSeconds < MIN_AI_ANALYSIS_TIMEOUT_SECONDS
+        || body.analysisTimeoutSeconds > MAX_AI_ANALYSIS_TIMEOUT_SECONDS
+      ) throw new Error("分析请求超时必须设置为 30–3600 秒的整数");
       if (!item || String(form.get("apiKey") ?? "").trim()) body.apiKey = form.get("apiKey");
       for (const [period, label] of [["daily", "每日"], ["monthly", "每月"]]) {
         const value = body[`${period}TokenQuota`];
@@ -15849,7 +15867,7 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
       await loadModels();
       if (item) toast(connectivityConfigurationSavedToast("provider"));
     },
-    item ? "协议、限流与凭据" : "供应商协议、限流与凭据", {
+    item ? "协议、超时、限流与凭据" : "供应商协议、超时、限流与凭据", {
       dangerAction: item ? { label: "删除供应商", onClick: () => deletePlatformProvider(item) } : null
     }
   );

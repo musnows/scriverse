@@ -13,6 +13,7 @@ import { logger, sanitizeError } from "./logger.js";
 import { resolveReleaseCheckIntervalMs, resolveReleaseCheckRetries, resolveReleaseCheckTimeoutMs } from "./release-update.js";
 import { resolveImageUploadLimits } from "./upload-limits.js";
 import { resolveBetaVersionLabel } from "./version.js";
+import { claimServerDataDirectory, STORAGE_MANIFEST_FILENAME } from "./storage-manifest.js";
 
 export type LocalServerOptions = {
   host: string;
@@ -20,6 +21,8 @@ export type LocalServerOptions = {
   dataDirectory: string;
   databasePath: string;
   env: NodeJS.ProcessEnv;
+  /** 仅由受信任的本机嵌入端设置，不从 Server 环境变量读取。 */
+  disableAiEndpointValidation?: boolean;
 };
 
 export type RunningLocalServer = {
@@ -187,6 +190,12 @@ export function createPreMigrationBackup(
     cpSync(masterKeyPath, target, { preserveTimestamps: true });
     chmodSync(target, 0o600);
   }
+  const storageManifestPath = join(options.dataDirectory, STORAGE_MANIFEST_FILENAME);
+  if (existsSync(storageManifestPath)) {
+    const target = join(incompleteDirectory, STORAGE_MANIFEST_FILENAME);
+    cpSync(storageManifestPath, target, { preserveTimestamps: true });
+    chmodSync(target, 0o600);
+  }
   const attachmentsPath = join(options.dataDirectory, "attachments");
   if (existsSync(attachmentsPath)) {
     cpSync(attachmentsPath, join(incompleteDirectory, "attachments"), { recursive: true, preserveTimestamps: true });
@@ -217,6 +226,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
   try {
     mkdirSync(options.dataDirectory, { recursive: true, mode: 0o700 });
     chmodSync(options.dataDirectory, 0o700);
+    claimServerDataDirectory(options.dataDirectory, options.databasePath);
     recordStartupAttempt(options.dataDirectory, options.env);
     security = resolveRuntimeSecurity(options.env);
     warnIfPrivateAiEndpointsEnabled(options.env);
@@ -233,6 +243,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       masterSecret: loadMasterSecret(join(options.dataDirectory, "master.key"), options.env.AI_NOVEL_MASTER_KEY),
       publicPath,
       security,
+      disableAiEndpointValidation: options.disableAiEndpointValidation === true,
       disableUserAuth: devAuthBypass,
       devAuthBypass,
       developmentServer: isDevelopmentServer(options.env),
@@ -257,10 +268,13 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
     const server = runtime.app.listen(options.port, options.host);
     const handleStartupError = (error: Error): void => {
       logger.error("server.start_failed", { host: options.host, port: options.port, error: sanitizeError(error) });
-      void runtime.close().catch((closeError: unknown) => {
-        logger.error("server.runtime_close_failed", { error: sanitizeError(closeError) });
-      });
-      rejectStart(error);
+      void runtime.close().then(
+        () => rejectStart(error),
+        (closeError: unknown) => {
+          logger.error("server.runtime_close_failed", { error: sanitizeError(closeError) });
+          rejectStart(error);
+        }
+      );
     };
     server.once("error", handleStartupError);
     server.once("listening", () => {

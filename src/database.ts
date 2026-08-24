@@ -1,15 +1,20 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, statfsSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import {
+  DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS,
+  MAX_AI_ANALYSIS_TIMEOUT_SECONDS,
+  MIN_AI_ANALYSIS_TIMEOUT_SECONDS
+} from "./ai-analysis-timeout.js";
 import { documentParagraphLineRanges } from "./hybrid-search.js";
 import { logger, sanitizeError } from "./logger.js";
 import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentParagraphs } from "./utils.js";
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0；版本 111 扩展模型思考强度为 auto；版本 112 为 CLI API Key 增加可复制的加密密文；版本 113 增加角色收藏状态与列表索引；版本 114 增加组织、设定档案与想法收藏状态及列表索引；版本 115 增加 AI 对话会话级场景钉。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0；版本 111 扩展模型思考强度为 auto；版本 112 为 CLI API Key 增加可复制的加密密文；版本 113 增加角色收藏状态与列表索引；版本 114 增加组织、设定档案与想法收藏状态及列表索引；版本 115 增加 AI 对话会话级场景钉；版本 116 增加可持久化且可撤销的 Desktop Bearer 会话；版本 117 增加作品离线授权、同步变更游标与幂等变更结果；版本 118 增加供应商分析请求超时配置；版本 119 记录分析任务是否由 API Key 创建。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 115;
+export const DATABASE_SCHEMA_VERSION = 119;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -188,6 +193,7 @@ export class Database {
         cover_url TEXT,
         tags_json TEXT NOT NULL DEFAULT '[]',
         is_internal INTEGER NOT NULL DEFAULT 0,
+        offline_access_enabled INTEGER NOT NULL DEFAULT 0 CHECK(offline_access_enabled IN (0, 1)),
         version_no INTEGER NOT NULL DEFAULT 1,
         deleted_at TEXT,
         created_at TEXT NOT NULL,
@@ -463,6 +469,7 @@ export class Database {
         connection_status TEXT NOT NULL DEFAULT 'unchecked',
         concurrency_limit INTEGER NOT NULL DEFAULT 10 CHECK(concurrency_limit BETWEEN 1 AND 100),
         rpm_limit INTEGER NOT NULL DEFAULT 10 CHECK(rpm_limit BETWEEN 1 AND 10000),
+        analysis_timeout_seconds INTEGER NOT NULL DEFAULT ${DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS} CHECK(analysis_timeout_seconds BETWEEN ${MIN_AI_ANALYSIS_TIMEOUT_SECONDS} AND ${MAX_AI_ANALYSIS_TIMEOUT_SECONDS}),
         daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 1),
         monthly_token_quota INTEGER CHECK(monthly_token_quota IS NULL OR monthly_token_quota >= 1),
         max_tokens INTEGER NOT NULL DEFAULT 32000 CHECK(max_tokens BETWEEN 1 AND 32768),
@@ -680,6 +687,7 @@ export class Database {
         attempt_count INTEGER NOT NULL DEFAULT 0,
         next_attempt_at TEXT,
         last_attempt_at TEXT,
+        created_via_api_key INTEGER NOT NULL DEFAULT 0 CHECK(created_via_api_key IN (0, 1)),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -4219,6 +4227,136 @@ export class Database {
           this.run("ALTER TABLE ai_conversations ADD COLUMN scene_pin_json TEXT NOT NULL DEFAULT '{}'");
         }
         this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (115, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const desktopSessionTablePresent = this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'user_desktop_sessions'"
+    ) !== undefined;
+    const desktopSessionIndexesPresent = [
+      "idx_user_desktop_sessions_token",
+      "idx_user_desktop_sessions_user",
+      "idx_user_desktop_sessions_active_profile"
+    ].every((index) => this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'index' AND name = ?",
+      index
+    ) !== undefined);
+    if (!applied.has(116) || !desktopSessionTablePresent || !desktopSessionIndexesPresent) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS user_desktop_sessions (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token_hash TEXT NOT NULL UNIQUE,
+          desktop_id TEXT NOT NULL,
+          profile_id TEXT NOT NULL,
+          client_version TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL,
+          revoked_at TEXT
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_user_desktop_sessions_token ON user_desktop_sessions(token_hash)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_user_desktop_sessions_user ON user_desktop_sessions(user_id, expires_at)");
+        this.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_desktop_sessions_active_profile
+          ON user_desktop_sessions(desktop_id, profile_id) WHERE revoked_at IS NULL`);
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (116, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const workOfflineAccessPresent = this.all("PRAGMA table_info(works)").some((row) => String(row.name) === "offline_access_enabled");
+    const syncChangesTablePresent = this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sync_changes'"
+    ) !== undefined;
+    const syncMutationResultsTablePresent = this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sync_mutation_results'"
+    ) !== undefined;
+    const syncIndexesPresent = [
+      "idx_sync_changes_work_cursor",
+      "idx_sync_changes_entity",
+      "idx_sync_mutation_results_client"
+    ].every((index) => this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'index' AND name = ?",
+      index
+    ) !== undefined);
+    if (!applied.has(117) || !workOfflineAccessPresent || !syncChangesTablePresent || !syncMutationResultsTablePresent || !syncIndexesPresent) {
+      this.transaction(() => {
+        const workColumns = new Set(this.all("PRAGMA table_info(works)").map((row) => String(row.name)));
+        if (!workColumns.has("offline_access_enabled")) {
+          this.run("ALTER TABLE works ADD COLUMN offline_access_enabled INTEGER NOT NULL DEFAULT 0 CHECK(offline_access_enabled IN (0, 1))");
+        }
+        this.run(`CREATE TABLE IF NOT EXISTS sync_changes (
+          cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          entity_type TEXT NOT NULL CHECK(entity_type IN ('chapter', 'setting')),
+          entity_id TEXT NOT NULL,
+          operation TEXT NOT NULL CHECK(operation IN ('upsert', 'delete')),
+          version_no INTEGER NOT NULL CHECK(version_no > 0),
+          changed_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          changed_at TEXT NOT NULL
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS sync_mutation_results (
+          mutation_id TEXT PRIMARY KEY,
+          client_id TEXT NOT NULL,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          request_hash TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('applied', 'conflict', 'rejected')),
+          applied_version_no INTEGER,
+          conflict_version_no INTEGER,
+          error_code TEXT,
+          result_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_sync_changes_work_cursor ON sync_changes(work_id, cursor)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON sync_changes(work_id, entity_type, entity_id, cursor)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_sync_mutation_results_client ON sync_mutation_results(client_id, user_id, work_id, created_at)");
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (117, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const providerAnalysisTimeoutPresent = this.all("PRAGMA table_info(providers)").some((row) => String(row.name) === "analysis_timeout_seconds");
+    if (!applied.has(118) || !providerAnalysisTimeoutPresent) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(providers)").map((row) => String(row.name)));
+        if (!columns.has("analysis_timeout_seconds")) {
+          this.run(`ALTER TABLE providers ADD COLUMN analysis_timeout_seconds INTEGER NOT NULL DEFAULT ${DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS}
+            CHECK(analysis_timeout_seconds BETWEEN ${MIN_AI_ANALYSIS_TIMEOUT_SECONDS} AND ${MAX_AI_ANALYSIS_TIMEOUT_SECONDS})`);
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (118, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const taskApiKeySourcePresent = this.all("PRAGMA table_info(analysis_tasks)")
+      .some((row) => String(row.name) === "created_via_api_key");
+    if (!applied.has(119) || !taskApiKeySourcePresent) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(analysis_tasks)").map((row) => String(row.name)));
+        if (!columns.has("created_via_api_key")) {
+          this.run(`ALTER TABLE analysis_tasks ADD COLUMN created_via_api_key INTEGER NOT NULL DEFAULT 0
+            CHECK(created_via_api_key IN (0, 1))`);
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (119, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
