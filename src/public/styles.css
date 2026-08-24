@@ -20,6 +20,7 @@
   --toast-fg: #fffefa;
   --toast-error-bg: #6e2e21;
   --toast-error-fg: #fffefa;
+  --failure-emphasis: #b54708;
   --relationship-card-border: #d9dfe8;
   --relationship-card-surface: #f4f6fa;
   --relationship-toolbar-surface: #f8fafc;
@@ -262,6 +263,7 @@
   --toast-fg: #fffefa;
   --toast-error-bg: #6e2e21;
   --toast-error-fg: #fffefa;
+  --failure-emphasis: #e06a28;
   --relationship-card-border: #1c1c24;
   --relationship-card-surface: #12121a;
   --relationship-toolbar-surface: #12121a;
@@ -1875,6 +1877,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-detail ul { margin: 6px 0 0; padding-left: 18px; }
 .task-detail-overview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 22px; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .task-detail-overview > div, .task-detail-overview > p:first-child, .task-detail-overview > p:last-child { grid-column: 1 / -1; }
+.task-detail-failures { color: var(--failure-emphasis); font-weight: 600; }
+.task-detail-failures li::marker { color: var(--failure-emphasis); }
 .task-detail-result {
   max-height: 220px;
   overflow: auto;

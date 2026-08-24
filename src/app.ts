@@ -1516,7 +1516,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     (task, actor) => {
       const requiredModules = analysisTaskReadModules(task.taskType, task.scope);
       const creator = actor ? null : database.get(
-        "SELECT created_by_user_id FROM analysis_tasks WHERE id = ?",
+        "SELECT created_by_user_id, created_via_api_key FROM analysis_tasks WHERE id = ?",
         String(task.id)
       );
       const userId = actor?.userId ?? (typeof creator?.created_by_user_id === "string" ? creator.created_by_user_id : null);
@@ -1526,7 +1526,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       auth.assertWorkAccess(user, String(task.workId), {
         read: requiredModules,
         write: ["ai-analysis"]
-      }, false, actor?.allowAdminAccess ?? false);
+      }, false, actor?.allowAdminAccess ?? (user.role === "admin" && Number(creator?.created_via_api_key) !== 1));
     },
     attachmentStorage,
     {

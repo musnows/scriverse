@@ -1882,6 +1882,33 @@ describe("数据库版本化迁移", () => {
     migrated.close();
   });
 
+  it("迁移 119 为既有分析任务补充 API Key 创建来源并保留数据", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-task-api-key-source-"));
+    roots.push(root);
+    const filename = join(root, "task-api-key-source.db");
+    const timestamp = "2026-08-24T00:00:00.000Z";
+    const current = new Database(filename);
+    current.run(
+      `INSERT INTO analysis_tasks (
+        id, work_id, task_type, scope_json, status, created_via_api_key, created_at, updated_at
+      ) VALUES ('task-api-key-source', '__scriverse_platform_ai__', 'book-analysis', '{}', 'pending', 1, ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.raw.exec("ALTER TABLE analysis_tasks DROP COLUMN created_via_api_key");
+    current.run("DELETE FROM schema_migrations WHERE version = 119");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT created_via_api_key FROM analysis_tasks WHERE id = 'task-api-key-source'")).toEqual({
+      created_via_api_key: 0
+    });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 119")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
   it("迁移 96 扩展思考强度约束并保留模型引用和删除触发器", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-extended-thinking-effort-"));
     roots.push(root);

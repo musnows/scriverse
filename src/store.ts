@@ -1485,7 +1485,7 @@ export class Store {
 
   listWorks(): Record<string, unknown>[] {
     const actor = currentRequestActor();
-    if (!actor || (actor.role === "admin" && actor.authentication !== "api-key")) {
+    if (!actor) {
       return this.mapWorks(this.db.all("SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 AND deleted_at IS NULL ORDER BY updated_at DESC"));
     }
     return this.mapWorks(this.db.all(
@@ -1501,7 +1501,7 @@ export class Store {
   listWorksPage(pagination: Pagination): PaginatedResult<Record<string, unknown>> {
     const actor = currentRequestActor();
     const page = paginationSql(pagination);
-    const rows = !actor || (actor.role === "admin" && actor.authentication !== "api-key")
+    const rows = !actor
       ? this.db.all(`SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 AND deleted_at IS NULL ORDER BY updated_at DESC${page.sql}`, ...page.params)
       : this.db.all(
         `SELECT DISTINCT work.* FROM works work LEFT JOIN work_memberships membership ON membership.work_id = work.id
@@ -1523,7 +1523,7 @@ export class Store {
 
   listDeletedWorks(): Record<string, unknown>[] {
     const actor = currentRequestActor();
-    const actorRestricted = Boolean(actor && !(actor.role === "admin" && actor.authentication !== "api-key"));
+    const actorRestricted = Boolean(actor);
     const rows = this.db.all(
       `SELECT work.*,
         (SELECT COUNT(*) FROM volumes volume WHERE volume.work_id = work.id) AS volume_count,
@@ -9880,9 +9880,10 @@ export class Store {
       if (targetCharacters.length > 0) scope.targetCharacters = targetCharacters;
     }
     const sourceVersions = this.analysisTaskSourceVersions(workId, scope);
+    const actor = currentRequestActor();
     this.db.run(
-      `INSERT INTO analysis_tasks (id, work_id, model_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id)
-       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+      `INSERT INTO analysis_tasks (id, work_id, model_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id, created_via_api_key)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
       taskId,
       workId,
       input.modelId ?? null,
@@ -9891,7 +9892,8 @@ export class Store {
       JSON.stringify(sourceVersions),
       timestamp,
       timestamp,
-      currentRequestActor()?.userId ?? null
+      actor?.userId ?? null,
+      actor?.authentication === "api-key" ? 1 : 0
     );
     this.audit(workId, "task.created", "analysis-task", taskId, {
       taskType: input.taskType,
