@@ -1576,6 +1576,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-card-heading h3 { min-width: 0; }
 .record-card.has-card-edit .character-card-heading { padding-right: 70px; }
 .record-card.has-card-edit .character-card-heading h3 { padding-right: 0; }
+.character-card.has-card-edit > .character-favorite-button, .character-card.has-card-edit > .record-card-edit { top: 21px; }
 .module-row .character-favorite-button { position: static; }
 .module-row .record-favorite-button { position: static; }
 .character-lock-badge { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; min-height: 20px; padding: 2px 6px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-dark); font-size: 9px; font-variant-numeric: tabular-nums; line-height: 1; }
@@ -4066,6 +4067,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .module-content { padding: 18px 0 56px; }
   .card-grid, .provider-card-grid { grid-template-columns: minmax(0, 1fr); }
   .record-card { padding: 15px; }
+  .character-card.has-card-edit > .character-favorite-button, .character-card.has-card-edit > .record-card-edit { top: 12px; }
   .card-actions, .task-row-actions, .module-header-actions { gap: 8px; }
   .card-actions button, .task-row-actions button { flex: 1 1 auto; min-height: 38px; }
   .setting-row, .module-row { padding: 13px; }

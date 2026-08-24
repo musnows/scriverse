@@ -36,7 +36,10 @@ describe("角色头像界面", () => {
     expect(application.text).toContain('toast("角色头像已更新")');
     expect(styles.text).toContain(".character-avatar {");
     expect(styles.text).toContain(".character-avatar-settings {");
+    expect(styles.text).toContain(".character-card.has-card-edit > .character-favorite-button, .character-card.has-card-edit > .record-card-edit { top: 21px; }");
+    expect(styles.text).toContain(".character-card.has-card-edit > .character-favorite-button, .character-card.has-card-edit > .record-card-edit { top: 12px; }");
     expect(page.text).toContain('id="avatar-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp"');
     expect(page.text).toContain("feature=character-avatar-v6");
+    expect(page.text).toContain("feature=character-card-header-alignment-v3");
   });
 });
