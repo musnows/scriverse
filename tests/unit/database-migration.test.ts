@@ -88,6 +88,24 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA index_list(drafts)").some((index) => index.name === "idx_drafts_favorite")).toBe(true);
     expect(first.all("PRAGMA index_list(settings)").some((index) => index.name === "idx_settings_favorite")).toBe(true);
     expect(first.all("PRAGMA index_list(organizations)").some((index) => index.name === "idx_organizations_favorite")).toBe(true);
+    expect(first.all("PRAGMA table_info(work_entity_favorites)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "work_id",
+      "entity_type",
+      "entity_id",
+      "user_id",
+      "is_favorite",
+      "updated_at"
+    ]));
+    expect(first.all("PRAGMA table_info(work_entity_pins)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "work_id",
+      "entity_type",
+      "entity_id",
+      "is_pinned",
+      "pinned_by_user_id",
+      "updated_at"
+    ]));
+    expect(first.all("PRAGMA index_list(work_entity_favorites)").some((index) => index.name === "idx_work_entity_favorites_user")).toBe(true);
+    expect(first.all("PRAGMA index_list(work_entity_pins)").some((index) => index.name === "idx_work_entity_pins_entity")).toBe(true);
     expect(first.all("PRAGMA table_info(user_desktop_sessions)").map((column) => column.name)).toEqual(expect.arrayContaining([
       "id",
       "user_id",

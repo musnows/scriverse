@@ -2294,6 +2294,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
     data(response, store.setDraftFavorite(request.params.draftId, input.isFavorite));
   });
+  app.patch("/api/drafts/:draftId/pin", (request, response) => {
+    const input = parse(z.object({ isPinned: z.boolean() }).strict(), request.body);
+    data(response, store.setDraftPin(request.params.draftId, input.isPinned));
+  });
   app.patch("/api/drafts/:draftId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(draftSchema.partial().extend({
       changeNote: changeNoteSchema,
@@ -2321,6 +2325,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/settings/:settingId/favorite", (request, response) => {
     const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
     const setting = store.setSettingFavorite(request.params.settingId, input.isFavorite);
+    publishEntityChange(String(setting.workId), "setting", String(setting.id));
+    data(response, setting);
+  });
+  app.patch("/api/settings/:settingId/pin", (request, response) => {
+    const input = parse(z.object({ isPinned: z.boolean() }).strict(), request.body);
+    const setting = store.setSettingPin(request.params.settingId, input.isPinned);
     publishEntityChange(String(setting.workId), "setting", String(setting.id));
     data(response, setting);
   });
@@ -2411,6 +2421,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/characters/:characterId/favorite", (request, response) => {
     const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
     const character = store.setCharacterFavorite(request.params.characterId, input.isFavorite);
+    publishEntityChange(String(character.workId), "character", String(character.id));
+    data(response, redactCharacterLinks(character, requestPermissions(request)));
+  });
+  app.patch("/api/characters/:characterId/pin", (request, response) => {
+    const input = parse(z.object({ isPinned: z.boolean() }).strict(), request.body);
+    const character = store.setCharacterPin(request.params.characterId, input.isPinned);
     publishEntityChange(String(character.workId), "character", String(character.id));
     data(response, redactCharacterLinks(character, requestPermissions(request)));
   });
@@ -2638,6 +2654,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/organizations/:organizationId/favorite", (request, response) => {
     const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
     const organization = store.setOrganizationFavorite(request.params.organizationId, input.isFavorite);
+    publishEntityChange(String(organization.workId), "organization", String(organization.id));
+    data(response, redactOrganizationMembers(organization, requestPermissions(request)));
+  });
+  app.patch("/api/organizations/:organizationId/pin", (request, response) => {
+    const input = parse(z.object({ isPinned: z.boolean() }).strict(), request.body);
+    const organization = store.setOrganizationPin(request.params.organizationId, input.isPinned);
     publishEntityChange(String(organization.workId), "organization", String(organization.id));
     data(response, redactOrganizationMembers(organization, requestPermissions(request)));
   });

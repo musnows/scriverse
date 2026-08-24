@@ -559,6 +559,16 @@ export const versionedEntityTypes = [
 
 export type VersionedEntityType = typeof versionedEntityTypes[number];
 
+const bookEntityTypes = ["character", "draft", "setting", "organization"] as const;
+type BookEntityType = typeof bookEntityTypes[number];
+
+const legacyFavoriteTables: Record<BookEntityType, string> = {
+  character: "characters",
+  draft: "drafts",
+  setting: "settings",
+  organization: "organizations"
+};
+
 type ReviewInput = {
   itemType: string;
   dedupeKey?: string;
@@ -890,6 +900,128 @@ export class Store {
   constructor(readonly db: Database) {
     this.migrateEntityVersionBaselines();
     this.purgeExpiredRecycleBin();
+  }
+
+  private entityPreferenceProjection(entityType: BookEntityType, alias: string): {
+    columns: string;
+    orderBy: string;
+    params: SQLInputValue[];
+  } {
+    const actor = currentRequestActor();
+    if (!actor) {
+      return {
+        columns: `${alias}.is_favorite AS user_is_favorite,
+          EXISTS (
+            SELECT 1 FROM work_entity_pins pin
+            WHERE pin.work_id = ${alias}.work_id
+              AND pin.entity_type = '${entityType}'
+              AND pin.entity_id = ${alias}.id
+              AND pin.is_pinned = 1
+          ) AS is_pinned`,
+        orderBy: "is_pinned DESC, user_is_favorite DESC",
+        params: []
+      };
+    }
+    return {
+      columns: `
+        EXISTS (
+          SELECT 1 FROM work_entity_favorites favorite
+          WHERE favorite.work_id = ${alias}.work_id
+            AND favorite.entity_type = '${entityType}'
+            AND favorite.entity_id = ${alias}.id
+            AND favorite.user_id = ?
+            AND favorite.is_favorite = 1
+        ) AS user_is_favorite,
+        EXISTS (
+          SELECT 1 FROM work_entity_pins pin
+          WHERE pin.work_id = ${alias}.work_id
+            AND pin.entity_type = '${entityType}'
+            AND pin.entity_id = ${alias}.id
+            AND pin.is_pinned = 1
+        ) AS is_pinned`,
+      orderBy: "is_pinned DESC, user_is_favorite DESC",
+      params: [actor.userId]
+    };
+  }
+
+  private mapEntityFavorite(row: Row): boolean {
+    return Object.hasOwn(row, "user_is_favorite")
+      ? booleanValue(row, "user_is_favorite")
+      : booleanValue(row, "is_favorite");
+  }
+
+  private mapEntityPin(row: Row): boolean {
+    return booleanValue(row, "is_pinned");
+  }
+
+  private setEntityFavorite(
+    workId: string,
+    entityType: BookEntityType,
+    entityId: string,
+    isFavorite: boolean,
+    legacyFavorite: boolean
+  ): boolean {
+    const actor = currentRequestActor();
+    const previousFavorite = actor
+      ? this.db.get(
+        "SELECT is_favorite FROM work_entity_favorites WHERE work_id = ? AND entity_type = ? AND entity_id = ? AND user_id = ?",
+        workId,
+        entityType,
+        entityId,
+        actor.userId
+      )
+      : undefined;
+    const previous = actor ? booleanValue(previousFavorite ?? {}, "is_favorite") : legacyFavorite;
+    if (previous === isFavorite) return previous;
+    const timestamp = now();
+    if (actor) {
+      this.db.run(
+        `INSERT INTO work_entity_favorites (work_id, entity_type, entity_id, user_id, is_favorite, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(work_id, entity_type, entity_id, user_id)
+         DO UPDATE SET is_favorite = excluded.is_favorite, updated_at = excluded.updated_at`,
+        workId,
+        entityType,
+        entityId,
+        actor.userId,
+        isFavorite ? 1 : 0,
+        timestamp,
+        timestamp
+      );
+    } else {
+      this.db.run(
+        `UPDATE ${legacyFavoriteTables[entityType]} SET is_favorite = ? WHERE id = ?`,
+        isFavorite ? 1 : 0,
+        entityId
+      );
+    }
+    return previous;
+  }
+
+  private setEntityPin(workId: string, entityType: BookEntityType, entityId: string, isPinned: boolean): boolean {
+    const previousPin = this.db.get(
+      "SELECT is_pinned FROM work_entity_pins WHERE work_id = ? AND entity_type = ? AND entity_id = ?",
+      workId,
+      entityType,
+      entityId
+    );
+    const previous = booleanValue(previousPin ?? {}, "is_pinned");
+    if (previous === isPinned) return previous;
+    const timestamp = now();
+    this.db.run(
+      `INSERT INTO work_entity_pins (work_id, entity_type, entity_id, is_pinned, pinned_by_user_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(work_id, entity_type, entity_id)
+       DO UPDATE SET is_pinned = excluded.is_pinned, pinned_by_user_id = excluded.pinned_by_user_id, updated_at = excluded.updated_at`,
+      workId,
+      entityType,
+      entityId,
+      isPinned ? 1 : 0,
+      currentRequestActor()?.userId ?? null,
+      timestamp,
+      timestamp
+    );
+    return previous;
   }
 
   purgeExpiredRecycleBin(referenceTime = new Date()): { works: number; volumes: number; chapters: number } {
@@ -5323,11 +5455,13 @@ export class Store {
 
   listDrafts(workId: string, draftType?: "prose" | "setting", includeContent = false): Record<string, unknown>[] {
     this.getWork(workId);
+    const preferences = this.entityPreferenceProjection("draft", "draft");
     return this.db.all(
-      `SELECT draft.*, volume.title AS volume_title FROM drafts draft
+      `SELECT draft.*, volume.title AS volume_title, ${preferences.columns} FROM drafts draft
        LEFT JOIN volumes volume ON volume.id = draft.volume_id
        WHERE draft.work_id = ? AND (? IS NULL OR draft.draft_type = ?)
-       ORDER BY draft.is_favorite DESC, draft.updated_at DESC, draft.title`,
+       ORDER BY ${preferences.orderBy}, draft.updated_at DESC, draft.title`,
+      ...preferences.params,
       workId,
       draftType ?? null,
       draftType ?? null
@@ -5341,12 +5475,14 @@ export class Store {
     includeContent = false
   ): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
+    const preferences = this.entityPreferenceProjection("draft", "draft");
     const page = paginationSql(pagination);
     const rows = this.db.all(
-      `SELECT draft.*, volume.title AS volume_title FROM drafts draft
+      `SELECT draft.*, volume.title AS volume_title, ${preferences.columns} FROM drafts draft
        LEFT JOIN volumes volume ON volume.id = draft.volume_id
        WHERE draft.work_id = ? AND (? IS NULL OR draft.draft_type = ?)
-       ORDER BY draft.is_favorite DESC, draft.updated_at DESC, draft.title${page.sql}`,
+       ORDER BY ${preferences.orderBy}, draft.updated_at DESC, draft.title${page.sql}`,
+      ...preferences.params,
       workId,
       draftType ?? null,
       draftType ?? null,
@@ -5366,14 +5502,16 @@ export class Store {
     const normalizedQuery = query.normalize("NFKC").trim();
     const escapedQuery = escapeSqlLikePattern(normalizedQuery);
     const pattern = `%${escapedQuery}%`;
+    const preferences = this.entityPreferenceProjection("draft", "draft");
     const rows = normalizedQuery
       ? this.db.all(
-          `SELECT draft.*, volume.title AS volume_title FROM drafts draft
+          `SELECT draft.*, volume.title AS volume_title, ${preferences.columns} FROM drafts draft
            LEFT JOIN volumes volume ON volume.id = draft.volume_id
            WHERE draft.work_id = ? AND (? IS NULL OR draft.draft_type = ?)
              AND (draft.title LIKE ? ESCAPE '\\' COLLATE NOCASE OR draft.content LIKE ? ESCAPE '\\' COLLATE NOCASE)
-           ORDER BY CASE WHEN draft.title LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, draft.updated_at DESC
+           ORDER BY ${preferences.orderBy}, CASE WHEN draft.title LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, draft.updated_at DESC
            LIMIT ?`,
+          ...preferences.params,
           workId,
           draftType ?? null,
           draftType ?? null,
@@ -5383,10 +5521,11 @@ export class Store {
           safeLimit
         )
       : this.db.all(
-          `SELECT draft.*, volume.title AS volume_title FROM drafts draft
+          `SELECT draft.*, volume.title AS volume_title, ${preferences.columns} FROM drafts draft
            LEFT JOIN volumes volume ON volume.id = draft.volume_id
            WHERE draft.work_id = ? AND (? IS NULL OR draft.draft_type = ?)
-           ORDER BY draft.updated_at DESC, draft.title LIMIT ?`,
+           ORDER BY ${preferences.orderBy}, draft.updated_at DESC, draft.title LIMIT ?`,
+          ...preferences.params,
           workId,
           draftType ?? null,
           draftType ?? null,
@@ -5396,9 +5535,11 @@ export class Store {
   }
 
   getDraft(draftId: string): Record<string, unknown> {
+    const preferences = this.entityPreferenceProjection("draft", "draft");
     const row = this.db.get(
-      `SELECT draft.*, volume.title AS volume_title FROM drafts draft
+      `SELECT draft.*, volume.title AS volume_title, ${preferences.columns} FROM drafts draft
        LEFT JOIN volumes volume ON volume.id = draft.volume_id WHERE draft.id = ?`,
+      ...preferences.params,
       draftId
     );
     if (!row) throw notFound("想法");
@@ -5409,13 +5550,30 @@ export class Store {
     const draft = this.db.get("SELECT id, work_id, is_favorite FROM drafts WHERE id = ?", draftId);
     if (!draft) throw notFound("想法");
     const workId = requiredString(draft, "work_id");
-    const previousFavorite = booleanValue(draft, "is_favorite");
     this.db.transaction(() => {
-      this.db.run("UPDATE drafts SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, draftId);
-      this.audit(workId, "draft.favorite-updated", "draft", draftId, {
-        previousFavorite,
-        isFavorite
-      });
+      const previousFavorite = this.setEntityFavorite(workId, "draft", draftId, isFavorite, booleanValue(draft, "is_favorite"));
+      if (previousFavorite !== isFavorite) {
+        this.audit(workId, "draft.favorite-updated", "draft", draftId, {
+          previousFavorite,
+          isFavorite
+        });
+      }
+    });
+    return this.getDraft(draftId);
+  }
+
+  setDraftPin(draftId: string, isPinned: boolean): Record<string, unknown> {
+    const draft = this.db.get("SELECT id, work_id FROM drafts WHERE id = ?", draftId);
+    if (!draft) throw notFound("想法");
+    const workId = requiredString(draft, "work_id");
+    this.db.transaction(() => {
+      const previousPin = this.setEntityPin(workId, "draft", draftId, isPinned);
+      if (previousPin !== isPinned) {
+        this.audit(workId, "draft.pin-updated", "draft", draftId, {
+          previousPin,
+          isPinned
+        });
+      }
     });
     return this.getDraft(draftId);
   }
@@ -5476,7 +5634,8 @@ export class Store {
       volumeTitle: optionalString(row, "volume_title"),
       settingModule: optionalString(row, "setting_module"),
       title: requiredString(row, "title"),
-      isFavorite: booleanValue(row, "is_favorite"),
+      isFavorite: this.mapEntityFavorite(row),
+      isPinned: this.mapEntityPin(row),
       ...(includeContent ? { content } : { contentPreview: content.replace(/\s+/gu, " ").trim().slice(0, 320) }),
       versionNo: this.currentEntityVersionNo("draft", requiredString(row, "id")),
       createdAt: requiredString(row, "created_at"),
@@ -5581,18 +5740,21 @@ export class Store {
 
   listSettings(workId: string, includeContent = true): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM settings WHERE work_id = ? ORDER BY is_favorite DESC, locked DESC, category, title", workId).map((row) => this.mapSetting(row, includeContent));
+    const preferences = this.entityPreferenceProjection("setting", "setting");
+    return this.db.all(`SELECT setting.*, ${preferences.columns} FROM settings setting WHERE setting.work_id = ? ORDER BY ${preferences.orderBy}, setting.locked DESC, setting.category, setting.title`, ...preferences.params, workId).map((row) => this.mapSetting(row, includeContent));
   }
 
   listSettingsPage(workId: string, pagination: Pagination, includeContent = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
+    const preferences = this.entityPreferenceProjection("setting", "setting");
     const page = paginationSql(pagination);
-    const rows = this.db.all(`SELECT * FROM settings WHERE work_id = ? ORDER BY is_favorite DESC, locked DESC, category, title${page.sql}`, workId, ...page.params);
+    const rows = this.db.all(`SELECT setting.*, ${preferences.columns} FROM settings setting WHERE setting.work_id = ? ORDER BY ${preferences.orderBy}, setting.locked DESC, setting.category, setting.title${page.sql}`, ...preferences.params, workId, ...page.params);
     return paginated(rows.map((row) => this.mapSetting(row, includeContent)), pagination);
   }
 
   getSetting(settingId: string): Record<string, unknown> {
-    const row = this.db.get("SELECT * FROM settings WHERE id = ?", settingId);
+    const preferences = this.entityPreferenceProjection("setting", "setting");
+    const row = this.db.get(`SELECT setting.*, ${preferences.columns} FROM settings setting WHERE setting.id = ?`, ...preferences.params, settingId);
     if (!row) throw notFound("设定");
     return this.mapSetting(row);
   }
@@ -5601,13 +5763,30 @@ export class Store {
     const setting = this.db.get("SELECT id, work_id, is_favorite FROM settings WHERE id = ?", settingId);
     if (!setting) throw notFound("设定");
     const workId = requiredString(setting, "work_id");
-    const previousFavorite = booleanValue(setting, "is_favorite");
     this.db.transaction(() => {
-      this.db.run("UPDATE settings SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, settingId);
-      this.audit(workId, "setting.favorite-updated", "setting", settingId, {
-        previousFavorite,
-        isFavorite
-      });
+      const previousFavorite = this.setEntityFavorite(workId, "setting", settingId, isFavorite, booleanValue(setting, "is_favorite"));
+      if (previousFavorite !== isFavorite) {
+        this.audit(workId, "setting.favorite-updated", "setting", settingId, {
+          previousFavorite,
+          isFavorite
+        });
+      }
+    });
+    return this.getSetting(settingId);
+  }
+
+  setSettingPin(settingId: string, isPinned: boolean): Record<string, unknown> {
+    const setting = this.db.get("SELECT id, work_id FROM settings WHERE id = ?", settingId);
+    if (!setting) throw notFound("设定");
+    const workId = requiredString(setting, "work_id");
+    this.db.transaction(() => {
+      const previousPin = this.setEntityPin(workId, "setting", settingId, isPinned);
+      if (previousPin !== isPinned) {
+        this.audit(workId, "setting.pin-updated", "setting", settingId, {
+          previousPin,
+          isPinned
+        });
+      }
     });
     return this.getSetting(settingId);
   }
@@ -5668,7 +5847,8 @@ export class Store {
       tags: json(requiredString(row, "tags_json"), []),
       status: requiredString(row, "status"),
       locked: booleanValue(row, "locked"),
-      isFavorite: booleanValue(row, "is_favorite"),
+      isFavorite: this.mapEntityFavorite(row),
+      isPinned: this.mapEntityPin(row),
       evidence: json(requiredString(row, "evidence_json"), []),
       scope: json(requiredString(row, "scope_json"), {}),
       authorNote: requiredString(row, "author_note"),
@@ -6064,21 +6244,24 @@ export class Store {
 
   listOrganizations(workId: string, includeMarkdown = true): Record<string, unknown>[] {
     this.getWork(workId);
-    const rows = this.db.all("SELECT * FROM organizations WHERE work_id = ? ORDER BY is_favorite DESC, name", workId);
+    const preferences = this.entityPreferenceProjection("organization", "organization");
+    const rows = this.db.all(`SELECT organization.*, ${preferences.columns} FROM organizations organization WHERE organization.work_id = ? ORDER BY ${preferences.orderBy}, organization.name`, ...preferences.params, workId);
     const batch = this.organizationListBatch(rows);
     return rows.map((row) => this.mapOrganization(row, includeMarkdown, batch));
   }
 
   listOrganizationsPage(workId: string, pagination: Pagination, includeMarkdown = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
+    const preferences = this.entityPreferenceProjection("organization", "organization");
     const page = paginationSql(pagination);
-    const rows = this.db.all(`SELECT * FROM organizations WHERE work_id = ? ORDER BY is_favorite DESC, name${page.sql}`, workId, ...page.params);
+    const rows = this.db.all(`SELECT organization.*, ${preferences.columns} FROM organizations organization WHERE organization.work_id = ? ORDER BY ${preferences.orderBy}, organization.name${page.sql}`, ...preferences.params, workId, ...page.params);
     const batch = this.organizationListBatch(rows);
     return paginated(rows.map((row) => this.mapOrganization(row, includeMarkdown, batch)), pagination);
   }
 
   getOrganization(organizationId: string): Record<string, unknown> {
-    const row = this.db.get("SELECT * FROM organizations WHERE id = ?", organizationId);
+    const preferences = this.entityPreferenceProjection("organization", "organization");
+    const row = this.db.get(`SELECT organization.*, ${preferences.columns} FROM organizations organization WHERE organization.id = ?`, ...preferences.params, organizationId);
     if (!row) throw notFound("组织");
     return this.mapOrganization(row);
   }
@@ -6087,13 +6270,30 @@ export class Store {
     const organization = this.db.get("SELECT id, work_id, is_favorite FROM organizations WHERE id = ?", organizationId);
     if (!organization) throw notFound("组织");
     const workId = requiredString(organization, "work_id");
-    const previousFavorite = booleanValue(organization, "is_favorite");
     this.db.transaction(() => {
-      this.db.run("UPDATE organizations SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, organizationId);
-      this.audit(workId, "organization.favorite-updated", "organization", organizationId, {
-        previousFavorite,
-        isFavorite
-      });
+      const previousFavorite = this.setEntityFavorite(workId, "organization", organizationId, isFavorite, booleanValue(organization, "is_favorite"));
+      if (previousFavorite !== isFavorite) {
+        this.audit(workId, "organization.favorite-updated", "organization", organizationId, {
+          previousFavorite,
+          isFavorite
+        });
+      }
+    });
+    return this.getOrganization(organizationId);
+  }
+
+  setOrganizationPin(organizationId: string, isPinned: boolean): Record<string, unknown> {
+    const organization = this.db.get("SELECT id, work_id FROM organizations WHERE id = ?", organizationId);
+    if (!organization) throw notFound("组织");
+    const workId = requiredString(organization, "work_id");
+    this.db.transaction(() => {
+      const previousPin = this.setEntityPin(workId, "organization", organizationId, isPinned);
+      if (previousPin !== isPinned) {
+        this.audit(workId, "organization.pin-updated", "organization", organizationId, {
+          previousPin,
+          isPinned
+        });
+      }
     });
     return this.getOrganization(organizationId);
   }
@@ -6270,7 +6470,8 @@ export class Store {
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
       isDissolved: booleanValue(row, "is_dissolved"),
-      isFavorite: booleanValue(row, "is_favorite"),
+      isFavorite: this.mapEntityFavorite(row),
+      isPinned: this.mapEntityPin(row),
       ...(includeMarkdown
         ? { settings, settingsMarkdown: settingsMarkdownFromList(settings), settingsSections }
         : { settings: [], settingsCount: settingsSections.length }),
@@ -6459,8 +6660,10 @@ export class Store {
 
   listCharacters(workId: string, includeProfileSections = false, includeMerged = false, includeRaceMarkdown = true): Record<string, unknown>[] {
     this.getWork(workId);
+    const preferences = this.entityPreferenceProjection("character", "character");
     return this.db.all(
-      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY is_favorite DESC, name`,
+      `SELECT character.*, ${preferences.columns} FROM characters character WHERE character.work_id = ?${includeMerged ? "" : " AND character.merged_into_character_id IS NULL"} ORDER BY ${preferences.orderBy}, character.name`,
+      ...preferences.params,
       workId
     )
       .map((row) => this.mapCharacter(row, includeProfileSections, includeRaceMarkdown));
@@ -6468,13 +6671,15 @@ export class Store {
 
   listCharactersPage(workId: string, pagination: Pagination, includeProfileSections = false, includeMerged = false, includeRaceMarkdown = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
+    const preferences = this.entityPreferenceProjection("character", "character");
     const page = paginationSql(pagination);
     const count = this.db.get(
       `SELECT COUNT(*) AS count FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"}`,
       workId
     );
     const rows = this.db.all(
-      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY is_favorite DESC, name${page.sql}`,
+      `SELECT character.*, ${preferences.columns} FROM characters character WHERE character.work_id = ?${includeMerged ? "" : " AND character.merged_into_character_id IS NULL"} ORDER BY ${preferences.orderBy}, character.name${page.sql}`,
+      ...preferences.params,
       workId,
       ...page.params
     );
@@ -7163,7 +7368,8 @@ export class Store {
   }
 
   getCharacter(characterId: string): Record<string, unknown> {
-    const row = this.db.get("SELECT * FROM characters WHERE id = ?", characterId);
+    const preferences = this.entityPreferenceProjection("character", "character");
+    const row = this.db.get(`SELECT character.*, ${preferences.columns} FROM characters character WHERE character.id = ?`, ...preferences.params, characterId);
     if (!row) throw notFound("角色");
     return this.mapCharacter(row);
   }
@@ -7175,14 +7381,33 @@ export class Store {
       throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能收藏");
     }
     const workId = requiredString(character, "work_id");
-    const previousFavorite = booleanValue(character, "is_favorite");
-    if (previousFavorite === isFavorite) return this.getCharacter(characterId);
     this.db.transaction(() => {
-      this.db.run("UPDATE characters SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, characterId);
-      this.audit(workId, "character.favorite-updated", "character", characterId, {
-        previousFavorite,
-        isFavorite
-      });
+      const previousFavorite = this.setEntityFavorite(workId, "character", characterId, isFavorite, booleanValue(character, "is_favorite"));
+      if (previousFavorite !== isFavorite) {
+        this.audit(workId, "character.favorite-updated", "character", characterId, {
+          previousFavorite,
+          isFavorite
+        });
+      }
+    });
+    return this.getCharacter(characterId);
+  }
+
+  setCharacterPin(characterId: string, isPinned: boolean): Record<string, unknown> {
+    const character = this.db.get("SELECT id, work_id, merged_into_character_id FROM characters WHERE id = ?", characterId);
+    if (!character) throw notFound("角色");
+    if (optionalString(character, "merged_into_character_id")) {
+      throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能置顶");
+    }
+    const workId = requiredString(character, "work_id");
+    this.db.transaction(() => {
+      const previousPin = this.setEntityPin(workId, "character", characterId, isPinned);
+      if (previousPin !== isPinned) {
+        this.audit(workId, "character.pin-updated", "character", characterId, {
+          previousPin,
+          isPinned
+        });
+      }
     });
     return this.getCharacter(characterId);
   }
@@ -7550,7 +7775,8 @@ export class Store {
       profileSectionCount,
       currentState: json(requiredString(row, "current_state_json"), {}),
       isDead: booleanValue(row, "is_dead"),
-      isFavorite: booleanValue(row, "is_favorite"),
+      isFavorite: this.mapEntityFavorite(row),
+      isPinned: this.mapEntityPin(row),
       avatarUrl: avatarSha256
         ? `/api/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
         : null,

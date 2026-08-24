@@ -1517,9 +1517,16 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .record-card { position: relative; border: 1px solid var(--line); background: var(--surface-soft); padding: 18px; min-height: 130px; border-radius: 4px; }
 .record-card.has-card-edit h3 { padding-right: 34px; }
 .record-card.has-favorite-control h3 { padding-right: 70px; }
+.record-card.has-pin-control h3 { padding-right: 106px; }
 .record-card-edit { position: absolute; top: 12px; right: 12px; display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); }
 .record-card-edit:hover, .record-card-edit:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: none; }
 .record-card-edit svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.character-pin-button { position: absolute; top: 12px; right: 84px; display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); }
+.character-pin-button:hover, .character-pin-button:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: none; }
+.character-pin-button.is-pinned { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); }
+.character-pin-button:disabled { cursor: not-allowed; opacity: .5; }
+.character-pin-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
+.character-pin-button.is-pinned svg { fill: currentColor; }
 .character-favorite-button { position: absolute; top: 12px; right: 48px; display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); }
 .character-favorite-button:hover, .character-favorite-button:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: none; }
 .character-favorite-button.is-favorite { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); }
@@ -1533,12 +1540,25 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .record-favorite-button:disabled { cursor: not-allowed; opacity: .5; }
 .record-favorite-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
 .record-favorite-button.is-favorite svg { fill: currentColor; }
+.record-pin-button { display: inline-grid; flex: 0 0 auto; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); }
+.record-pin-button.is-card-control { position: absolute; top: 12px; right: 84px; }
+.record-pin-button:hover, .record-pin-button:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: none; }
+.record-pin-button.is-pinned { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); }
+.record-pin-button:disabled { cursor: not-allowed; opacity: .5; }
+.record-pin-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
+.record-pin-button.is-pinned svg { fill: currentColor; }
 .entity-detail-favorite-button { display: inline-grid; flex: 0 0 36px; place-items: center; width: 36px; min-width: 36px; height: 36px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); }
 .entity-detail-favorite-button:hover, .entity-detail-favorite-button:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: none; }
 .entity-detail-favorite-button.is-favorite { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); }
 .entity-detail-favorite-button:disabled { cursor: not-allowed; opacity: .5; }
 .entity-detail-favorite-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
 .entity-detail-favorite-button.is-favorite svg { fill: currentColor; }
+.entity-detail-pin-button { display: inline-grid; flex: 0 0 36px; place-items: center; width: 36px; min-width: 36px; height: 36px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); }
+.entity-detail-pin-button:hover, .entity-detail-pin-button:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: none; }
+.entity-detail-pin-button.is-pinned { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); }
+.entity-detail-pin-button:disabled { cursor: not-allowed; opacity: .5; }
+.entity-detail-pin-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
+.entity-detail-pin-button.is-pinned svg { fill: currentColor; }
 .record-card h3 { font-size: 16px; margin: 5px 0 10px; font-weight: 600; }
 .record-card p { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 0; white-space: pre-wrap; }
 .record-card small { color: var(--accent); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
@@ -1575,9 +1595,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-card-heading .character-avatar { width: 32px; height: 32px; font-size: 12px; }
 .character-card-heading h3 { min-width: 0; }
 .record-card.has-card-edit .character-card-heading { padding-right: 70px; }
+.record-card.has-card-edit.has-pin-control .character-card-heading { padding-right: 106px; }
 .record-card.has-card-edit .character-card-heading h3 { padding-right: 0; }
 .module-row .character-favorite-button { position: static; }
+.module-row .character-pin-button { position: static; }
 .module-row .record-favorite-button { position: static; }
+.module-row .record-pin-button { position: static; }
 .character-lock-badge { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; min-height: 20px; padding: 2px 6px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-dark); font-size: 9px; font-variant-numeric: tabular-nums; line-height: 1; }
 .entity-lifecycle-badge { display: inline-flex; align-items: center; min-height: 20px; margin-left: 7px; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--accent) 58%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 13%, var(--surface)); color: var(--accent-dark); font-size: 9px; font-weight: 650; line-height: 1; vertical-align: middle; white-space: nowrap; }
 .character-lock-badge svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
@@ -4152,8 +4175,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .entity-editor-header, .character-editor-header { grid-template-columns: auto minmax(0, 1fr); gap: 8px; padding: 12px var(--mobile-gutter); }
   .entity-editor-mode-actions, .character-editor-header-actions { grid-column: 1 / -1; justify-content: stretch; flex-wrap: wrap; }
   .entity-editor-mode-actions > button, .character-editor-header-actions > button { flex: 1 1 auto; }
-  .entity-editor-mode-actions > .entity-detail-favorite-button, .character-editor-header-actions > .entity-detail-favorite-button { flex: 0 0 40px; width: 40px; min-width: 40px; height: 40px; }
-  .dialog-context-actions .entity-detail-favorite-button { flex-basis: 40px; width: 40px; min-width: 40px; height: 40px; }
+  .entity-editor-mode-actions > .entity-detail-favorite-button, .entity-editor-mode-actions > .entity-detail-pin-button, .character-editor-header-actions > .entity-detail-favorite-button, .character-editor-header-actions > .entity-detail-pin-button { flex: 0 0 40px; width: 40px; min-width: 40px; height: 40px; }
+  .dialog-context-actions .entity-detail-favorite-button, .dialog-context-actions .entity-detail-pin-button { flex-basis: 40px; width: 40px; min-width: 40px; height: 40px; }
   .setting-editor-header { min-height: 0; }
   .setting-editor-content { padding: 12px; }
   .setting-markdown-field { height: 68dvh; }

@@ -19,7 +19,9 @@ describe("AI 角色扮演界面", () => {
     expect(page).toContain("feature=ai-relationship-roleplay-v1");
     expect(page).toContain("feature=ai-roleplay-story-recall-v1");
     expect(application).toContain("function roleplayCharacterOptionLabel(character)");
-    expect(application).toContain('const favoriteLabel = character?.isFavorite === true ? "[已收藏] " : "";');
+    expect(application).toContain('const pinLabel = character?.isPinned === true ? "[置顶]" : "";');
+    expect(application).toContain('const favoriteLabel = character?.isFavorite === true ? "[收藏]" : "";');
+    expect(application).toContain('return `${pinLabel}${favoriteLabel}${pinLabel || favoriteLabel ? " " : ""}${String(character?.name ?? "")}${deathLabel}`;');
     expect(application).toContain("输入对 ${String(state.aiRoleplayCharacter.name)} 说的台词或行动……");
     expect(application).toContain("以 ${String(state.aiRoleplayUserCharacter.name)} 的身份输入台词或行动……");
     expect(application).toContain("/roleplay`");
