@@ -1594,10 +1594,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-card-heading { display: flex; min-width: 0; align-items: center; gap: 7px; }
 .character-card-heading .character-avatar { width: 32px; height: 32px; font-size: 12px; }
 .character-card-heading h3 { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
-.record-card.has-card-edit .character-card-heading { padding-right: 70px; }
+.record-card.has-card-edit .character-card-heading { padding-right: 70px; transform: translateY(-3px); }
 .record-card.has-card-edit.has-pin-control .character-card-heading { padding-right: 106px; }
 .record-card.has-card-edit .character-card-heading h3 { padding-right: 0; }
-.character-card.has-card-edit > .character-pin-button, .character-card.has-card-edit > .character-favorite-button, .character-card.has-card-edit > .record-card-edit { top: 21px; }
+.character-card.has-card-edit > .character-pin-button, .character-card.has-card-edit > .character-favorite-button, .character-card.has-card-edit > .record-card-edit { top: 18px; }
 .module-row .character-favorite-button { position: static; }
 .module-row .character-pin-button { position: static; }
 .module-row .record-favorite-button { position: static; }
@@ -4103,7 +4103,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .module-content { padding: 18px 0 56px; }
   .card-grid, .provider-card-grid { grid-template-columns: minmax(0, 1fr); }
   .record-card { padding: 15px; }
-  .character-card.has-card-edit > .character-pin-button, .character-card.has-card-edit > .character-favorite-button, .character-card.has-card-edit > .record-card-edit { top: 11px; }
+  .character-card.has-card-edit > .character-pin-button, .character-card.has-card-edit > .character-favorite-button, .character-card.has-card-edit > .record-card-edit { top: 8px; }
   .card-actions, .task-row-actions, .module-header-actions { gap: 8px; }
   .card-actions button, .task-row-actions button { flex: 1 1 auto; min-height: 38px; }
   .setting-row, .module-row { padding: 13px; }
