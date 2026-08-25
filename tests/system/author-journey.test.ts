@@ -402,6 +402,10 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('<span id="presence-count">1 人</span>');
     expect(page.text).not.toContain('id="presence-count">1 人在线</span>');
     expect(page.text).toContain('id="presence-list"');
+    expect(page.text).toContain("feature=presence-multiple-users-v1");
+    expect(application.text).toContain("const showControl = groups.length > 1;");
+    expect(application.text).toContain('control.classList.toggle("hidden", !showControl);');
+    expect(application.text).toContain('if (!showControl) {');
     expect(application.text).toContain("function handleCollaborativeChanges(recentChanges)");
     expect(application.text).toContain('const changeLabel = latest.label || "当前页面"');
     expect(application.text).toContain('const deleted = latest.action === "delete"');

@@ -1052,9 +1052,14 @@ function renderPresence() {
     return;
   }
   const groups = groupedPresenceParticipants();
+  const showControl = groups.length > 1;
   const localKey = presencePageKey(presencePageForRoute());
   syncChapterAutoSaveWithPresence();
-  control.classList.remove("hidden");
+  control.classList.toggle("hidden", !showControl);
+  if (!showControl) {
+    $("#presence-panel").classList.add("hidden");
+    $("#presence-button").setAttribute("aria-expanded", "false");
+  }
   $("#presence-count").textContent = `${groups.length} 人`;
   $("#presence-list").innerHTML = groups.map((participant) => {
     const isCurrent = participant.userId === state.user?.userId;
