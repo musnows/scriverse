@@ -1589,22 +1589,19 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .module-row-span { grid-column: 1 / -1; }
 .setting-row .card-actions, .module-row .card-actions { margin-top: 0; flex-wrap: wrap; justify-content: flex-end; }
 .module-row .card-actions > .record-card-edit { position: static; }
-.character-card { cursor: pointer; container: character-card / inline-size; }
+.character-card { cursor: pointer; }
 .character-row { grid-template-columns: minmax(140px, .28fr) minmax(0, 1fr) auto; }
 .character-card-heading { display: flex; min-width: 0; align-items: center; gap: 7px; }
 .character-card-heading .character-avatar { width: 32px; height: 32px; font-size: 12px; }
 .character-card-heading h3 { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
-.record-card.has-card-edit .character-card-heading { padding-right: 70px; }
+.record-card.has-card-edit .character-card-heading { padding-right: 70px; transform: translateY(-3px); }
 .record-card.has-card-edit.has-pin-control .character-card-heading { padding-right: 106px; }
 .record-card.has-card-edit .character-card-heading h3 { padding-right: 0; }
-.character-card.has-card-edit > .character-favorite-button, .character-card.has-card-edit > .record-card-edit { top: 21px; }
+.character-card.has-card-edit > .character-pin-button, .character-card.has-card-edit > .character-favorite-button, .character-card.has-card-edit > .record-card-edit { top: 18px; }
 .module-row .character-favorite-button { position: static; }
 .module-row .character-pin-button { position: static; }
 .module-row .record-favorite-button { position: static; }
 .module-row .record-pin-button { position: static; }
-@container character-card (max-width: 320px) {
-  .record-card.has-card-edit.has-pin-control .character-card-heading { padding-top: 42px; padding-right: 0; }
-}
 @media (max-width: 560px) {
   .character-card-heading h3 { font-size: 15px; }
 }
@@ -3042,8 +3039,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   animation: toast-appear-top .18s ease;
   pointer-events: auto;
 }
-.toast:not(.toast-confirmation):not(.chapter-insight-toast) { cursor: pointer; }
+.toast:not(.toast-confirmation):not(.chapter-insight-toast):not(.import-progress-toast) { cursor: pointer; }
 .toast.ai-new-conversation-toast { white-space: pre-line; }
+.import-progress-region,
+.import-progress-region:popover-open { top: auto; right: 24px; bottom: 24px; left: auto; }
+.import-progress-toast { display: grid; gap: 8px; width: min(360px, calc(100vw - 48px)); cursor: progress; }
+.import-progress-copy { display: grid; gap: 3px; }
+.import-progress-copy strong { font-size: 12px; }
+.import-progress-status { color: color-mix(in srgb, var(--toast-fg) 78%, transparent); font-size: 10px; }
+.import-progress-toast progress { width: 100%; height: 6px; accent-color: var(--accent); }
 .toast-region[data-position="bottom-right"] .toast { animation-name: toast-appear-bottom; }
 .toast.error {
   border-color: color-mix(in srgb, var(--toast-error-fg) 16%, transparent);
@@ -4099,7 +4103,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .module-content { padding: 18px 0 56px; }
   .card-grid, .provider-card-grid { grid-template-columns: minmax(0, 1fr); }
   .record-card { padding: 15px; }
-  .character-card.has-card-edit > .character-favorite-button, .character-card.has-card-edit > .record-card-edit { top: 12px; }
+  .character-card.has-card-edit > .character-pin-button, .character-card.has-card-edit > .character-favorite-button, .character-card.has-card-edit > .record-card-edit { top: 8px; }
   .card-actions, .task-row-actions, .module-header-actions { gap: 8px; }
   .card-actions button, .task-row-actions button { flex: 1 1 auto; min-height: 38px; }
   .setting-row, .module-row { padding: 13px; }

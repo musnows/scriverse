@@ -12,9 +12,10 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0；版本 111 扩展模型思考强度为 auto；版本 112 为 CLI API Key 增加可复制的加密密文；版本 113 增加角色收藏状态与列表索引；版本 114 增加组织、设定档案与想法收藏状态及列表索引；版本 115 增加 AI 对话会话级场景钉；版本 116 增加可持久化且可撤销的 Desktop Bearer 会话；版本 117 增加作品离线授权、同步变更游标与幂等变更结果；版本 118 增加供应商分析请求超时配置；版本 119 记录分析任务是否由 API Key 创建；版本 120 将书籍资料收藏按用户隔离并增加书籍级共享置顶。
+export const SYSTEM_USER_ID = "__scriverse_system_user__";
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0；版本 111 扩展模型思考强度为 auto；版本 112 为 CLI API Key 增加可复制的加密密文；版本 113 增加角色收藏状态与列表索引；版本 114 增加组织、设定档案与想法收藏状态及列表索引；版本 115 增加 AI 对话会话级场景钉；版本 116 增加可持久化且可撤销的 Desktop Bearer 会话；版本 117 增加作品离线授权、同步变更游标与幂等变更结果；版本 118 增加供应商分析请求超时配置；版本 119 记录分析任务是否由 API Key 创建；版本 120 将书籍资料收藏按用户隔离并增加书籍级共享置顶；版本 121 强制作品 Owner 非空并建立用户外键约束。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 120;
+export const DATABASE_SCHEMA_VERSION = 121;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -4451,6 +4452,96 @@ export class Database {
         );
         this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (120, ?)", timestamp);
       });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const workOwnerColumn = this.all<{ name: string; notnull: number }>("PRAGMA table_info(works)")
+      .find((column) => column.name === "owner_user_id");
+    const workOwnerForeignKeyPresent = this.all<{ table: string; from: string; on_delete: string }>("PRAGMA foreign_key_list(works)")
+      .some((foreignKey) => foreignKey.table === "users" && foreignKey.from === "owner_user_id" && foreignKey.on_delete === "RESTRICT");
+    const systemUserPresent = this.get("SELECT 1 AS present FROM users WHERE id = ?", SYSTEM_USER_ID) !== undefined;
+    if (!applied.has(121) || workOwnerColumn?.notnull !== 1 || !workOwnerForeignKeyPresent || !systemUserPresent) {
+      this.raw.exec("PRAGMA foreign_keys = OFF");
+      try {
+        this.transaction(() => {
+          const timestamp = new Date().toISOString();
+          this.run(
+            `INSERT INTO users (
+              id, username, normalized_username, display_name, password_hash, password_salt,
+              role, status, created_at, updated_at
+            ) VALUES (?, '__scriverse_system__', '__scriverse_system__', 'Scriverse System', 'disabled', 'disabled', 'user', 'disabled', ?, ?)
+            ON CONFLICT(id) DO UPDATE SET status = 'disabled', updated_at = excluded.updated_at`,
+            SYSTEM_USER_ID,
+            timestamp,
+            timestamp
+          );
+          this.run("UPDATE works SET owner_user_id = ? WHERE id = ?", SYSTEM_USER_ID, PLATFORM_AI_WORK_ID);
+          this.run(
+            `UPDATE works SET owner_user_id = COALESCE(
+              (
+                SELECT membership.user_id
+                FROM work_memberships membership
+                JOIN users member ON member.id = membership.user_id
+                WHERE membership.work_id = works.id AND member.id <> ?
+                ORDER BY CASE membership.role WHEN 'owner' THEN 0 ELSE 1 END, membership.created_at, membership.user_id
+                LIMIT 1
+              ),
+              (
+                SELECT candidate.id
+                FROM users candidate
+                WHERE candidate.id <> ? AND candidate.status = 'active'
+                ORDER BY CASE candidate.role WHEN 'admin' THEN 0 ELSE 1 END, candidate.created_at, candidate.id
+                LIMIT 1
+              ),
+              ?
+            )
+            WHERE id <> ? AND (
+              owner_user_id IS NULL
+              OR NOT EXISTS (SELECT 1 FROM users owner WHERE owner.id = works.owner_user_id)
+            )`,
+            SYSTEM_USER_ID,
+            SYSTEM_USER_ID,
+            SYSTEM_USER_ID,
+            PLATFORM_AI_WORK_ID
+          );
+          this.run("DROP TABLE IF EXISTS works_v121");
+          this.run(`CREATE TABLE works_v121 (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            author TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            language TEXT NOT NULL DEFAULT 'zh-CN',
+            cover_url TEXT,
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            is_internal INTEGER NOT NULL DEFAULT 0,
+            offline_access_enabled INTEGER NOT NULL DEFAULT 0 CHECK(offline_access_enabled IN (0, 1)),
+            version_no INTEGER NOT NULL DEFAULT 1,
+            deleted_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT
+          )`);
+          this.run(`INSERT INTO works_v121 (
+            id, title, author, description, language, cover_url, tags_json, is_internal,
+            offline_access_enabled, version_no, deleted_at, created_at, updated_at, owner_user_id
+          )
+          SELECT
+            id, title, author, description, language, cover_url, tags_json, is_internal,
+            offline_access_enabled, version_no, deleted_at, created_at, updated_at, owner_user_id
+          FROM works`);
+          this.run("DROP TABLE works");
+          this.run("ALTER TABLE works_v121 RENAME TO works");
+          this.run("CREATE INDEX IF NOT EXISTS idx_works_owner ON works(owner_user_id, updated_at DESC)");
+          this.run("CREATE INDEX IF NOT EXISTS idx_works_recycle_bin ON works(deleted_at, owner_user_id)");
+          this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (121, ?)", timestamp);
+        });
+      } finally {
+        this.raw.exec("PRAGMA foreign_keys = ON");
+      }
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
         throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);

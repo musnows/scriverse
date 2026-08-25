@@ -1815,7 +1815,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     await cleanupAttachments();
     noContent(response);
   });
-  app.post("/api/works", (request, response) => data(response, store.createWork(parse(workSchema, request.body)), 201));
+  app.post("/api/works", (request, response) => data(response, store.createWork(parse(workSchema, request.body), request.authUser?.userId ?? null), 201));
   app.post("/api/works/import", upload.single("file"), async (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择要导入的 TXT 或 DOCX 文件");
     const originalFileName = normalizeUploadFileName(request.file.originalname);
@@ -1831,7 +1831,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       author: typeof request.body.author === "string" ? request.body.author : "",
       description: typeof request.body.description === "string" ? request.body.description : ""
     });
-    data(response, store.createImportedWork(input, originalFileName, extension.slice(1), parsedNovel), 201);
+    data(response, store.createImportedWork(input, originalFileName, extension.slice(1), parsedNovel, request.authUser?.userId ?? null), 201);
   });
   app.get("/api/works/:workId", (request, response) => {
     if (request.query.directory === "volumes") {

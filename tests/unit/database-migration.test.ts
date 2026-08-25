@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { DATABASE_SCHEMA_VERSION, Database } from "../../src/database.js";
+import { DATABASE_SCHEMA_VERSION, Database, PLATFORM_AI_WORK_ID, SYSTEM_USER_ID } from "../../src/database.js";
 import { Store } from "../../src/store.js";
 
 const roots: string[] = [];
@@ -65,7 +65,43 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+function insertSystemOwnedWork(database: Database, workId: string, title: string, timestamp: string): void {
+  database.run(
+    `INSERT INTO works (id, title, created_at, updated_at, owner_user_id)
+     VALUES (?, ?, ?, ?, ?)`,
+    workId,
+    title,
+    timestamp,
+    timestamp,
+    SYSTEM_USER_ID
+  );
+}
+
 describe("数据库版本化迁移", () => {
+  it("迁移 121 回填作品 Owner 并强制用户外键非空", () => {
+    const filename = createLegacyDatabase();
+    const database = new Database(filename);
+    const ownerColumn = database.all<{ name: string; notnull: number }>("PRAGMA table_info(works)")
+      .find((column) => column.name === "owner_user_id");
+    const ownerForeignKey = database.all<{ table: string; from: string; on_delete: string }>("PRAGMA foreign_key_list(works)")
+      .find((foreignKey) => foreignKey.from === "owner_user_id");
+
+    expect(ownerColumn?.notnull).toBe(1);
+    expect(ownerForeignKey).toMatchObject({ table: "users", from: "owner_user_id", on_delete: "RESTRICT" });
+    expect(database.get("SELECT owner_user_id FROM works WHERE id = 'work-old'")).toEqual({ owner_user_id: SYSTEM_USER_ID });
+    expect(database.get("SELECT owner_user_id FROM works WHERE id = ?", PLATFORM_AI_WORK_ID)).toEqual({ owner_user_id: SYSTEM_USER_ID });
+    expect(database.get("SELECT status FROM users WHERE id = ?", SYSTEM_USER_ID)).toEqual({ status: "disabled" });
+    expect(() => database.run(
+      "INSERT INTO works (id, title, created_at, updated_at, owner_user_id) VALUES ('owner-null', '空 Owner', '2026-08-25', '2026-08-25', NULL)"
+    )).toThrow();
+    expect(() => database.run(
+      "INSERT INTO works (id, title, created_at, updated_at, owner_user_id) VALUES ('owner-missing', '错误 Owner', '2026-08-25', '2026-08-25', 'missing-user')"
+    )).toThrow();
+    expect(database.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(database.all("PRAGMA foreign_key_check")).toEqual([]);
+    database.close();
+  });
+
   it("无损回填角色主名与别名并支持幂等重启", () => {
     const filename = createLegacyDatabase();
     const first = new Database(filename);
@@ -488,8 +524,8 @@ describe("数据库版本化迁移", () => {
     legacy.exec(`
       DELETE FROM ai_history_search_short_terms;
       DELETE FROM ai_history_search;
-      INSERT INTO works (id, title, created_at, updated_at)
-      VALUES ('work-migration-74', '迁移作品', '2025-01-01', '2025-01-01');
+      INSERT INTO works (id, title, created_at, updated_at, owner_user_id)
+      VALUES ('work-migration-74', '迁移作品', '2025-01-01', '2025-01-01', '${SYSTEM_USER_ID}');
       INSERT INTO ai_conversations (id, work_id, title, compacted_summary, created_at, updated_at)
       VALUES ('conversation-migration-74', 'work-migration-74', '旧对话', '重复重复', '2025-01-01', '2025-01-01');
       DROP TABLE s3_backup_runs;
@@ -602,12 +638,7 @@ describe("数据库版本化迁移", () => {
     const filename = join(root, "audit-index-existing.db");
     const current = new Database(filename);
     const timestamp = "2026-08-10T00:00:00.000Z";
-    current.run(
-      `INSERT INTO works (id, title, created_at, updated_at)
-       VALUES ('work-audit-index', '审计索引迁移', ?, ?)`,
-      timestamp,
-      timestamp
-    );
+    insertSystemOwnedWork(current, "work-audit-index", "审计索引迁移", timestamp);
     current.run(
       `INSERT INTO audit_logs (id, work_id, action, entity_type, actor, detail_json, created_at)
        VALUES ('audit-before-index', 'work-audit-index', 'work.updated', 'work', 'owner', '{}', ?)`,
@@ -661,12 +692,7 @@ describe("数据库版本化迁移", () => {
     const filename = join(root, "list-index-existing.db");
     const current = new Database(filename);
     const timestamp = "2026-08-10T00:00:00.000Z";
-    current.run(
-      `INSERT INTO works (id, title, created_at, updated_at)
-       VALUES ('work-list-index', '列表索引迁移', ?, ?)`,
-      timestamp,
-      timestamp
-    );
+    insertSystemOwnedWork(current, "work-list-index", "列表索引迁移", timestamp);
     current.run(
       `INSERT INTO volumes (id, work_id, title, sort_order, created_at, updated_at)
        VALUES ('volume-list-index', 'work-list-index', '第一卷', 0, ?, ?)`,
@@ -910,13 +936,7 @@ describe("数据库版本化迁移", () => {
     roots.push(root);
     const filename = join(root, "presence-action.db");
     const current = new Database(filename);
-    current.run(
-      "INSERT INTO works (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
-      "work-presence-action",
-      "协作动作迁移作品",
-      "2026-08-11T00:00:00.000Z",
-      "2026-08-11T00:00:00.000Z"
-    );
+    insertSystemOwnedWork(current, "work-presence-action", "协作动作迁移作品", "2026-08-11T00:00:00.000Z");
     current.run(
       `INSERT INTO presence_changes (
          id, work_id, page_key, label, actor_user_id, actor_display_name, saved_at, recipient_client_ids_json
@@ -1021,12 +1041,7 @@ describe("数据库版本化迁移", () => {
     const filename = join(root, "story-order.db");
     const current = new Database(filename);
     const timestamp = "2026-08-20T00:00:00.000Z";
-    current.run(
-      `INSERT INTO works (id, title, author, description, language, tags_json, created_at, updated_at)
-       VALUES ('work-story-order', '剧情顺序迁移', '', '', 'zh-CN', '[]', ?, ?)`,
-      timestamp,
-      timestamp
-    );
+    insertSystemOwnedWork(current, "work-story-order", "剧情顺序迁移", timestamp);
     current.run(
       `INSERT INTO volumes (id, work_id, title, kind, source, description, keywords_json, sort_order, story_order, created_at, updated_at)
        VALUES ('volume-story-order', 'work-story-order', '倒叙卷', 'main', 'manual', '', '[]', 6, 2, ?, ?)`,
@@ -1145,12 +1160,7 @@ describe("数据库版本化迁移", () => {
     const filename = join(root, "positive-quota.db");
     const timestamp = "2026-08-21T00:00:00.000Z";
     const current = new Database(filename);
-    current.run(
-      `INSERT INTO works (id, title, author, description, language, tags_json, created_at, updated_at)
-       VALUES ('work-positive-quota', '正额度迁移', '', '', 'zh-CN', '[]', ?, ?)`,
-      timestamp,
-      timestamp
-    );
+    insertSystemOwnedWork(current, "work-positive-quota", "正额度迁移", timestamp);
     current.run(
       `INSERT INTO work_ai_settings (work_id, daily_token_quota, monthly_token_quota, updated_at)
        VALUES ('work-positive-quota', 12345, 67890, ?)`,
@@ -1202,12 +1212,7 @@ describe("数据库版本化迁移", () => {
     const filename = join(root, "tool-rename.db");
     const first = new Database(filename);
     const timestamp = "2025-01-01T00:00:00.000Z";
-    first.run(
-      `INSERT INTO works (id, title, author, description, language, tags_json, created_at, updated_at)
-       VALUES ('work-tool', '工具迁移', '', '', 'zh-CN', '[]', ?, ?)`,
-      timestamp,
-      timestamp
-    );
+    insertSystemOwnedWork(first, "work-tool", "工具迁移", timestamp);
     first.run(
       `INSERT INTO work_ai_settings (work_id, system_prompt, agent_tools_json, updated_at)
        VALUES ('work-tool', '', ?, ?)`,
@@ -1235,12 +1240,7 @@ describe("数据库版本化迁移", () => {
     const filename = join(root, "drafts.db");
     const current = new Database(filename);
     const timestamp = "2026-07-29T00:00:00.000Z";
-    current.run(
-      `INSERT INTO works (id, title, author, description, language, tags_json, created_at, updated_at)
-       VALUES ('work-drafts', '草稿迁移', '', '', 'zh-CN', '[]', ?, ?)`,
-      timestamp,
-      timestamp
-    );
+    insertSystemOwnedWork(current, "work-drafts", "草稿迁移", timestamp);
     current.run(
       `INSERT INTO work_ai_settings (work_id, system_prompt, agent_tools_json, updated_at)
        VALUES ('work-drafts', '', ?, ?)`,
@@ -1320,12 +1320,7 @@ describe("数据库版本化迁移", () => {
     const filename = join(root, "task-model.db");
     const current = new Database(filename);
     const timestamp = "2025-01-01T00:00:00.000Z";
-    current.run(
-      `INSERT INTO works (id, title, author, description, language, tags_json, created_at, updated_at)
-       VALUES ('work-task-model', '任务模型迁移', '', '', 'zh-CN', '[]', ?, ?)`,
-      timestamp,
-      timestamp
-    );
+    insertSystemOwnedWork(current, "work-task-model", "任务模型迁移", timestamp);
     current.run(
       `INSERT INTO analysis_tasks (id, work_id, task_type, status, created_at, updated_at)
        VALUES ('task-before-model', 'work-task-model', 'book-analysis', 'pending', ?, ?)`,
@@ -1661,12 +1656,7 @@ describe("数据库版本化迁移", () => {
     const filename = join(root, "foreshadow-payoff-index-existing.db");
     const current = new Database(filename);
     const timestamp = "2026-08-15T00:00:00.000Z";
-    current.run(
-      `INSERT INTO works (id, title, created_at, updated_at)
-       VALUES ('work-payoff-index', '伏笔索引迁移', ?, ?)`,
-      timestamp,
-      timestamp
-    );
+    insertSystemOwnedWork(current, "work-payoff-index", "伏笔索引迁移", timestamp);
     current.run(
       `INSERT INTO volumes (id, work_id, title, sort_order, created_at, updated_at)
        VALUES ('volume-payoff-index', 'work-payoff-index', '第一卷', 0, ?, ?)`,

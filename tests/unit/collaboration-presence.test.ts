@@ -6,16 +6,17 @@ import {
   modulePageKey,
   pageLabelForKey
 } from "../../src/collaboration-presence.js";
-import { Database } from "../../src/database.js";
+import { Database, SYSTEM_USER_ID } from "../../src/database.js";
 import { PresenceStore } from "../../src/presence-store.js";
 
 function createPresenceWork(database: Database, workId = "work-1"): void {
   database.run(
-    "INSERT INTO works (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+    "INSERT INTO works (id, title, created_at, updated_at, owner_user_id) VALUES (?, ?, ?, ?, ?)",
     workId,
     "协作测试作品",
     "2026-07-24T08:00:00.000Z",
-    "2026-07-24T08:00:00.000Z"
+    "2026-07-24T08:00:00.000Z",
+    SYSTEM_USER_ID
   );
 }
 
