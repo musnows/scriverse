@@ -23,6 +23,8 @@ describe("角色收藏界面", () => {
     ]);
 
     expect(application.text).toContain("function favoriteCharactersFirst(characters)");
+    expect(application.text).toContain("function pushPinIconMarkup()");
+    expect(application.text).toContain("M16 9V4h1V2H7v2h1v5c0 1.66-1.34 3-3 3v2h5.97v6l1.03 1 1.03-1v-6H20v-2c-2.21 0-4-1.79-4-4Z");
     expect(application.text).toContain("favoriteCharactersFirst(state.characters.filter((character) => !character.mergedIntoCharacterId))");
     expect(application.text).toContain("favoriteCharactersFirst(state.characters.filter((character) => (");
     expect(application.text).toContain('const pinLabel = character?.isPinned === true ? "[置顶]" : "";');

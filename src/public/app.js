@@ -8690,8 +8690,8 @@ function characterFavoriteIconMarkup() {
   return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3Z"></path></svg>';
 }
 
-function pinIconMarkup() {
-  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m15 3 6 6-2.6 2.6-1.8-.4-3.3 3.3 1.7 3.9-1.5 1.5-5.4-5.4-4.1 1.8-1.5-1.5 3.3-3.3-.4-1.8L8 7l7-4Z"></path><path d="m11 13-8 8"></path></svg>';
+function pushPinIconMarkup() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M16 9V4h1V2H7v2h1v5c0 1.66-1.34 3-3 3v2h5.97v6l1.03 1 1.03-1v-6H20v-2c-2.21 0-4-1.79-4-4Z"></path></svg>';
 }
 
 function characterPinButton(item) {
@@ -8699,7 +8699,7 @@ function characterPinButton(item) {
   const canPin = canEditModule("characters");
   const action = isPinned ? "取消置顶" : "置顶";
   const title = canPin ? action : "当前账户没有角色模块写入权限";
-  return `<button class="character-pin-button${isPinned ? " is-pinned" : ""}" type="button" data-character-pin="${esc(item.id)}" aria-label="${action}角色“${esc(item.name)}”" aria-pressed="${isPinned}" title="${title}" ${canPin ? "" : "disabled"}>${pinIconMarkup()}</button>`;
+  return `<button class="character-pin-button${isPinned ? " is-pinned" : ""}" type="button" data-character-pin="${esc(item.id)}" aria-label="${action}角色“${esc(item.name)}”" aria-pressed="${isPinned}" title="${title}" ${canPin ? "" : "disabled"}>${pushPinIconMarkup()}</button>`;
 }
 
 function characterFavoriteButton(item) {
@@ -8736,7 +8736,7 @@ function recordPinButton(type, item, { cardControl = false } = {}) {
   const action = isPinned ? "取消置顶" : "置顶";
   const title = canPin ? action : `当前账户没有${config.label}模块写入权限`;
   const name = String(item[config.nameField] ?? "");
-  return `<button class="record-pin-button${cardControl ? " is-card-control" : ""}${isPinned ? " is-pinned" : ""}" type="button" data-record-pin="${esc(item.id)}" data-record-pin-type="${esc(type)}" aria-label="${action}${config.label}“${esc(name)}”" aria-pressed="${isPinned}" title="${title}" ${canPin ? "" : "disabled"}>${pinIconMarkup()}</button>`;
+  return `<button class="record-pin-button${cardControl ? " is-card-control" : ""}${isPinned ? " is-pinned" : ""}" type="button" data-record-pin="${esc(item.id)}" data-record-pin-type="${esc(type)}" aria-label="${action}${config.label}“${esc(name)}”" aria-pressed="${isPinned}" title="${title}" ${canPin ? "" : "disabled"}>${pushPinIconMarkup()}</button>`;
 }
 
 async function toggleRecordFavorite(type, item, render) {
@@ -8831,7 +8831,7 @@ function syncEntityDetailPinButton(button, type, item) {
   const config = recordFavoriteConfigs[type];
   const visible = Boolean(config && item);
   button.classList.toggle("hidden", !visible);
-  button.innerHTML = pinIconMarkup();
+  button.innerHTML = pushPinIconMarkup();
   if (!visible) {
     button.disabled = true;
     button.classList.remove("is-pinned");
