@@ -10742,8 +10742,20 @@ export class Store {
           return event.workId === workId ? [event] : [];
         } catch { return []; }
       });
-      summary = `提取并写入 ${events.length} 个时间轴事件候选。`;
-      metrics = [metric("写入事件", events.length), metric("已不存在", Math.max(0, ids.length - events.length))];
+      const hasChunkMetrics = typeof result.coveredChapterCount === "number" || typeof result.batchCount === "number";
+      summary = hasChunkMetrics
+        ? `覆盖 ${Number(result.coveredChapterCount ?? 0)} 章正文，识别 ${Number(result.rawCandidateCount ?? events.length)} 个原始候选，写入 ${events.length} 个时间轴事件候选。`
+        : `提取并写入 ${events.length} 个时间轴事件候选。`;
+      metrics = [
+        metric("写入事件", events.length),
+        ...(hasChunkMetrics ? [
+          metric("覆盖章节", result.coveredChapterCount),
+          metric("正文分片", result.batchCount),
+          metric("归并批次", result.aggregationBatchCount),
+          metric("原始候选", result.rawCandidateCount)
+        ] : []),
+        metric("已不存在", Math.max(0, ids.length - events.length))
+      ];
       storageTargets.unshift({ label: "时间轴候选", entity: "时间轴与事件", key: "timeline", count: events.length, note: "以候选状态写入，等待作者确认。" });
       sections = [section("事件候选", events, "没有形成可写入的时间轴事件。")];
     } else if (taskType === "worldview-analysis") {
