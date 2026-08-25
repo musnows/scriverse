@@ -95,6 +95,30 @@ describe("Desktop 离线同步快照 API", () => {
 
   afterEach(async () => runtime.close());
 
+  it("通过 Desktop Bearer 导入新作品时写入当前用户为 Owner", async () => {
+    const owner = await register(runtime, "desktop_import_owner");
+    const authorization = await desktopAuthorization(
+      runtime,
+      owner.username,
+      "10000000-0000-4000-8000-000000000001"
+    );
+
+    const imported = await request(runtime.app).post("/api/works/import")
+      .set("Authorization", authorization)
+      .field("title", "Desktop 导入作品")
+      .attach("file", Buffer.from("第一章 抵达\n\n黎明时，林舟抵达北港。", "utf8"), "desktop-import.txt")
+      .expect(201);
+    const workId = String(imported.body.data.work.id);
+
+    expect(imported.body.data.work.ownerUserId).toBe(owner.userId);
+    expect(runtime.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId)).toEqual({
+      owner_user_id: owner.userId
+    });
+    expect(runtime.database.get("SELECT role FROM work_memberships WHERE work_id = ? AND user_id = ?", workId, owner.userId)).toEqual({
+      role: "owner"
+    });
+  });
+
   it("通过 Desktop Bearer 分页读取一致快照且不依赖 Cookie", async () => {
     const owner = await register(runtime, "snapshot_owner");
     const fixture = await createOfflineFixture(runtime, owner);

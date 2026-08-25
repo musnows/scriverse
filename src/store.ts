@@ -1581,10 +1581,11 @@ export class Store {
     }
   }
 
-  createWork(input: WorkInput): Record<string, unknown> {
+  createWork(input: WorkInput, ownerUserId: string | null = null): Record<string, unknown> {
     const workId = id("work");
     const timestamp = now();
     const actor = currentRequestActor();
+    const resolvedOwnerUserId = ownerUserId ?? actor?.userId ?? null;
     this.db.transaction(() => {
       this.db.run(
         `INSERT INTO works (id, title, author, description, language, cover_url, tags_json, created_at, updated_at, owner_user_id)
@@ -1598,14 +1599,14 @@ export class Store {
         JSON.stringify(input.tags ?? []),
         timestamp,
         timestamp,
-        actor?.userId ?? null
+        resolvedOwnerUserId
       );
-      if (actor) {
+      if (resolvedOwnerUserId) {
         this.db.run(
           "INSERT INTO work_memberships (work_id, user_id, role, invited_by_user_id, created_at) VALUES (?, ?, 'owner', ?, ?)",
           workId,
-          actor.userId,
-          actor.userId,
+          resolvedOwnerUserId,
+          resolvedOwnerUserId,
           timestamp
         );
       }
@@ -2679,9 +2680,9 @@ export class Store {
     return { ...result, tree: this.getWorkDirectory(workId) };
   }
 
-  createImportedWork(input: WorkInput, fileName: string, fileType: string, parsed: ParsedNovel): Record<string, unknown> {
+  createImportedWork(input: WorkInput, fileName: string, fileType: string, parsed: ParsedNovel, ownerUserId: string | null = null): Record<string, unknown> {
     return this.db.transaction(() => {
-      const work = this.createWork(input);
+      const work = this.createWork(input, ownerUserId);
       const imported = this.importNovelInTransaction(String(work.id), fileName, fileType, parsed, undefined, undefined, false);
       return { ...imported, work: this.getWork(String(work.id)) };
     });
