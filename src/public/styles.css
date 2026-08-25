@@ -1589,11 +1589,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .module-row-span { grid-column: 1 / -1; }
 .setting-row .card-actions, .module-row .card-actions { margin-top: 0; flex-wrap: wrap; justify-content: flex-end; }
 .module-row .card-actions > .record-card-edit { position: static; }
-.character-card { cursor: pointer; }
+.character-card { cursor: pointer; container: character-card / inline-size; }
 .character-row { grid-template-columns: minmax(140px, .28fr) minmax(0, 1fr) auto; }
 .character-card-heading { display: flex; min-width: 0; align-items: center; gap: 7px; }
 .character-card-heading .character-avatar { width: 32px; height: 32px; font-size: 12px; }
-.character-card-heading h3 { min-width: 0; }
+.character-card-heading h3 { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
 .record-card.has-card-edit .character-card-heading { padding-right: 70px; }
 .record-card.has-card-edit.has-pin-control .character-card-heading { padding-right: 106px; }
 .record-card.has-card-edit .character-card-heading h3 { padding-right: 0; }
@@ -1602,6 +1602,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .module-row .character-pin-button { position: static; }
 .module-row .record-favorite-button { position: static; }
 .module-row .record-pin-button { position: static; }
+@container character-card (max-width: 320px) {
+  .record-card.has-card-edit.has-pin-control .character-card-heading { padding-top: 42px; padding-right: 0; }
+}
+@media (max-width: 560px) {
+  .character-card-heading h3 { font-size: 15px; }
+}
+@media (max-width: 420px) {
+  .character-card-heading h3 { font-size: 14px; }
+}
 .character-lock-badge { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; min-height: 20px; padding: 2px 6px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-dark); font-size: 9px; font-variant-numeric: tabular-nums; line-height: 1; }
 .entity-lifecycle-badge { display: inline-flex; align-items: center; min-height: 20px; margin-left: 7px; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--accent) 58%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 13%, var(--surface)); color: var(--accent-dark); font-size: 9px; font-weight: 650; line-height: 1; vertical-align: middle; white-space: nowrap; }
 .character-lock-badge svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }

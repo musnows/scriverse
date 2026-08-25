@@ -42,9 +42,17 @@ describe("角色收藏界面", () => {
     expect(styles.text).toContain(".character-favorite-button {");
     expect(styles.text).toContain(".character-favorite-button.is-favorite {");
     expect(styles.text).toContain(".character-pin-button.is-pinned {");
+    expect(styles.text).toContain(".character-card { cursor: pointer; container: character-card / inline-size; }");
+    expect(styles.text).toContain(".character-card-heading h3 { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }");
+    expect(styles.text).toContain("@container character-card (max-width: 320px)");
+    expect(styles.text).toContain("@media (max-width: 560px)");
+    expect(styles.text).toContain(".character-card-heading h3 { font-size: 15px; }");
+    expect(styles.text).toContain("@media (max-width: 420px)");
+    expect(styles.text).toContain(".character-card-heading h3 { font-size: 14px; }");
     expect(styles.text).toContain(".module-row .character-favorite-button { position: static; }");
     expect(page.text).toContain("feature=character-favorite-v1");
     expect(page.text).toContain("feature=roleplay-favorite-label-v1");
     expect(page.text).toContain("feature=entity-pin-v1");
+    expect(page.text).toContain("feature=character-card-title-fit-v2");
   });
 });
