@@ -5,6 +5,7 @@ import {
   Database,
   ENTITY_VERSION_BASELINE_MIGRATION_VERSION,
   PLATFORM_AI_WORK_ID,
+  SYSTEM_USER_ID,
   type Row
 } from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
@@ -1488,7 +1489,7 @@ export class Store {
     this.getWork(workId);
     if (type === "work") {
       return this.db.transaction(() => {
-        const ownerUserId = typeof snapshot.ownerUserId === "string" ? snapshot.ownerUserId : null;
+        const ownerUserId = this.resolveWorkOwnerUserId(typeof snapshot.ownerUserId === "string" ? snapshot.ownerUserId : null, true);
         const timestamp = now();
         this.db.run(
           `INSERT INTO works (id, title, author, description, language, cover_url, tags_json, version_no, created_at, updated_at, owner_user_id)
@@ -1504,7 +1505,7 @@ export class Store {
           timestamp,
           ownerUserId
         );
-        if (ownerUserId) {
+        if (ownerUserId !== SYSTEM_USER_ID) {
           this.db.run(
             "INSERT INTO work_memberships (work_id, user_id, role, invited_by_user_id, created_at) VALUES (?, ?, 'owner', ?, ?)",
             entityId,
@@ -1584,8 +1585,7 @@ export class Store {
   createWork(input: WorkInput, ownerUserId: string | null = null): Record<string, unknown> {
     const workId = id("work");
     const timestamp = now();
-    const actor = currentRequestActor();
-    const resolvedOwnerUserId = ownerUserId ?? actor?.userId ?? null;
+    const resolvedOwnerUserId = this.resolveWorkOwnerUserId(ownerUserId);
     this.db.transaction(() => {
       this.db.run(
         `INSERT INTO works (id, title, author, description, language, cover_url, tags_json, created_at, updated_at, owner_user_id)
@@ -1601,7 +1601,7 @@ export class Store {
         timestamp,
         resolvedOwnerUserId
       );
-      if (resolvedOwnerUserId) {
+      if (resolvedOwnerUserId !== SYSTEM_USER_ID) {
         this.db.run(
           "INSERT INTO work_memberships (work_id, user_id, role, invited_by_user_id, created_at) VALUES (?, ?, 'owner', ?, ?)",
           workId,
@@ -1614,6 +1614,13 @@ export class Store {
       this.audit(workId, "work.created", "work", workId);
     });
     return this.getWork(workId);
+  }
+
+  private resolveWorkOwnerUserId(ownerUserId: string | null = null, allowUnknownFallback = false): string {
+    const candidate = ownerUserId ?? currentRequestActor()?.userId ?? null;
+    if (candidate && this.db.get("SELECT 1 AS present FROM users WHERE id = ?", candidate)) return candidate;
+    if (candidate && !allowUnknownFallback) throw new AppError(400, "WORK_OWNER_INVALID", "作品 Owner 用户不存在");
+    return SYSTEM_USER_ID;
   }
 
   listWorks(): Record<string, unknown>[] {
