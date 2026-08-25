@@ -3445,15 +3445,18 @@ async function createNewAiConversation(taskType = "chat") {
 function favoriteCharactersFirst(characters) {
   const items = Array.isArray(characters) ? characters : [];
   return [
-    ...items.filter((character) => character.isFavorite === true),
-    ...items.filter((character) => character.isFavorite !== true)
+    ...items.filter((character) => character.isPinned === true && character.isFavorite === true),
+    ...items.filter((character) => character.isPinned === true && character.isFavorite !== true),
+    ...items.filter((character) => character.isPinned !== true && character.isFavorite === true),
+    ...items.filter((character) => character.isPinned !== true && character.isFavorite !== true)
   ];
 }
 
 function roleplayCharacterOptionLabel(character) {
-  const favoriteLabel = character?.isFavorite === true ? "[已收藏] " : "";
+  const pinLabel = character?.isPinned === true ? "[置顶]" : "";
+  const favoriteLabel = character?.isFavorite === true ? "[收藏]" : "";
   const deathLabel = character?.isDead ? "（已死亡）" : "";
-  return `${favoriteLabel}${String(character?.name ?? "")}${deathLabel}`;
+  return `${pinLabel}${favoriteLabel}${pinLabel || favoriteLabel ? " " : ""}${String(character?.name ?? "")}${deathLabel}`;
 }
 
 function renderAiRoleplayCharacterSelect() {
@@ -4109,6 +4112,31 @@ function aiPromptTextBeforeCursor() {
   return promptTextFromNode(fragment).replace(/\n$/u, "");
 }
 
+function aiPromptTextFromRange(range, prompt) {
+  const beforeCursor = range.cloneRange();
+  beforeCursor.selectNodeContents(prompt);
+  beforeCursor.setEnd(range.endContainer, range.endOffset);
+  const fragment = document.createElement("div");
+  fragment.append(beforeCursor.cloneContents());
+  return promptTextFromNode(fragment).replace(/\n$/u, "");
+}
+
+function aiPromptTextBoundary(prompt, offset) {
+  const walker = document.createTreeWalker(prompt, NodeFilter.SHOW_TEXT);
+  let remaining = Math.max(0, Number(offset) || 0);
+  let lastTextNode = null;
+  while (walker.nextNode()) {
+    const textNode = walker.currentNode;
+    if (textNode.parentElement?.closest("[data-ai-reference-key]")) continue;
+    lastTextNode = textNode;
+    const length = textNode.textContent?.length ?? 0;
+    if (remaining <= length) return { node: textNode, offset: remaining };
+    remaining -= length;
+  }
+  if (lastTextNode) return { node: lastTextNode, offset: lastTextNode.textContent?.length ?? 0 };
+  return { node: prompt, offset: prompt.childNodes.length };
+}
+
 function hideAiMentionMenu() {
   aiMentionMatch = null;
   aiMentionRange = null;
@@ -4197,12 +4225,14 @@ function selectAiMention(button) {
     id: button.dataset.aiReferenceId,
     name: button.dataset.aiReferenceName
   };
-  const range = aiMentionRange.cloneRange();
-  const textNode = range.startContainer;
-  const localText = textNode.nodeType === Node.TEXT_NODE ? textNode.textContent?.slice(0, range.startOffset) ?? "" : "";
-  const localMention = findAiMention(localText);
+  const cursorText = aiPromptTextFromRange(aiMentionRange, prompt);
+  const localMention = findAiMention(cursorText);
   if (!localMention) return hideAiMentionMenu();
-  range.setStart(textNode, localMention.start);
+  const range = document.createRange();
+  const startBoundary = aiPromptTextBoundary(prompt, localMention.start);
+  const endBoundary = aiPromptTextBoundary(prompt, cursorText.length);
+  range.setStart(startBoundary.node, startBoundary.offset);
+  range.setEnd(endBoundary.node, endBoundary.offset);
   range.deleteContents();
   const spacer = document.createTextNode(" ");
   range.insertNode(spacer);
@@ -8687,6 +8717,18 @@ function characterFavoriteIconMarkup() {
   return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3Z"></path></svg>';
 }
 
+function pushPinIconMarkup() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M16 9V4h1V2H7v2h1v5c0 1.66-1.34 3-3 3v2h5.97v6l1.03 1 1.03-1v-6H20v-2c-2.21 0-4-1.79-4-4Z"></path></svg>';
+}
+
+function characterPinButton(item) {
+  const isPinned = item.isPinned === true;
+  const canPin = canEditModule("characters");
+  const action = isPinned ? "取消置顶" : "置顶";
+  const title = canPin ? action : "当前账户没有角色模块写入权限";
+  return `<button class="character-pin-button${isPinned ? " is-pinned" : ""}" type="button" data-character-pin="${esc(item.id)}" aria-label="${action}角色“${esc(item.name)}”" aria-pressed="${isPinned}" title="${title}" ${canPin ? "" : "disabled"}>${pushPinIconMarkup()}</button>`;
+}
+
 function characterFavoriteButton(item) {
   const isFavorite = item.isFavorite === true;
   const canFavorite = canEditModule("characters");
@@ -8713,6 +8755,17 @@ function recordFavoriteButton(type, item, { cardControl = false } = {}) {
   return `<button class="record-favorite-button${cardControl ? " is-card-control" : ""}${isFavorite ? " is-favorite" : ""}" type="button" data-record-favorite="${esc(item.id)}" data-record-favorite-type="${esc(type)}" aria-label="${action}${config.label}“${esc(name)}”" aria-pressed="${isFavorite}" title="${title}" ${canFavorite ? "" : "disabled"}>${characterFavoriteIconMarkup()}</button>`;
 }
 
+function recordPinButton(type, item, { cardControl = false } = {}) {
+  const config = recordFavoriteConfigs[type];
+  if (!config) return "";
+  const isPinned = item.isPinned === true;
+  const canPin = canEditModule(config.module);
+  const action = isPinned ? "取消置顶" : "置顶";
+  const title = canPin ? action : `当前账户没有${config.label}模块写入权限`;
+  const name = String(item[config.nameField] ?? "");
+  return `<button class="record-pin-button${cardControl ? " is-card-control" : ""}${isPinned ? " is-pinned" : ""}" type="button" data-record-pin="${esc(item.id)}" data-record-pin-type="${esc(type)}" aria-label="${action}${config.label}“${esc(name)}”" aria-pressed="${isPinned}" title="${title}" ${canPin ? "" : "disabled"}>${pushPinIconMarkup()}</button>`;
+}
+
 async function toggleRecordFavorite(type, item, render) {
   const config = recordFavoriteConfigs[type];
   if (!config) return;
@@ -8729,6 +8782,22 @@ async function toggleRecordFavorite(type, item, render) {
   toast(updated.isFavorite ? `已收藏${config.label}“${name}”` : `已取消收藏${config.label}“${name}”`);
 }
 
+async function toggleRecordPin(type, item, render) {
+  const config = recordFavoriteConfigs[type];
+  if (!config) return;
+  const updated = await api(`/api/${config.resource}/${encodeURIComponent(item.id)}/pin`, {
+    method: "PATCH",
+    body: { isPinned: item.isPinned !== true }
+  });
+  await render();
+  const pinButton = [...$("#module-content").querySelectorAll("[data-record-pin]")].find((button) => (
+    button.dataset.recordPinType === type && button.dataset.recordPin === String(updated.id)
+  ));
+  pinButton?.focus({ preventScroll: true });
+  const name = String(updated[config.nameField] ?? "");
+  toast(updated.isPinned ? `已置顶${config.label}“${name}”` : `已取消置顶${config.label}“${name}”`);
+}
+
 function bindRecordFavoriteButtons(type, items, render) {
   const config = recordFavoriteConfigs[type];
   if (!config) return;
@@ -8741,6 +8810,22 @@ function bindRecordFavoriteButtons(type, items, render) {
     } catch (error) {
       button.disabled = false;
       toast(`${config.label}收藏状态更新失败：${error.message}`, "error");
+    }
+  }));
+}
+
+function bindRecordPinButtons(type, items, render) {
+  const config = recordFavoriteConfigs[type];
+  if (!config) return;
+  $("#module-content").querySelectorAll(`[data-record-pin-type="${type}"]`).forEach((button) => button.addEventListener("click", async () => {
+    const item = items.find((candidate) => candidate.id === button.dataset.recordPin);
+    if (!item || !canEditModule(config.module)) return;
+    button.disabled = true;
+    try {
+      await toggleRecordPin(type, item, render);
+    } catch (error) {
+      button.disabled = false;
+      toast(`${config.label}置顶状态更新失败：${error.message}`, "error");
     }
   }));
 }
@@ -8769,6 +8854,30 @@ function syncEntityDetailFavoriteButton(button, type, item) {
   button.disabled = !canFavorite;
 }
 
+function syncEntityDetailPinButton(button, type, item) {
+  const config = recordFavoriteConfigs[type];
+  const visible = Boolean(config && item);
+  button.classList.toggle("hidden", !visible);
+  button.innerHTML = pushPinIconMarkup();
+  if (!visible) {
+    button.disabled = true;
+    button.classList.remove("is-pinned");
+    button.setAttribute("aria-pressed", "false");
+    button.removeAttribute("aria-label");
+    button.removeAttribute("title");
+    return;
+  }
+  const isPinned = item.isPinned === true;
+  const canPin = canEditModule(config.module);
+  const action = isPinned ? "取消置顶" : "置顶";
+  const name = String(item[config.nameField] ?? "");
+  button.classList.toggle("is-pinned", isPinned);
+  button.setAttribute("aria-pressed", String(isPinned));
+  button.setAttribute("aria-label", `${action}${config.label}“${name}”`);
+  button.title = canPin ? action : `当前账户没有${config.label}模块写入权限`;
+  button.disabled = !canPin;
+}
+
 function bindEntityDetailFavoriteButton(button, type, getItem, onUpdated) {
   syncEntityDetailFavoriteButton(button, type, getItem());
   button.onclick = async () => {
@@ -8789,6 +8898,30 @@ function bindEntityDetailFavoriteButton(button, type, getItem, onUpdated) {
     } catch (error) {
       syncEntityDetailFavoriteButton(button, type, getItem());
       toast(`${config.label}收藏状态更新失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+    }
+  };
+}
+
+function bindEntityDetailPinButton(button, type, getItem, onUpdated) {
+  syncEntityDetailPinButton(button, type, getItem());
+  button.onclick = async () => {
+    const config = recordFavoriteConfigs[type];
+    const item = getItem();
+    if (!config || !item || !canEditModule(config.module)) return;
+    button.disabled = true;
+    try {
+      const updated = await api(`/api/${config.resource}/${encodeURIComponent(item.id)}/pin`, {
+        method: "PATCH",
+        body: { isPinned: item.isPinned !== true }
+      });
+      onUpdated(updated);
+      syncEntityDetailPinButton(button, type, getItem() ?? updated);
+      button.focus({ preventScroll: true });
+      const name = String(updated[config.nameField] ?? "");
+      toast(updated.isPinned ? `已置顶${config.label}“${name}”` : `已取消置顶${config.label}“${name}”`);
+    } catch (error) {
+      syncEntityDetailPinButton(button, type, getItem());
+      toast(`${config.label}置顶状态更新失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
     }
   };
 }
@@ -9131,7 +9264,7 @@ function settingRecordActions(item) {
   const recordAction = canEditModule("settings")
     ? recordCardEditButton("edit-setting", item.id, `设定“${item.title}”`)
     : recordHistoryButton("setting", item.id, item.title);
-  return `${recordFavoriteButton("setting", item)}${recordAction}`;
+  return `${recordPinButton("setting", item)}${recordFavoriteButton("setting", item)}${recordAction}`;
 }
 
 function draftTypeLabel(draftType) {
@@ -9245,7 +9378,11 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
   }
   if (item && viewOnly) {
     const headerActions = $("#dialog-context-actions");
-    headerActions.innerHTML = `<button id="draft-dialog-favorite" class="entity-detail-favorite-button" type="button" aria-pressed="false"></button>${canEditModule("drafts") ? '<button id="draft-dialog-edit" class="ghost-button" type="button">编辑想法</button>' : ""}`;
+    headerActions.innerHTML = `<button id="draft-dialog-pin" class="entity-detail-pin-button hidden" type="button" aria-pressed="false"></button><button id="draft-dialog-favorite" class="entity-detail-favorite-button" type="button" aria-pressed="false"></button>${canEditModule("drafts") ? '<button id="draft-dialog-edit" class="ghost-button" type="button">编辑想法</button>' : ""}`;
+    bindEntityDetailPinButton($("#draft-dialog-pin"), "draft", () => draftDialogItem, (updated) => {
+      draftDialogItem = updated;
+      void renderDrafts(moduleListPages.drafts).catch((error) => toast(`想法列表刷新失败：${error instanceof Error ? error.message : "未知错误"}`, "error"));
+    });
     bindEntityDetailFavoriteButton($("#draft-dialog-favorite"), "draft", () => draftDialogItem, (updated) => {
       draftDialogItem = updated;
       void renderDrafts(moduleListPages.drafts).catch((error) => toast(`想法列表刷新失败：${error instanceof Error ? error.message : "未知错误"}`, "error"));
@@ -9288,7 +9425,7 @@ async function renderDrafts(page = moduleListPages.drafts) {
     <details class="character-filter-dropdown"><summary><span>按绑定位置筛选</span><strong>${selectedBindingKeys.size ? `已选 ${selectedBindingKeys.size} 项` : "全部位置"}</strong></summary><div id="draft-binding-filter" class="character-filter-options">${bindingOptions.map(([value, label]) => `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedBindingKeys.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`).join("")}</div></details>
     <div class="character-filter-toolbar-actions">${hasDraftFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${drafts.length} 条想法</span>` : ""}<button id="clear-draft-filters" class="ghost-button" type="button" ${hasDraftFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
-  const actions = (item) => `${recordFavoriteButton("draft", item)}${canEditModule("drafts")
+  const actions = (item) => `${recordPinButton("draft", item)}${recordFavoriteButton("draft", item)}${canEditModule("drafts")
     ? `${recordCardEditButton("edit-draft", item.id, `想法“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}`
     : recordHistoryButton("draft", item.id, item.title)}`;
   const cards = `<div class="card-grid">${pageResult.items.map((item) => `
@@ -9347,6 +9484,10 @@ async function renderDrafts(page = moduleListPages.drafts) {
     openDraftDialog(await api(`/api/drafts/${encodeURIComponent(button.dataset.editDraft)}`));
   }));
   bindRecordFavoriteButtons("draft", pageResult.items, async () => {
+    moduleListPages.drafts = 1;
+    await renderDrafts(1);
+  });
+  bindRecordPinButtons("draft", pageResult.items, async () => {
     moduleListPages.drafts = 1;
     await renderDrafts(1);
   });
@@ -9417,6 +9558,10 @@ async function renderSettings(page = moduleListPages.settings) {
       moduleListPages.settings = 1;
       await renderSettings(1);
     });
+    bindRecordPinButtons("setting", pageResult.items, async () => {
+      moduleListPages.settings = 1;
+      await renderSettings(1);
+    });
     bindEntityHistoryButtons(async () => { await renderSettings(pageResult.page); await loadAiReferences(); });
   };
 
@@ -9468,6 +9613,21 @@ async function toggleCharacterFavorite(item) {
   toast(updated.isFavorite ? `已收藏角色“${updated.name}”` : `已取消收藏角色“${updated.name}”`);
 }
 
+async function toggleCharacterPin(item) {
+  const updated = await api(`/api/characters/${encodeURIComponent(item.id)}/pin`, {
+    method: "PATCH",
+    body: { isPinned: item.isPinned !== true }
+  });
+  if (loadedAiReferencesWorkId === state.work?.id) {
+    state.characters = upsertEntityCollection(state.characters, updated);
+    renderAiRoleplayCharacterSelect();
+  }
+  characterListPage = 1;
+  await renderCharacters(1);
+  $("#module-content").querySelector(`[data-character-pin="${CSS.escape(String(updated.id))}"]`)?.focus({ preventScroll: true });
+  toast(updated.isPinned ? `已置顶角色“${updated.name}”` : `已取消置顶角色“${updated.name}”`);
+}
+
 async function renderCharacters(page = characterListPage) {
   const hasCharacterFilters = characterFilters.raceIds.length > 0
     || characterFilters.organizationIds.length > 0
@@ -9490,14 +9650,14 @@ async function renderCharacters(page = characterListPage) {
   [state.races, state.organizations] = [races, organizations];
   mountModuleCount(characterPage.total);
   const layout = readModuleLayout();
-  const characterActions = (item) => `${characterFavoriteButton(item)}${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}`;
+  const characterActions = (item) => `${characterPinButton(item)}${characterFavoriteButton(item)}${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}`;
   const characterLockBadge = (item) => item.lockedFields.length
     ? `<span class="character-lock-badge" aria-label="${item.lockedFields.length} 个锁定字段" title="锁定字段：${esc(item.lockedFields.join("、"))}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><span>${item.lockedFields.length}</span></span>`
     : "";
   const characterCards = () => `<div class="card-grid">${pageCharacters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
-    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${characterFavoriteButton(item)}${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
+    <article class="record-card character-card preview-record-card has-card-edit has-pin-control" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${characterPinButton(item)}${characterFavoriteButton(item)}${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
     <div class="character-card-heading">${characterAvatarHtml(item)}<h3>${esc(item.name)}</h3>${entityLifecycleBadge(item.isDead, "已死亡")}${characterLockBadge(item)}</div>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     <div class="character-gender"><b>性别</b><span class="pill">${esc(characterGenderLabel(item.gender))}</span></div>
@@ -9572,6 +9732,17 @@ async function renderCharacters(page = characterListPage) {
     } catch (error) {
       button.disabled = false;
       toast(`角色收藏状态更新失败：${error.message}`, "error");
+    }
+  }));
+  $("#module-content").querySelectorAll("[data-character-pin]").forEach((button) => button.addEventListener("click", async () => {
+    const item = pageCharacters.find((candidate) => candidate.id === button.dataset.characterPin);
+    if (!item || !canEditModule("characters")) return;
+    button.disabled = true;
+    try {
+      await toggleCharacterPin(item);
+    } catch (error) {
+      button.disabled = false;
+      toast(`角色置顶状态更新失败：${error.message}`, "error");
     }
   }));
   const readSelectedValues = (selector) => [...$(selector).querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
@@ -9728,14 +9899,14 @@ async function renderOrganizations(page = moduleListPages.organizations) {
   moduleListPages.organizations = pageResult.page;
   const layout = readModuleLayout();
   const canEditOrganizations = canEditModule("organizations");
-  const organizationActions = (item, { cardControl = false } = {}) => `${recordFavoriteButton("organization", item, { cardControl })}${canEditOrganizations
+  const organizationActions = (item, { cardControl = false } = {}) => `${recordPinButton("organization", item, { cardControl })}${recordFavoriteButton("organization", item, { cardControl })}${canEditOrganizations
     ? recordCardEditButton("edit-organization", item.id, `组织“${item.name}”`)
     : recordHistoryButton("organization", item.id, item.name)}`;
   const organizationCardActions = (item) => canEditOrganizations
     ? organizationActions(item, { cardControl: true })
     : `<div class="card-actions">${organizationActions(item)}</div>`;
   const organizationCards = () => `<div class="card-grid organization-grid">${pageResult.items.map((item) => `
-    <article class="record-card organization-card preview-record-card${canEditOrganizations ? " has-card-edit has-favorite-control" : ""}" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"><small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
+    <article class="record-card organization-card preview-record-card${canEditOrganizations ? " has-card-edit has-favorite-control has-pin-control" : ""}" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"><small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
       <h3>${esc(item.name)}${entityLifecycleBadge(item.isDissolved, "已解散")}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
       <div class="organization-settings">${item.settingsCount ? `<span class="pill">${item.settingsCount} 条组织设定，打开查看详情</span>` : '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
@@ -9761,6 +9932,10 @@ async function renderOrganizations(page = moduleListPages.organizations) {
   const openOrganization = async (id, readOnly) => openOrganizationDialog(await api(`/api/organizations/${encodeURIComponent(id)}`), { readOnly });
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => { void openOrganization(button.dataset.editOrganization, false); }));
   bindRecordFavoriteButtons("organization", pageResult.items, async () => {
+    moduleListPages.organizations = 1;
+    await renderOrganizations(1);
+  });
+  bindRecordPinButtons("organization", pageResult.items, async () => {
     moduleListPages.organizations = 1;
     await renderOrganizations(1);
   });
@@ -13476,6 +13651,10 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   const editButton = $("#setting-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("settings"));
   editButton.onclick = () => openSettingEditor(settingEditorItem);
+  bindEntityDetailPinButton($("#setting-editor-pin"), "setting", () => viewOnly ? settingEditorItem : null, (updated) => {
+    settingEditorItem = updated;
+    state.settings = upsertEntityCollection(state.settings, updated);
+  });
   bindEntityDetailFavoriteButton($("#setting-editor-favorite"), "setting", () => viewOnly ? settingEditorItem : null, (updated) => {
     settingEditorItem = updated;
     state.settings = upsertEntityCollection(state.settings, updated);
@@ -14712,6 +14891,13 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   const editButton = $("#character-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("characters"));
   editButton.onclick = () => void openCharacterEditor(characterEditorItem);
+  bindEntityDetailPinButton($("#character-editor-pin"), "character", () => viewOnly ? characterEditorItem : null, (updated) => {
+    characterEditorItem = updated;
+    if (loadedAiReferencesWorkId === state.work?.id) {
+      state.characters = upsertEntityCollection(state.characters, updated);
+      renderAiRoleplayCharacterSelect();
+    }
+  });
   bindEntityDetailFavoriteButton($("#character-editor-favorite"), "character", () => viewOnly ? characterEditorItem : null, (updated) => {
     characterEditorItem = updated;
     if (loadedAiReferencesWorkId === state.work?.id) {
@@ -14905,6 +15091,10 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   editButton.textContent = `编辑${label}`;
   editButton.classList.toggle("hidden", !readOnly || !canEditModule(module));
   editButton.onclick = () => void openKnowledgeEditor(kind, knowledgeEditorItem);
+  bindEntityDetailPinButton($("#knowledge-editor-pin"), "organization", () => !isRace && viewOnly ? knowledgeEditorItem : null, (updated) => {
+    knowledgeEditorItem = updated;
+    state.organizations = upsertEntityCollection(state.organizations, updated);
+  });
   bindEntityDetailFavoriteButton($("#knowledge-editor-favorite"), "organization", () => !isRace && viewOnly ? knowledgeEditorItem : null, (updated) => {
     knowledgeEditorItem = updated;
     state.organizations = upsertEntityCollection(state.organizations, updated);

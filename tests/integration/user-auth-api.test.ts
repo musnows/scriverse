@@ -804,6 +804,106 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }
   });
 
+  it("按用户隔离四类资料收藏，并将置顶状态共享给书籍成员", async () => {
+    const owner = await register(runtime, "entity_preference_owner");
+    const viewer = await register(runtime, "entity_preference_viewer");
+    const editor = await register(runtime, "entity_preference_editor");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "资料偏好可见性测试" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: viewer.user.userId, role: "viewer" })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: editor.user.userId, role: "editor" })
+      .expect(201);
+    const character = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "偏好角色" })
+      .expect(201);
+    const draft = await owner.agent.post(`/api/works/${workId}/drafts`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ draftType: "prose", title: "偏好想法", content: "" })
+      .expect(201);
+    const setting = await owner.agent.post(`/api/works/${workId}/settings`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "偏好设定", category: "规则", content: "偏好测试内容" })
+      .expect(201);
+    const organization = await owner.agent.post(`/api/works/${workId}/organizations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "偏好组织" })
+      .expect(201);
+    const cases = [
+      {
+        id: String(character.body.data.id),
+        favoriteEndpoint: `/api/characters/${String(character.body.data.id)}/favorite`,
+        pinEndpoint: `/api/characters/${String(character.body.data.id)}/pin`,
+        listEndpoint: `/api/works/${workId}/characters`
+      },
+      {
+        id: String(draft.body.data.id),
+        favoriteEndpoint: `/api/drafts/${String(draft.body.data.id)}/favorite`,
+        pinEndpoint: `/api/drafts/${String(draft.body.data.id)}/pin`,
+        listEndpoint: `/api/works/${workId}/drafts`
+      },
+      {
+        id: String(setting.body.data.id),
+        favoriteEndpoint: `/api/settings/${String(setting.body.data.id)}/favorite`,
+        pinEndpoint: `/api/settings/${String(setting.body.data.id)}/pin`,
+        listEndpoint: `/api/works/${workId}/settings`
+      },
+      {
+        id: String(organization.body.data.id),
+        favoriteEndpoint: `/api/organizations/${String(organization.body.data.id)}/favorite`,
+        pinEndpoint: `/api/organizations/${String(organization.body.data.id)}/pin`,
+        listEndpoint: `/api/works/${workId}/organizations`
+      }
+    ];
+
+    for (const preferenceCase of cases) {
+      await editor.agent.patch(preferenceCase.favoriteEndpoint)
+        .set("X-CSRF-Token", editor.csrfToken)
+        .send({ isFavorite: true })
+        .expect(200);
+      const ownerFavoriteList = await owner.agent.get(preferenceCase.listEndpoint).expect(200);
+      const viewerFavoriteList = await viewer.agent.get(preferenceCase.listEndpoint).expect(200);
+      const editorFavoriteList = await editor.agent.get(preferenceCase.listEndpoint).expect(200);
+      expect(ownerFavoriteList.body.data.find((item: { id: string }) => item.id === preferenceCase.id)).toMatchObject({ isFavorite: false });
+      expect(viewerFavoriteList.body.data.find((item: { id: string }) => item.id === preferenceCase.id)).toMatchObject({ isFavorite: false });
+      expect(editorFavoriteList.body.data.find((item: { id: string }) => item.id === preferenceCase.id)).toMatchObject({ isFavorite: true });
+
+      await editor.agent.patch(preferenceCase.pinEndpoint)
+        .set("X-CSRF-Token", editor.csrfToken)
+        .send({ isPinned: true })
+        .expect(200);
+      for (const agent of [owner.agent, viewer.agent, editor.agent]) {
+        const pinnedList = await agent.get(preferenceCase.listEndpoint).expect(200);
+        expect(pinnedList.body.data.find((item: { id: string }) => item.id === preferenceCase.id)).toMatchObject({ isPinned: true });
+      }
+      const viewerDenied = await viewer.agent.patch(preferenceCase.pinEndpoint)
+        .set("X-CSRF-Token", viewer.csrfToken)
+        .send({ isPinned: false })
+        .expect(403);
+      expect(viewerDenied.body.error.code).toBe("WORK_EDIT_DENIED");
+
+      await owner.agent.patch(preferenceCase.pinEndpoint)
+        .set("X-CSRF-Token", owner.csrfToken)
+        .send({ isPinned: false })
+        .expect(200);
+      const unpinned = await viewer.agent.get(preferenceCase.listEndpoint).expect(200);
+      expect(unpinned.body.data.find((item: { id: string }) => item.id === preferenceCase.id)).toMatchObject({ isPinned: false });
+    }
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM work_entity_favorites WHERE work_id = ? AND user_id = ? AND is_favorite = 1",
+      workId,
+      editor.user.userId
+    )).toEqual({ count: 4 });
+  });
+
   it("按用户在数据库中记录新手引导完成状态", async () => {
     const firstUser = await register(runtime, "onboarding_first");
     const secondUser = await register(runtime, "onboarding_second");

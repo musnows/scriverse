@@ -945,7 +945,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).not.toContain(".panel-heading, #novel-tree { display: none; }");
     expect(application.text).toContain('aria-label="在“${esc(volume.title)}”中新建章节"');
     expect(application.text).toContain('button.dataset.volumeToggle));');
-    expect(application.text).toContain('class="record-card character-card preview-record-card has-card-edit" data-open-character');
+    expect(application.text).toContain('class="record-card character-card preview-record-card has-card-edit has-pin-control" data-open-character');
     expect(application.text).toContain('class="character-lock-badge"');
     expect(application.text).toContain('class="record-card module-row character-row character-card preview-record-card"');
     expect(styles.text).toContain(".character-row { grid-template-columns: minmax(140px, .28fr) minmax(0, 1fr) auto; }");

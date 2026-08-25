@@ -72,4 +72,50 @@ describe("角色收藏 API", () => {
     await request(runtime.app).patch(endpoint).send({ isFavorite: true, unexpected: true }).expect(400);
     expect(runtime.store.getCharacter(String(character.body.data.id)).isFavorite).toBe(false);
   });
+
+  it("置顶优先于收藏，且可同时保留两种状态", async () => {
+    const work = await createWork(runtime);
+    const workId = String(work.id);
+    const pinned = await request(runtime.app)
+      .post(`/api/works/${workId}/characters`)
+      .send({ name: "置顶角色" })
+      .expect(201);
+    const favorite = await request(runtime.app)
+      .post(`/api/works/${workId}/characters`)
+      .send({ name: "收藏角色" })
+      .expect(201);
+    const pinnedAndFavorite = await request(runtime.app)
+      .post(`/api/works/${workId}/characters`)
+      .send({ name: "置顶收藏角色" })
+      .expect(201);
+
+    await request(runtime.app)
+      .patch(`/api/characters/${String(pinned.body.data.id)}/pin`)
+      .send({ isPinned: true })
+      .expect(200);
+    await request(runtime.app)
+      .patch(`/api/characters/${String(favorite.body.data.id)}/favorite`)
+      .send({ isFavorite: true })
+      .expect(200);
+    await request(runtime.app)
+      .patch(`/api/characters/${String(pinnedAndFavorite.body.data.id)}/pin`)
+      .send({ isPinned: true })
+      .expect(200);
+    await request(runtime.app)
+      .patch(`/api/characters/${String(pinnedAndFavorite.body.data.id)}/favorite`)
+      .send({ isFavorite: true })
+      .expect(200);
+
+    const listed = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(listed.body.data.map((item: { id: string }) => item.id)).toEqual([
+      String(pinnedAndFavorite.body.data.id),
+      String(pinned.body.data.id),
+      String(favorite.body.data.id)
+    ]);
+    expect(listed.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: pinnedAndFavorite.body.data.id, isPinned: true, isFavorite: true }),
+      expect.objectContaining({ id: pinned.body.data.id, isPinned: true, isFavorite: false }),
+      expect.objectContaining({ id: favorite.body.data.id, isPinned: false, isFavorite: true })
+    ]));
+  });
 });
