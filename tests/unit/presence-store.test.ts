@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PersistedCollaborativeChange, PersistedPresenceEntry } from "../../src/collaboration-presence.js";
-import { Database } from "../../src/database.js";
+import { Database, SYSTEM_USER_ID } from "../../src/database.js";
 import { PresenceStore } from "../../src/presence-store.js";
 
 function entry(workId: string, clientId: string, lastSeenAt: string): PersistedPresenceEntry {
@@ -41,11 +41,12 @@ describe("协作状态持久层", () => {
   beforeEach(() => {
     database = new Database(":memory:");
     database.run(
-      "INSERT INTO works (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO works (id, title, created_at, updated_at, owner_user_id) VALUES (?, ?, ?, ?, ?)",
       "work-1",
       "持久化测试作品",
       "2026-07-24T08:00:00.000Z",
-      "2026-07-24T08:00:00.000Z"
+      "2026-07-24T08:00:00.000Z",
+      SYSTEM_USER_ID
     );
     store = new PresenceStore(database);
   });
