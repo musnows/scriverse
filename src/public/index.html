@@ -567,7 +567,7 @@
       <form id="dynamic-form" method="dialog">
         <div class="dialog-header">
           <div><span id="dialog-eyebrow" class="eyebrow">新增</span><h2 id="dialog-title">创建记录</h2><input id="dialog-title-input" class="dialog-title-input hidden" type="text" autocomplete="off" aria-label="记录标题"><p id="dialog-meta" class="dialog-header-meta hidden"></p></div>
-          <div class="settings-dialog-header-actions"><div id="dialog-context-actions" class="dialog-context-actions"></div><button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button></div>
+          <div class="settings-dialog-header-actions"><div id="dialog-context-actions" class="dialog-context-actions"></div><button class="dialog-close" value="cancel" aria-label="关闭" type="submit" formnovalidate>×</button></div>
         </div>
         <div id="dialog-fields" class="dialog-fields"></div>
         <div id="dialog-submit-status" class="dialog-submit-status hidden" role="status" aria-live="polite">
@@ -575,7 +575,7 @@
           <div class="dialog-submit-progress" role="progressbar" aria-label="提交处理中" aria-valuetext="正在等待服务器响应"><span></span></div>
         </div>
         <div class="dialog-actions">
-          <button class="ghost-button" value="cancel" type="submit">取消</button>
+          <button class="ghost-button" value="cancel" type="submit" formnovalidate>取消</button>
           <button id="dialog-submit" class="primary-button" value="default" type="submit">保存</button>
         </div>
       </form>
