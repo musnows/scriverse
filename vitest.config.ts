@@ -5,7 +5,7 @@ export default defineConfig({
     environment: "node",
     globals: false,
     pool: "threads",
-    maxWorkers: 8,
+    maxWorkers: 4,
     fileParallelism: true,
     testTimeout: 30_000,
     hookTimeout: 30_000,
