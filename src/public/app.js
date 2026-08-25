@@ -4112,6 +4112,31 @@ function aiPromptTextBeforeCursor() {
   return promptTextFromNode(fragment).replace(/\n$/u, "");
 }
 
+function aiPromptTextFromRange(range, prompt) {
+  const beforeCursor = range.cloneRange();
+  beforeCursor.selectNodeContents(prompt);
+  beforeCursor.setEnd(range.endContainer, range.endOffset);
+  const fragment = document.createElement("div");
+  fragment.append(beforeCursor.cloneContents());
+  return promptTextFromNode(fragment).replace(/\n$/u, "");
+}
+
+function aiPromptTextBoundary(prompt, offset) {
+  const walker = document.createTreeWalker(prompt, NodeFilter.SHOW_TEXT);
+  let remaining = Math.max(0, Number(offset) || 0);
+  let lastTextNode = null;
+  while (walker.nextNode()) {
+    const textNode = walker.currentNode;
+    if (textNode.parentElement?.closest("[data-ai-reference-key]")) continue;
+    lastTextNode = textNode;
+    const length = textNode.textContent?.length ?? 0;
+    if (remaining <= length) return { node: textNode, offset: remaining };
+    remaining -= length;
+  }
+  if (lastTextNode) return { node: lastTextNode, offset: lastTextNode.textContent?.length ?? 0 };
+  return { node: prompt, offset: prompt.childNodes.length };
+}
+
 function hideAiMentionMenu() {
   aiMentionMatch = null;
   aiMentionRange = null;
@@ -4200,12 +4225,14 @@ function selectAiMention(button) {
     id: button.dataset.aiReferenceId,
     name: button.dataset.aiReferenceName
   };
-  const range = aiMentionRange.cloneRange();
-  const textNode = range.startContainer;
-  const localText = textNode.nodeType === Node.TEXT_NODE ? textNode.textContent?.slice(0, range.startOffset) ?? "" : "";
-  const localMention = findAiMention(localText);
+  const cursorText = aiPromptTextFromRange(aiMentionRange, prompt);
+  const localMention = findAiMention(cursorText);
   if (!localMention) return hideAiMentionMenu();
-  range.setStart(textNode, localMention.start);
+  const range = document.createRange();
+  const startBoundary = aiPromptTextBoundary(prompt, localMention.start);
+  const endBoundary = aiPromptTextBoundary(prompt, cursorText.length);
+  range.setStart(startBoundary.node, startBoundary.offset);
+  range.setEnd(endBoundary.node, endBoundary.offset);
   range.deleteContents();
   const spacer = document.createTextNode(" ");
   range.insertNode(spacer);
