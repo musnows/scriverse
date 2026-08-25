@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import type { Request, RequestHandler, Response } from "express";
 import type { CredentialVault } from "./credential-vault.js";
-import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
+import { Database, PLATFORM_AI_WORK_ID, SYSTEM_USER_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import { HYBRID_SEARCH_PERMISSION_MODULES, hybridSearchPermissionModule } from "./hybrid-search.js";
 import { sanitizeRequestPath } from "./http-logging.js";
@@ -312,7 +312,7 @@ export class UserAuthService {
   }
 
   hasUsers(): boolean {
-    return Number(this.database.get("SELECT COUNT(*) AS count FROM users")?.count ?? 0) > 0;
+    return Number(this.database.get("SELECT COUNT(*) AS count FROM users WHERE id <> ?", SYSTEM_USER_ID)?.count ?? 0) > 0;
   }
 
   private createSession(userId: string): { token: string; session: AuthSession } {
@@ -385,7 +385,7 @@ export class UserAuthService {
     const userId = randomUUID();
     const salt = randomBytes(16).toString("base64url");
     return this.database.transaction(() => {
-      const role = Number(this.database.get("SELECT COUNT(*) AS count FROM users")?.count ?? 0) === 0 ? "admin" : "user";
+      const role = Number(this.database.get("SELECT COUNT(*) AS count FROM users WHERE id <> ?", SYSTEM_USER_ID)?.count ?? 0) === 0 ? "admin" : "user";
       this.database.run(
         `INSERT INTO users (id, username, normalized_username, display_name, password_hash, password_salt, role, status, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
@@ -401,7 +401,12 @@ export class UserAuthService {
       );
       this.database.run("DELETE FROM login_attempts WHERE normalized_username = ?", normalizedUsername);
       if (role === "admin") {
-        this.database.run("UPDATE works SET owner_user_id = ? WHERE owner_user_id IS NULL AND id <> ?", userId, PLATFORM_AI_WORK_ID);
+        this.database.run(
+          "UPDATE works SET owner_user_id = ? WHERE (owner_user_id IS NULL OR owner_user_id = ?) AND id <> ?",
+          userId,
+          SYSTEM_USER_ID,
+          PLATFORM_AI_WORK_ID
+        );
         this.database.run(
           `UPDATE ai_conversations SET created_by_user_id = ?
            WHERE created_by_user_id IS NULL
@@ -615,18 +620,19 @@ export class UserAuthService {
   }
 
   getUser(userId: string): AuthUser {
+    if (userId === SYSTEM_USER_ID) throw notFound("用户");
     const row = this.database.get("SELECT * FROM users WHERE id = ?", userId);
     if (!row) throw notFound("用户");
     return mapUser(row);
   }
 
   listUsers(): AuthUser[] {
-    return this.database.all("SELECT * FROM users ORDER BY created_at, username").map(mapUser);
+    return this.database.all("SELECT * FROM users WHERE id <> ? ORDER BY created_at, username", SYSTEM_USER_ID).map(mapUser);
   }
 
   listUsersPage(pagination: Pagination): PaginatedResult<AuthUser> {
     const page = paginationSql(pagination);
-    const rows = this.database.all(`SELECT * FROM users ORDER BY created_at, username${page.sql}`, ...page.params);
+    const rows = this.database.all(`SELECT * FROM users WHERE id <> ? ORDER BY created_at, username${page.sql}`, SYSTEM_USER_ID, ...page.params);
     return paginated(rows.map(mapUser), pagination);
   }
 
@@ -634,8 +640,9 @@ export class UserAuthService {
     const escapedQuery = escapeSqlLikePattern(query.trim().slice(0, 100));
     const pattern = `%${escapedQuery}%`;
     return this.database.all(
-      `SELECT * FROM users WHERE status = 'active' AND (username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')
+      `SELECT * FROM users WHERE id <> ? AND status = 'active' AND (username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')
        ORDER BY username LIMIT 50`,
+      SYSTEM_USER_ID,
       pattern,
       pattern
     ).map((row) => {
@@ -649,8 +656,9 @@ export class UserAuthService {
     const pattern = `%${escapedQuery}%`;
     const page = paginationSql(pagination);
     const rows = this.database.all(
-      `SELECT * FROM users WHERE status = 'active' AND (username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')
+      `SELECT * FROM users WHERE id <> ? AND status = 'active' AND (username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')
        ORDER BY username${page.sql}`,
+      SYSTEM_USER_ID,
       pattern,
       pattern,
       ...page.params

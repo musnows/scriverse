@@ -6,6 +6,7 @@ import JSZip from "jszip";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
+import { SYSTEM_USER_ID } from "../../src/database.js";
 import { runWithRequestActor } from "../../src/request-context.js";
 
 type SessionCredentials = {
@@ -639,6 +640,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const writerSession = await writer.agent.get("/api/auth/session").expect(200);
     expect(adminSession.body.data.user).toMatchObject({ role: "admin", isSystemAdmin: true });
     expect(writerSession.body.data.user).toMatchObject({ role: "user", isSystemAdmin: false });
+    const users = await admin.agent.get("/api/users").expect(200);
+    expect(users.body.data.map((user: { userId: string }) => user.userId)).not.toContain(SYSTEM_USER_ID);
 
     const adminWork = await admin.agent.post("/api/works").set("X-CSRF-Token", admin.csrfToken).send({ title: "管理员作品" }).expect(201);
     const writerWork = await writer.agent.post("/api/works").set("X-CSRF-Token", writer.csrfToken).send({ title: "作者作品" }).expect(201);

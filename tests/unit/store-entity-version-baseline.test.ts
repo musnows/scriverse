@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Database, ENTITY_VERSION_BASELINE_MIGRATION_VERSION } from "../../src/database.js";
+import { Database, ENTITY_VERSION_BASELINE_MIGRATION_VERSION, SYSTEM_USER_ID } from "../../src/database.js";
 import { Store } from "../../src/store.js";
 
 const ENTITY_SCAN_QUERIES = [
@@ -22,11 +22,12 @@ function createDatabase(options: { hasVersions: boolean; hasMarker: boolean }): 
   const database = new Database(":memory:");
   databases.push(database);
   database.run(
-    "INSERT INTO works (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+    "INSERT INTO works (id, title, created_at, updated_at, owner_user_id) VALUES (?, ?, ?, ?, ?)",
     "work-baseline",
     "基线迁移测试作品",
     "2026-08-01T00:00:00.000Z",
-    "2026-08-02T00:00:00.000Z"
+    "2026-08-02T00:00:00.000Z",
+    SYSTEM_USER_ID
   );
   if (options.hasVersions) {
     database.run(

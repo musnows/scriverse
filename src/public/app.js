@@ -4735,6 +4735,7 @@ function uploadWithProgress(path, options = {}, onProgress = () => {}) {
     request.upload.addEventListener("progress", (event) => {
       onProgress(event.lengthComputable && event.total > 0 ? (event.loaded / event.total) * 100 : null);
     });
+    request.upload.addEventListener("load", () => onProgress(100));
     request.addEventListener("error", () => {
       updateSystemHealth({ status: "offline" });
       reject(new Error("网络连接失败"));
@@ -5393,6 +5394,56 @@ function persistentToast(message, type = "info") {
   region.append(element);
   raiseToastRegion();
   return () => dismissToastElement(element);
+}
+
+function createImportProgressToast(fileName) {
+  const region = $("#import-progress-region");
+  const element = document.createElement("div");
+  element.className = "toast import-progress-toast";
+  element.setAttribute("role", "status");
+  element.setAttribute("aria-atomic", "true");
+  const copy = document.createElement("div");
+  copy.className = "import-progress-copy";
+  const title = document.createElement("strong");
+  title.textContent = `正在导入“${fileName}”`;
+  const status = document.createElement("span");
+  status.className = "import-progress-status";
+  status.textContent = "正在上传 · 0%";
+  const progress = document.createElement("progress");
+  progress.max = 100;
+  progress.value = 0;
+  progress.setAttribute("aria-label", "书籍导入上传进度");
+  copy.append(title, status);
+  element.append(copy, progress);
+  region.append(element);
+  if (typeof region.showPopover === "function" && !region.matches(":popover-open")) region.showPopover();
+  let closed = false;
+  return {
+    update(uploadProgress) {
+      if (closed) return;
+      if (Number.isFinite(uploadProgress) && uploadProgress >= 100) {
+        progress.removeAttribute("value");
+        status.textContent = "上传完成，正在解析并写入作品…";
+        return;
+      }
+      if (Number.isFinite(uploadProgress)) {
+        const percentage = Math.max(0, Math.min(99, Math.round(uploadProgress)));
+        progress.value = percentage;
+        status.textContent = `正在上传 · ${percentage}%`;
+      } else {
+        progress.removeAttribute("value");
+        status.textContent = "正在上传…";
+      }
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      element.remove();
+      if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+        region.hidePopover();
+      }
+    }
+  };
 }
 
 function restoreToastFocus(previousFocus) {
@@ -18853,15 +18904,22 @@ $("#import-file").addEventListener("change", async (event) => {
   body.append("file", file);
   body.append("mode", mode);
   body.append("expectedVersionNo", String(state.work.versionNo));
+  const importProgress = createImportProgressToast(file.name);
   try {
-    const result = await api(`/api/works/${state.work.id}/import`, { method: "POST", body });
+    const result = await uploadWithProgress(
+      `/api/works/${state.work.id}/import`,
+      { method: "POST", body },
+      (progress) => importProgress.update(progress)
+    );
     setSaveState(mode === "append" ? "已追加" : "已覆盖");
     state.work = result.tree;
     renderTree();
     const completion = mode === "append" ? "正文追加完成" : "正文覆盖完成";
-    toast(result.warnings.length ? `${completion}：${result.warnings.join("；")}` : completion);
     if (result.firstImportedChapterId) await selectChapter(result.firstImportedChapterId);
+    importProgress.close();
+    toast(result.warnings.length ? `${completion}：${result.warnings.join("；")}` : completion);
   } catch (error) {
+    importProgress.close();
     toast(error.message, "error");
     if (state.dirty) scheduleChapterAutoSave();
   }
@@ -18876,11 +18934,18 @@ $("#new-import-file").addEventListener("change", async (event) => {
   body.append("title", metadata.title ?? "");
   body.append("author", metadata.author ?? "");
   body.append("description", metadata.description ?? "");
+  const importProgress = createImportProgressToast(file.name);
   try {
-    const result = await api("/api/works/import", { method: "POST", body });
-    toast(result.warnings.length ? `作品已导入：${result.warnings.join("；")}` : "作品已导入");
+    const result = await uploadWithProgress(
+      "/api/works/import",
+      { method: "POST", body },
+      (progress) => importProgress.update(progress)
+    );
     await loadWorks(result.work.id);
+    importProgress.close();
+    toast(result.warnings.length ? `作品已导入：${result.warnings.join("；")}` : "作品已导入");
   } catch (error) {
+    importProgress.close();
     toast(error.message, "error");
   } finally {
     state.pendingImportMeta = null;
