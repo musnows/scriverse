@@ -42,9 +42,10 @@ describe("角色收藏界面", () => {
     expect(styles.text).toContain(".character-favorite-button {");
     expect(styles.text).toContain(".character-favorite-button.is-favorite {");
     expect(styles.text).toContain(".character-pin-button.is-pinned {");
-    expect(styles.text).toContain(".character-card { cursor: pointer; container: character-card / inline-size; }");
+    expect(styles.text).toContain(".character-card { cursor: pointer; }");
     expect(styles.text).toContain(".character-card-heading h3 { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }");
-    expect(styles.text).toContain("@container character-card (max-width: 320px)");
+    expect(styles.text).toContain(".record-card.has-card-edit.has-pin-control .character-card-heading { padding-right: 106px; }");
+    expect(styles.text).not.toContain(".record-card.has-card-edit.has-pin-control .character-card-heading { padding-top: 42px; padding-right: 0; }");
     expect(styles.text).toContain("@media (max-width: 560px)");
     expect(styles.text).toContain(".character-card-heading h3 { font-size: 15px; }");
     expect(styles.text).toContain("@media (max-width: 420px)");
