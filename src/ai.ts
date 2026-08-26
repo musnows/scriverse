@@ -114,7 +114,9 @@ import {
   normalizeRelationshipSearchText,
   relationshipCharacterTokenText,
   relationshipCharacterTokens,
+  relationshipPinyinFtsQuery,
   relationshipPinyinSearchTokens,
+  relationshipPinyinSequenceMatches,
   relationshipPinyinTokenText,
   relationshipPinyinTokens
 } from "./relationship-search.js";
@@ -782,6 +784,20 @@ const AGENT_ENTITY_CATEGORY_MODULES = {
   foreshadow: "outlines"
 } as const satisfies Record<string, WorkPermissionModule>;
 type AgentEntityCategory = keyof typeof AGENT_ENTITY_CATEGORY_MODULES;
+const AGENT_ENTITY_CATEGORY_SEARCH_TYPES = {
+  setting: ["setting"],
+  character: ["character"],
+  race: ["race"],
+  organization: ["organization"],
+  timeline: ["timeline-track", "timeline-event"],
+  relationship: ["relationship"],
+  outline: ["chapter-outline"],
+  foreshadow: ["foreshadow"]
+} as const satisfies Record<AgentEntityCategory, readonly HybridSearchType[]>;
+
+function agentEntitySearchTypes(categories: ReadonlySet<AgentEntityCategory>): HybridSearchType[] {
+  return [...new Set([...categories].flatMap((category) => AGENT_ENTITY_CATEGORY_SEARCH_TYPES[category]))];
+}
 
 type AiCallTraceAttempt = {
   attempt: number;
@@ -1131,6 +1147,7 @@ const grepArguments = z.object({
 const searchStoryEntitiesArguments = z.object({
   query: z.string().trim().min(1).max(MAXIMUM_WORK_SEARCH_QUERY_LENGTH),
   categories: z.array(z.enum(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"])).max(8).default([]),
+  includePhonetic: z.boolean().default(false),
   limit: z.number().int().min(1).max(30).default(30),
   cursor: agentToolCursor
 }).strict();
@@ -1223,8 +1240,8 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "search_story_entities",
-      description: "按短关键词在结构化作品实体中进行元数据、精确全文和拼音混合检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。人物结果包含权威 gender 字段：male 表示男/雄性，female 表示女/雌性，none 表示无性别，unknown 表示未知；gender=unknown 时禁止根据正文或常识自行推断。人物、种族、组织结果还分别包含权威布尔状态 isDead、isExtinct、isDissolved；只有值为 true 才能判定该角色已死亡、该种族已灭绝或该组织已解散，字段为 false 时必须视为仍存活、未灭绝或未解散，禁止根据正文情节自行改判。时间线事件结果返回 trackId、timeSort、chapterIds、chapterStoryOrders 与 orderEligible；只有 orderEligible=true 的事件才可参与同轨道时间比较。不是语义问答；请传入实体名、别名、标题、拼音或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
-      parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: MAXIMUM_WORK_SEARCH_QUERY_LENGTH }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 }, limit: { type: "integer", minimum: 1, maximum: 30, default: 30 }, cursor: agentToolCursorParameter }, required: ["query"], additionalProperties: false }
+      description: "按短关键词在结构化作品实体中进行元数据与精确全文检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。默认不查询拼音索引；只有中文实体可能存在同音字或错别字且精确检索无结果时，才设置 includePhonetic=true。拼音索引极其缓慢，必须谨慎使用。人物结果包含权威 gender 字段：male 表示男/雄性，female 表示女/雌性，none 表示无性别，unknown 表示未知；gender=unknown 时禁止根据正文或常识自行推断。人物、种族、组织结果还分别包含权威布尔状态 isDead、isExtinct、isDissolved；只有值为 true 才能判定该角色已死亡、该种族已灭绝或该组织已解散，字段为 false 时必须视为仍存活、未灭绝或未解散，禁止根据正文情节自行改判。时间线事件结果返回 trackId、timeSort、chapterIds、chapterStoryOrders 与 orderEligible；只有 orderEligible=true 的事件才可参与同轨道时间比较。不是语义问答；请传入实体名、别名、标题或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时先改用更短关键词，再按需谨慎启用拼音索引，或改用 story_index / grep。",
+      parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: MAXIMUM_WORK_SEARCH_QUERY_LENGTH }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 }, includePhonetic: { type: "boolean", default: false, description: "是否启用极其缓慢的拼音索引。默认关闭；仅在同音字或错别字检索确有必要时谨慎开启。" }, limit: { type: "integer", minimum: 1, maximum: 30, default: 30 }, cursor: agentToolCursorParameter }, required: ["query"], additionalProperties: false }
     }
   },
   read_character_sections: {
@@ -2801,6 +2818,7 @@ export class AiManager {
       limit?: number;
       allowedTypes?: readonly HybridSearchType[];
       conversationOwnerUserId?: string;
+      includePhonetic?: boolean;
     } = {}
   ): Promise<Record<string, unknown>[]> {
     this.store.getWork(workId);
@@ -2850,7 +2868,7 @@ export class AiManager {
         ? this.hybridAgentHistoryMatches(workId, normalizedQuery, channelLimit, options.conversationOwnerUserId)
         : [])
     ];
-    const phoneticCandidates = [
+    const phoneticCandidates = options.includePhonetic === false ? [] : [
       ...(requestedTypes.has("chapter")
         ? this.hybridChapterMatches(workId, normalizedQuery, "phonetic", channelLimit, chapterLineRangeFallbackState)
         : []),
@@ -2935,9 +2953,11 @@ export class AiManager {
     fallbackState: HybridChapterLineRangeFallbackState
   ): HybridSearchCandidate[] {
     let rows: Row[];
+    let phoneticVerificationSyllables: string[] | null = null;
     if (matchKind === "phonetic") {
-      const tokens = relationshipPinyinSearchTokens(query);
-      if (tokens.length === 0) return [];
+      const pinyinQuery = relationshipPinyinFtsQuery(query);
+      if (!pinyinQuery) return [];
+      phoneticVerificationSyllables = pinyinQuery.verificationSyllables;
       rows = this.store.db.all(
         `SELECT paragraph.id AS paragraph_id, paragraph.chapter_id, paragraph.paragraph_order,
                 paragraph.content AS paragraph_content, line_range.chapter_version AS range_chapter_version,
@@ -2953,7 +2973,7 @@ export class AiManager {
          ORDER BY bm25(chapter_paragraph_pinyin_fts), volume.sort_order, chapter.sort_order, paragraph.paragraph_order
          LIMIT ?`,
         workId,
-        ftsPhrase(tokens),
+        pinyinQuery.expression,
         limit
       );
     } else if ([...query].length < 3) {
@@ -2993,6 +3013,12 @@ export class AiManager {
         `"${query.replaceAll('"', '""')}"`,
         limit
       );
+    }
+    if (phoneticVerificationSyllables) {
+      rows = rows.filter((row) => relationshipPinyinSequenceMatches(
+        String(row.paragraph_content ?? ""),
+        phoneticVerificationSyllables!
+      ));
     }
     const seen = new Set<string>();
     return rows.flatMap((row): HybridSearchCandidate[] => {
@@ -7875,11 +7901,15 @@ export class AiManager {
       };
     }
     if (name === "search_story_entities") {
-      const { query, categories: categoryList, limit, cursor } = args as z.infer<typeof searchStoryEntitiesArguments>;
+      const { query, categories: categoryList, includePhonetic, limit, cursor } = args as z.infer<typeof searchStoryEntitiesArguments>;
       const readableCategories = this.readableAgentEntityCategories(permissions);
       const categories = new Set<AgentEntityCategory>(categoryList.filter((category): category is AgentEntityCategory => readableCategories.has(category)));
       const requestedCategories = categoryList.length > 0 ? categories : readableCategories;
-      const combined = (await this.searchWork(workId, query, { limit: 100 })).flatMap((item) => {
+      const combined = (await this.searchWork(workId, query, {
+        limit: 100,
+        allowedTypes: agentEntitySearchTypes(requestedCategories),
+        includePhonetic
+      })).flatMap((item) => {
         const sourceType = String(item.type);
         const type = sourceType === "timeline-track" || sourceType === "timeline-event"
           ? "timeline"
@@ -7911,7 +7941,7 @@ export class AiManager {
         ok: true,
         data: {
           query,
-          matchMode: "hybrid_exact_phonetic",
+          matchMode: includePhonetic ? "hybrid_exact_phonetic" : "hybrid_exact",
           ...(requestedCategories.has("timeline")
             ? { storyOrdering: entityStoryOrdering }
             : {}),
@@ -7926,7 +7956,7 @@ export class AiManager {
         id: toolCall.id,
         name,
         calledAt,
-        arguments: { query, categories: [...requestedCategories], limit, ...(cursor > 0 ? { cursor } : {}) },
+        arguments: { query, categories: [...requestedCategories], includePhonetic, limit, ...(cursor > 0 ? { cursor } : {}) },
         status: "completed",
         result
       };

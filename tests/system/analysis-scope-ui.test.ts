@@ -18,6 +18,8 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings"');
     expect(application).toContain('function analysisTaskModelPurpose(taskType)');
     expect(application).toContain('name="modelId" required aria-describedby="analysis-task-model-help"');
+    expect(page).toContain('class="dialog-close" value="cancel" aria-label="关闭" type="submit" formnovalidate');
+    expect(page).toContain('class="ghost-button" value="cancel" type="submit" formnovalidate>取消</button>');
     expect(application).toContain('默认值来自“本书 AI 设置”，只修改当前任务，不会改变全书默认模型。');
     expect(application).toContain('const defaultId = defaultModelByTask.get(analysisTaskModelPurpose(taskTypeSelect.value)) ?? ""');
     expect(application).toContain('body: { taskType, scope, modelId }');
