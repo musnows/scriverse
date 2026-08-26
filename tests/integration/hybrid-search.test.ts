@@ -112,6 +112,29 @@ describe("作品混合检索", () => {
     expect(updated.body.data).toEqual([expect.objectContaining({ id: setting.id, type: "setting" })]);
   });
 
+  it("长中文拼音查询使用组合 token 并过滤分离片段", async () => {
+    runtime = createTestRuntime();
+    const matched = await seedChapter(runtime, "斯库拉湖泊污然事件已经发生。");
+    const workId = String(matched.work.id);
+    const separated = runtime.store.createChapter(workId, {
+      volumeId: String(matched.chapter.volumeId),
+      title: "分离片段",
+      content: "斯库拉湖泊污，染事件只是两个片段。"
+    });
+
+    const response = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "斯库拉湖泊污染事件", type: "chapter", limit: 100 })
+      .expect(200);
+
+    expect(response.body.data).toEqual([
+      expect.objectContaining({ id: matched.chapter.id, matchKinds: expect.arrayContaining(["phonetic"]) })
+    ]);
+    expect(response.body.data).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: separated.id })
+    ]));
+  });
+
   it("实体工具只检索请求的设定库类型，不扫描正文与对话历史", async () => {
     runtime = createTestRuntime();
     const seeded = await seedChapter(runtime, "正文包含实体工具性能标记，但实体工具不应扫描正文。");

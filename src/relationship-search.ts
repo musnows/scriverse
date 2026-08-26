@@ -1,6 +1,7 @@
 import { pinyin } from "pinyin-pro";
 
 export const RELATIONSHIP_SEARCH_POLICY_VERSION = 3;
+export const RELATIONSHIP_PINYIN_JOINED_TOKEN_MAX_SYLLABLES = 6;
 
 export function normalizeRelationshipSearchText(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("zh-CN");
@@ -43,7 +44,10 @@ export function relationshipPinyinSearchTokens(value: string): string[] {
   return compact ? [safePinyinToken(compact)] : [];
 }
 
-export function relationshipPinyinJoinedTokens(value: string, maximumSyllables = 6): string[] {
+export function relationshipPinyinJoinedTokens(
+  value: string,
+  maximumSyllables = RELATIONSHIP_PINYIN_JOINED_TOKEN_MAX_SYLLABLES
+): string[] {
   const tokens = new Set<string>();
   for (const match of value.matchAll(/[\p{Script=Han}]{2,}/gu)) {
     const syllables = relationshipPinyinSyllables(match[0]);
@@ -66,6 +70,40 @@ export function relationshipPinyinTokenText(value: string): string {
 
 export function ftsPhrase(tokens: string[]): string {
   return `"${tokens.join(" ").replaceAll('"', '""')}"`;
+}
+
+export type RelationshipPinyinFtsQuery = {
+  expression: string;
+  verificationSyllables: string[] | null;
+};
+
+export function relationshipPinyinFtsQuery(value: string): RelationshipPinyinFtsQuery | null {
+  const normalized = normalizeRelationshipSearchText(value).trim();
+  const fallbackTokens = relationshipPinyinSearchTokens(normalized);
+  if (fallbackTokens.length === 0) return null;
+  if (!/^\p{Script=Han}{2,}$/u.test(normalized)) {
+    return { expression: ftsPhrase(fallbackTokens), verificationSyllables: null };
+  }
+  const syllables = relationshipPinyinSyllables(normalized);
+  const joinedTokens: string[] = [];
+  for (let start = 0; start < syllables.length; start += RELATIONSHIP_PINYIN_JOINED_TOKEN_MAX_SYLLABLES) {
+    joinedTokens.push(safePinyinToken(
+      syllables.slice(start, start + RELATIONSHIP_PINYIN_JOINED_TOKEN_MAX_SYLLABLES).join("")
+    ));
+  }
+  return {
+    expression: joinedTokens.map((token) => ftsPhrase([token])).join(" AND "),
+    verificationSyllables: joinedTokens.length > 1 ? syllables : null
+  };
+}
+
+export function relationshipPinyinSequenceMatches(value: string, expectedSyllables: readonly string[]): boolean {
+  if (expectedSyllables.length === 0) return false;
+  const sourceSyllables = relationshipPinyinSyllables(value);
+  for (let start = 0; start + expectedSyllables.length <= sourceSyllables.length; start += 1) {
+    if (expectedSyllables.every((syllable, index) => sourceSyllables[start + index] === syllable)) return true;
+  }
+  return false;
 }
 
 export function damerauLevenshteinDistance(left: readonly string[], right: readonly string[], maximum = Number.POSITIVE_INFINITY): number {

@@ -114,7 +114,9 @@ import {
   normalizeRelationshipSearchText,
   relationshipCharacterTokenText,
   relationshipCharacterTokens,
+  relationshipPinyinFtsQuery,
   relationshipPinyinSearchTokens,
+  relationshipPinyinSequenceMatches,
   relationshipPinyinTokenText,
   relationshipPinyinTokens
 } from "./relationship-search.js";
@@ -2951,9 +2953,11 @@ export class AiManager {
     fallbackState: HybridChapterLineRangeFallbackState
   ): HybridSearchCandidate[] {
     let rows: Row[];
+    let phoneticVerificationSyllables: string[] | null = null;
     if (matchKind === "phonetic") {
-      const tokens = relationshipPinyinSearchTokens(query);
-      if (tokens.length === 0) return [];
+      const pinyinQuery = relationshipPinyinFtsQuery(query);
+      if (!pinyinQuery) return [];
+      phoneticVerificationSyllables = pinyinQuery.verificationSyllables;
       rows = this.store.db.all(
         `SELECT paragraph.id AS paragraph_id, paragraph.chapter_id, paragraph.paragraph_order,
                 paragraph.content AS paragraph_content, line_range.chapter_version AS range_chapter_version,
@@ -2969,7 +2973,7 @@ export class AiManager {
          ORDER BY bm25(chapter_paragraph_pinyin_fts), volume.sort_order, chapter.sort_order, paragraph.paragraph_order
          LIMIT ?`,
         workId,
-        ftsPhrase(tokens),
+        pinyinQuery.expression,
         limit
       );
     } else if ([...query].length < 3) {
@@ -3009,6 +3013,12 @@ export class AiManager {
         `"${query.replaceAll('"', '""')}"`,
         limit
       );
+    }
+    if (phoneticVerificationSyllables) {
+      rows = rows.filter((row) => relationshipPinyinSequenceMatches(
+        String(row.paragraph_content ?? ""),
+        phoneticVerificationSyllables!
+      ));
     }
     const seen = new Set<string>();
     return rows.flatMap((row): HybridSearchCandidate[] => {
