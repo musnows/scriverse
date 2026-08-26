@@ -39,6 +39,7 @@ describe("交互式 AI 流事件空闲超时", () => {
       disableUserAuth: true,
       fetchImpl: fetchMock,
       serveUi: false,
+      aiStreamHeartbeatIntervalMs: 10,
       aiRetrySleep: async (delayMs) => { retryDelays.push(delayMs); }
     });
     const defaultSettings = await request(runtime.app).get("/api/platform/ai/settings").expect(200);
@@ -75,6 +76,32 @@ describe("交互式 AI 流事件空闲超时", () => {
     expect(response.body.error.code).toBe("VALIDATION_ERROR");
     const settings = await request(runtime.app).get("/api/platform/ai/settings").expect(200);
     expect(settings.body.data.streamIdleTimeoutSeconds).toBe(30);
+  });
+
+  it("上游流暂时静默时持续向客户端发送 SSE 心跳", async () => {
+    const encoder = new TextEncoder();
+    fetchMock.mockImplementation(async (_input, init) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        const timer = setTimeout(() => {
+          controller.enqueue(encoder.encode(openAiDelta("心跳后完成", "stop")));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        }, 75);
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          controller.error(init.signal?.reason);
+        }, { once: true });
+      }
+    }), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+    const streamed = await request(runtime.app)
+      .post(`/api/works/${workId}/chat/stream`)
+      .send({ instruction: "等待心跳后完成", scope: { type: "none" }, modelId })
+      .expect(200);
+
+    expect(streamed.text).toContain(": heartbeat\n\n");
+    expect(streamed.text).toContain("event: complete");
+    expect(streamed.text).toContain("心跳后完成");
   });
 
   it("每 5 秒收到事件时持续超过 60 秒仍正常完成", async () => {
