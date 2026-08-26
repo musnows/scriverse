@@ -185,7 +185,7 @@ describe("作品、导入和章节版本 API", () => {
     expect(unchanged.body.data.volumes).toHaveLength(0);
   });
 
-  it("创建和保存章节时自动压缩段间多余空行", async () => {
+  it("创建和保存章节时保留用户输入的连续空行", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "空行规则作品" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "正文" }).expect(201);
     const chapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
@@ -193,12 +193,12 @@ describe("作品、导入和章节版本 API", () => {
       title: "第一章",
       content: "\n\n第一段。\n\n\n\n第二段。\n\n"
     }).expect(201);
-    expect(chapter.body.data.content).toBe("第一段。\n\n第二段。");
+    expect(chapter.body.data.content).toBe("\n\n第一段。\n\n\n\n第二段。\n\n");
 
     const saved = await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`).send({
       content: "第一段。\n　\n\t\n\n第二段。"
     }).expect(200);
-    expect(saved.body.data.content).toBe("第一段。\n\n第二段。");
+    expect(saved.body.data.content).toBe("第一段。\n　\n\t\n\n第二段。");
   });
 
   it("创建章节时章节、版本基线与审计在同一事务中提交", async () => {

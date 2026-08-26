@@ -912,8 +912,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('const stateName = sending ? "stop" : switching ? "switching" : "send";');
     expect(application.text).toContain('button.disabled = switching;');
     expect(application.text).toContain('button.classList.toggle("is-stop", sending);');
-    expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
-    expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
+    expect(application.text).toContain('content: $("#chapter-content").value');
+    expect(application.text).not.toContain("collapseChapterInputBlankLines");
+    expect(application.text).not.toContain("collapseExcessBlankLines");
+    expect(application.text).toContain("function tidyChapterBlankLines()");
+    expect(application.text).toContain("const normalized = normalizeParagraphSpacing(input.value)");
     expect(application.text).toContain("function openVolumeDialog(item)");
     expect(application.text).toContain('openDialog(item ? "分卷详情" : "新建分卷"');
     expect(application.text).toContain('data-dialog-volume-export>导出 EPUB</button>');

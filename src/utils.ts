@@ -27,15 +27,6 @@ export function countWords(text: string): number {
   return chinese + latin;
 }
 
-export function normalizeParagraphSpacing(value: string): string {
-  return value
-    .replace(/\r\n?/gu, "\n")
-    .replace(/[\t\p{Zs}\uFEFF]+$/gmu, "")
-    .replace(/^\n+/u, "")
-    .replace(/\n+$/u, "")
-    .replace(/\n{3,}/gu, "\n\n");
-}
-
 export function splitDocumentParagraphs(value: string): string[] {
   return value
     .split(/\n[\t\p{Zs}\uFEFF]*\n+/gu)
