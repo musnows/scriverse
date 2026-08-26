@@ -89,9 +89,10 @@ describe("AI 上下文用量提示", () => {
     expect(mergeAiContextUsage(previousUsage, nextUsage, true)).toBe(nextUsage);
   });
 
-  it("按上下文窗口归一化五类 Token 分布", () => {
+  it("按上下文窗口归一化六类 Token 分布并拆分 input 与 output", () => {
     expect(normalizeAiContextTokenDistribution({
       contextWindow: 1_000,
+      outputReserveTokens: 200,
       tokenDistribution: {
         systemPromptTokens: 120,
         functionTokens: 80,
@@ -100,14 +101,28 @@ describe("AI 上下文用量提示", () => {
       }
     })).toEqual({
       contextWindow: 1_000,
-      occupiedTokens: 500,
+      occupiedTokens: 700,
       items: [
         { key: "system-prompt", label: "system prompt", tokens: 120, percent: 12 },
         { key: "function", label: "function", tokens: 80, percent: 8 },
         { key: "skills", label: "skills", tokens: 0, percent: 0 },
-        { key: "context", label: "context", tokens: 300, percent: 30 },
-        { key: "left", label: "left", tokens: 500, percent: 50 }
+        { key: "input", label: "input", tokens: 300, percent: 30 },
+        { key: "output", label: "output", tokens: 200, percent: 20 },
+        { key: "left", label: "left", tokens: 300, percent: 30 }
       ]
     });
+  });
+
+  it("输出预留不会挤出上下文窗口", () => {
+    expect(normalizeAiContextTokenDistribution({
+      contextWindow: 1_000,
+      outputReserveTokens: 500,
+      tokenDistribution: {
+        systemPromptTokens: 120,
+        functionTokens: 80,
+        skillsTokens: 0,
+        contextTokens: 700
+      }
+    }).items.at(-2)).toEqual({ key: "output", label: "output", tokens: 100, percent: 10 });
   });
 });

@@ -32,7 +32,7 @@ import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount } from "/ai-usage.js?v=20260821-ai-usage-pricing-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260819-context-percent-v1";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260827-context-input-output-v1";
 import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
@@ -12903,9 +12903,11 @@ function renderAiContextDistribution(usage) {
     label.className = "ai-context-distribution-label";
     const title = document.createElement("span");
     title.textContent = item.label;
-    if (item.key === "skills" || item.key === "context") {
+    if (item.key === "skills" || item.key === "input" || item.key === "output") {
       const description = document.createElement("small");
-      description.textContent = item.key === "skills" ? "待加入" : "用户和 agent 的交互";
+      description.textContent = item.key === "skills"
+        ? "待加入"
+        : item.key === "input" ? "用户和 agent 的交互" : "模型输出预留";
       title.append(" ", description);
     }
     const value = document.createElement("strong");
@@ -12922,6 +12924,7 @@ function renderAiContextDistribution(usage) {
     return row;
   }));
   popover.dataset.hasUsage = String(Boolean(usage));
+  return distribution;
 }
 
 function setAiContextMeter(usage, allowShrink = true) {
@@ -12931,7 +12934,7 @@ function setAiContextMeter(usage, allowShrink = true) {
   latestAiContextUsage = displayUsage;
   const meter = $("#ai-context-meter");
   const value = meter.querySelector("b");
-  renderAiContextDistribution(displayUsage);
+  const distribution = renderAiContextDistribution(displayUsage);
   if (!displayUsage) {
     meter.classList.add("is-empty");
     meter.classList.remove("is-warning", "is-danger");
@@ -12942,14 +12945,14 @@ function setAiContextMeter(usage, allowShrink = true) {
     meter.setAttribute("aria-label", tooltip);
     return;
   }
-  const percent = Math.max(0, Math.min(100, Number(displayUsage.usagePercent) || 0));
+  const percent = distribution.contextWindow > 0
+    ? Math.min(100, distribution.occupiedTokens / distribution.contextWindow * 100)
+    : 0;
   meter.classList.remove("is-empty");
   meter.classList.toggle("is-warning", percent >= 70 && percent < 90);
   meter.classList.toggle("is-danger", percent >= 90);
   meter.style.setProperty("--context-usage", String(percent));
-  value.textContent = Number(displayUsage.inputTokens) > 0
-    ? formatAiContextUsagePercent(displayUsage.inputTokens, displayUsage.contextWindow)
-    : `${percent}%`;
+  value.textContent = formatAiContextUsagePercent(distribution.occupiedTokens, distribution.contextWindow);
   const tooltip = formatAiContextUsageTooltip(displayUsage);
   meter.dataset.tooltip = tooltip;
   meter.setAttribute("aria-label", `当前上下文用量：${tooltip}`);

@@ -58,16 +58,21 @@ export function normalizeAiContextTokenDistribution(usage) {
   const systemPromptTokens = tokenCount(distribution.systemPromptTokens);
   const functionTokens = tokenCount(distribution.functionTokens);
   const skillsTokens = tokenCount(distribution.skillsTokens);
-  const contextTokens = Object.keys(distribution).length > 0
+  const inputTokens = Object.keys(distribution).length > 0
     ? tokenCount(distribution.contextTokens)
     : tokenCount(usage?.inputTokens);
-  const occupiedTokens = systemPromptTokens + functionTokens + skillsTokens + contextTokens;
+  const outputTokens = Math.min(
+    tokenCount(distribution.outputTokens ?? usage?.outputReserveTokens),
+    Math.max(0, contextWindow - systemPromptTokens - functionTokens - skillsTokens - inputTokens)
+  );
+  const occupiedTokens = systemPromptTokens + functionTokens + skillsTokens + inputTokens + outputTokens;
   const leftTokens = Math.max(0, contextWindow - occupiedTokens);
   const items = [
     { key: "system-prompt", label: "system prompt", tokens: systemPromptTokens },
     { key: "function", label: "function", tokens: functionTokens },
     { key: "skills", label: "skills", tokens: skillsTokens },
-    { key: "context", label: "context", tokens: contextTokens },
+    { key: "input", label: "input", tokens: inputTokens },
+    { key: "output", label: "output", tokens: outputTokens },
     { key: "left", label: "left", tokens: leftTokens }
   ];
   return {
