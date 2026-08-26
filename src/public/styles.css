@@ -2962,7 +2962,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-context-distribution-row[data-key="system-prompt"] { --distribution-color: var(--accent); }
 .ai-context-distribution-row[data-key="function"] { --distribution-color: #9a7651; }
 .ai-context-distribution-row[data-key="skills"] { --distribution-color: var(--muted); }
-.ai-context-distribution-row[data-key="context"] { --distribution-color: var(--green); }
+.ai-context-distribution-row[data-key="input"] { --distribution-color: var(--green); }
+.ai-context-distribution-row[data-key="output"] { --distribution-color: #718a9f; }
 .ai-context-distribution-row[data-key="left"] { --distribution-color: color-mix(in srgb, var(--muted) 55%, transparent); }
 .ai-send-button { display: grid; flex: 0 0 32px; place-items: center; width: 32px; min-width: 32px; min-height: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; background: var(--accent); color: #fff; box-shadow: 0 4px 12px rgba(139,61,44,.2); }
 .ai-send-button:hover, .ai-send-button:focus-visible { background: var(--accent-dark); outline: 0; }
