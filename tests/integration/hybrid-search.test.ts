@@ -122,6 +122,7 @@ describe("作品混合检索", () => {
       content: "只返回设定库结果。"
     });
     const search = vi.spyOn(runtime.store, "search");
+    const searchWork = vi.spyOn(runtime.ai, "searchWork");
     const internalAi = runtime.ai as unknown as {
       executeAgentTool: (
         candidateWorkId: string,
@@ -146,6 +147,25 @@ describe("作品混合检索", () => {
     );
     expect(search.mock.calls[0]?.[2]).not.toContain("chapter");
     expect(search.mock.calls[0]?.[2]).not.toContain("agent-history");
+    expect(searchWork).toHaveBeenCalledWith(workId, "实体工具性能标记", {
+      limit: 100,
+      allowedTypes: ["setting", "timeline-track", "timeline-event"],
+      includePhonetic: false
+    });
+
+    await internalAi.executeAgentTool(workId, {
+      id: "entity-phonetic-search",
+      type: "function",
+      function: {
+        name: "search_story_entities",
+        arguments: JSON.stringify({ query: "实体工具性能标记", categories: ["setting"], includePhonetic: true })
+      }
+    });
+    expect(searchWork).toHaveBeenLastCalledWith(workId, "实体工具性能标记", {
+      limit: 100,
+      allowedTypes: ["setting"],
+      includePhonetic: true
+    });
   });
 
   it("三条正文搜索路径复用版本化行号索引并对缺失索引执行有界自修复", async () => {
