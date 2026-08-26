@@ -954,6 +954,8 @@ export type RuntimeOptions = {
   uploadLimits?: ImageUploadLimits;
   /** 交互式 AI 流的事件空闲超时；生产启动值由环境变量解析，测试可注入更短时长。 */
   aiStreamIdleTimeoutMs?: number;
+  /** 测试用：覆盖客户端 SSE 心跳间隔。 */
+  aiStreamHeartbeatIntervalMs?: number;
   /** AI 上游 HTTP 状态码重试配置；生产启动值由环境变量解析。 */
   aiRetryPolicy?: Partial<AiRetryPolicy>;
   /** 测试用：替换 AI HTTP 重试等待。 */
@@ -984,6 +986,7 @@ export type Runtime = {
 };
 
 export const RUNTIME_BACKUP_IDLE_TIMEOUT_MS = 9_000;
+export const AI_CLIENT_STREAM_HEARTBEAT_INTERVAL_MS = 15_000;
 
 function data(response: Response, value: unknown, status = 200): void {
   response.status(status).json({ data: value });
@@ -1361,6 +1364,10 @@ function redactVersionSnapshots(
 export function createRuntime(options: RuntimeOptions): Runtime {
   const uploadLimits = options.uploadLimits ?? DEFAULT_IMAGE_UPLOAD_LIMITS;
   const aiChatTabLimit = options.aiChatTabLimit ?? DEFAULT_AI_CHAT_TAB_LIMIT;
+  const requestedAiStreamHeartbeatIntervalMs = Number(options.aiStreamHeartbeatIntervalMs);
+  const aiStreamHeartbeatIntervalMs = Number.isFinite(requestedAiStreamHeartbeatIntervalMs)
+    ? Math.max(1, Math.trunc(requestedAiStreamHeartbeatIntervalMs))
+    : AI_CLIENT_STREAM_HEARTBEAT_INTERVAL_MS;
   logger.info("runtime.initializing", {
     databasePath: options.databasePath,
     serveUi: options.serveUi ?? true,
@@ -3456,15 +3463,28 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const modelId = resolveConversationModelId(request.params.workId, conversationId, input.modelId);
     const permissions = requestPermissions(request, request.params.workId);
     const controller = new AbortController();
-    response.on("close", () => {
-      if (!response.writableEnded) controller.abort(new Error("浏览器已中断流式请求"));
-    });
     let streamRequestId: string | null = null;
     let streamRequestFinished = false;
     let lastStreamLeaseTouchAt = Date.now();
+    let streamHeartbeatTimer: NodeJS.Timeout | null = null;
     let preparedContext: Record<string, unknown> | null = null;
     let preparedConversation: Record<string, unknown> | null = null;
     let preparedChatImageAttachments: Awaited<ReturnType<typeof ai.prepareChatImageAttachments>> = [];
+    const touchStreamLease = (): void => {
+      if (streamRequestId && Date.now() - lastStreamLeaseTouchAt >= 30_000) {
+        store.touchAiConversationStreamRequest(streamRequestId);
+        lastStreamLeaseTouchAt = Date.now();
+      }
+    };
+    const stopStreamHeartbeat = (): void => {
+      if (!streamHeartbeatTimer) return;
+      clearInterval(streamHeartbeatTimer);
+      streamHeartbeatTimer = null;
+    };
+    response.on("close", () => {
+      stopStreamHeartbeat();
+      if (!response.writableEnded) controller.abort(new Error("浏览器已中断流式请求"));
+    });
     const startStream = (): void => {
       if (response.headersSent) return;
       response.status(200);
@@ -3473,12 +3493,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       response.setHeader("Connection", "keep-alive");
       response.setHeader("X-Accel-Buffering", "no");
       response.flushHeaders();
+      streamHeartbeatTimer = setInterval(() => {
+        touchStreamLease();
+        if (!response.writableEnded && !response.destroyed) response.write(": heartbeat\n\n");
+      }, aiStreamHeartbeatIntervalMs);
+      streamHeartbeatTimer.unref();
     };
     const sendEvent = (event: string, payload: unknown): void => {
-      if (streamRequestId && Date.now() - lastStreamLeaseTouchAt >= 30_000) {
-        store.touchAiConversationStreamRequest(streamRequestId);
-        lastStreamLeaseTouchAt = Date.now();
-      }
+      touchStreamLease();
       if (!response.writableEnded && !response.destroyed) response.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
     };
     try {
@@ -3654,6 +3676,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         sendEvent("error", publicAiStreamError(error));
       }
     } finally {
+      stopStreamHeartbeat();
       if (streamRequestId && !streamRequestFinished && !stopping) {
         store.finishAiConversationStreamRequest(streamRequestId, "cancelled", "stream_closed");
         streamRequestFinished = true;

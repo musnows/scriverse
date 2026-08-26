@@ -1,3 +1,7 @@
+/**
+ * @param {string} code
+ * @param {string} message
+ */
 function streamTransportError(code, message) {
   const error = new Error(message);
   error.code = code;
@@ -5,6 +9,7 @@ function streamTransportError(code, message) {
   return error;
 }
 
+/** @param {boolean} completed */
 export function assertAiStreamCompleted(completed) {
   if (completed) return;
   throw streamTransportError(
@@ -13,6 +18,10 @@ export function assertAiStreamCompleted(completed) {
   );
 }
 
+/**
+ * @param {ReadableStream<Uint8Array>} body
+ * @param {(eventName: string, payload: unknown) => void | Promise<void>} onEvent
+ */
 export async function readAiEventStream(body, onEvent) {
   const reader = body.getReader();
   const decoder = new TextDecoder();

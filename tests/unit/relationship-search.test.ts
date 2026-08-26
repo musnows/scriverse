@@ -7,7 +7,9 @@ import {
   isRelationshipPhoneticReference,
   relationshipCharacterTokens,
   relationshipPinyinJoinedTokens,
+  relationshipPinyinFtsQuery,
   relationshipPinyinSearchTokens,
+  relationshipPinyinSequenceMatches,
   relationshipPinyinSyllables,
   relationshipPinyinTokens
 } from "../../src/relationship-search.js";
@@ -20,6 +22,23 @@ describe("人物关系来源搜索", () => {
     expect(relationshipPinyinSearchTokens("北港")).toEqual(["pbei", "pgang"]);
     expect(relationshipPinyinSearchTokens("bei gang")).toEqual(["pbeigang"]);
     expect(relationshipPinyinJoinedTokens("抵达北港议会")).toContain("pbeigang");
+  });
+
+  it("使用组合拼音 token 压缩 FTS 查询并校验长短语顺序", () => {
+    expect(relationshipPinyinFtsQuery("回忆录")).toEqual({
+      expression: '"phuiyilu"',
+      verificationSyllables: null
+    });
+    expect(relationshipPinyinFtsQuery("斯库拉湖泊污染事件")).toEqual({
+      expression: '"psikulahubowu" AND "pranshijian"',
+      verificationSyllables: ["si", "ku", "la", "hu", "bo", "wu", "ran", "shi", "jian"]
+    });
+    expect(relationshipPinyinFtsQuery("bei gang")).toEqual({
+      expression: '"pbeigang"',
+      verificationSyllables: null
+    });
+    expect(relationshipPinyinSequenceMatches("斯库拉湖泊污然事件发生", ["si", "ku", "la", "hu", "bo", "wu", "ran", "shi", "jian"])).toBe(true);
+    expect(relationshipPinyinSequenceMatches("斯库拉湖泊污，染事件发生", ["si", "ku", "la", "hu", "bo", "wu", "ran", "shi", "jian"])).toBe(false);
   });
 
   it("仅允许中文姓名和中文别名参与拼音疑似匹配", () => {

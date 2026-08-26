@@ -1749,7 +1749,7 @@ describe("AI 供应商、模型与建议 API", () => {
         tools?: Array<{ function?: {
           name?: string;
           description?: string;
-          parameters?: { properties?: { query?: { maxLength?: number } } };
+          parameters?: { properties?: { query?: { maxLength?: number }; includePhonetic?: { type?: string; default?: boolean; description?: string } } };
         } }>;
       };
       if (completionCount === 1) {
@@ -1757,7 +1757,13 @@ describe("AI 供应商、模型与建议 API", () => {
         expect(searchTool?.function?.description).toContain("gender=unknown 时禁止");
         expect(searchTool?.function?.description).toContain("只有值为 true 才能判定");
         expect(searchTool?.function?.description).toContain("字段为 false 时必须视为仍存活、未灭绝或未解散");
+        expect(searchTool?.function?.description).toContain("拼音索引极其缓慢，必须谨慎使用");
         expect(searchTool?.function?.parameters?.properties?.query?.maxLength).toBe(100);
+        expect(searchTool?.function?.parameters?.properties?.includePhonetic).toMatchObject({
+          type: "boolean",
+          default: false,
+          description: expect.stringContaining("极其缓慢")
+        });
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
           id: "race-knowledge",
           type: "function",
@@ -1896,7 +1902,7 @@ describe("AI 供应商、模型与建议 API", () => {
       { id: "grep-default", name: "grep", arguments: { keyword: "林舟" } },
       { id: "grep-limit", name: "grep", arguments: { keyword: "林舟", limit: 1 } },
       { id: "knowledge-default", name: "search_story_entities", arguments: { query: "跃迁" } },
-      { id: "knowledge-categories", name: "search_story_entities", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } },
+      { id: "knowledge-categories", name: "search_story_entities", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"], includePhonetic: true } },
       { id: "character-section-summary", name: "read_character_sections", arguments: { sectionIds: [section.id], include: "summary" } },
       { id: "character-section-content", name: "read_character_sections", arguments: { sectionIds: [section.id], include: "content" } },
       { id: "character-section-both", name: "read_character_sections", arguments: { sectionIds: [section.id], include: "both" } }
@@ -1939,7 +1945,7 @@ describe("AI 供应商、模型与建议 API", () => {
         }
       });
       expect(results.get("grep-limit")).toMatchObject({ ok: true, data: { limit: 1, matches: [{ chapterId }] } });
-      expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁", matchMode: "hybrid_exact_phonetic" } });
+      expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁", matchMode: "hybrid_exact" } });
       expect(results.get("knowledge-categories")).toMatchObject({ ok: true, data: { matchMode: "hybrid_exact_phonetic", matches: expect.any(Array) } });
       expect(results.get("character-section-summary")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, characterName: "哥斯拉", gender: "male", summary: "哥斯拉在远古时期守护地球生态。" }] } });
       expect(results.get("character-section-summary")).not.toHaveProperty("data.sections.0.contentMarkdown");
