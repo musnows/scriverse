@@ -17,7 +17,7 @@ describe("正文排版整理", () => {
       .toBe("第一段。\n\n第二段。");
   });
 
-  it("输入过程中自动压缩多余空行并保留正在编辑的段尾空行", () => {
+  it("整理时压缩多余空行并保留正在编辑的段尾空行", () => {
     expect(collapseExcessBlankLines("第一段。\n \n\t\n\n第二段。"))
       .toBe("第一段。\n\n第二段。");
     expect(collapseExcessBlankLines("第一段。\n\n"))
