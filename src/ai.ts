@@ -782,6 +782,20 @@ const AGENT_ENTITY_CATEGORY_MODULES = {
   foreshadow: "outlines"
 } as const satisfies Record<string, WorkPermissionModule>;
 type AgentEntityCategory = keyof typeof AGENT_ENTITY_CATEGORY_MODULES;
+const AGENT_ENTITY_CATEGORY_SEARCH_TYPES = {
+  setting: ["setting"],
+  character: ["character"],
+  race: ["race"],
+  organization: ["organization"],
+  timeline: ["timeline-track", "timeline-event"],
+  relationship: ["relationship"],
+  outline: ["chapter-outline"],
+  foreshadow: ["foreshadow"]
+} as const satisfies Record<AgentEntityCategory, readonly HybridSearchType[]>;
+
+function agentEntitySearchTypes(categories: ReadonlySet<AgentEntityCategory>): HybridSearchType[] {
+  return [...new Set([...categories].flatMap((category) => AGENT_ENTITY_CATEGORY_SEARCH_TYPES[category]))];
+}
 
 type AiCallTraceAttempt = {
   attempt: number;
@@ -7879,7 +7893,10 @@ export class AiManager {
       const readableCategories = this.readableAgentEntityCategories(permissions);
       const categories = new Set<AgentEntityCategory>(categoryList.filter((category): category is AgentEntityCategory => readableCategories.has(category)));
       const requestedCategories = categoryList.length > 0 ? categories : readableCategories;
-      const combined = (await this.searchWork(workId, query, { limit: 100 })).flatMap((item) => {
+      const combined = (await this.searchWork(workId, query, {
+        limit: 100,
+        allowedTypes: agentEntitySearchTypes(requestedCategories)
+      })).flatMap((item) => {
         const sourceType = String(item.type);
         const type = sourceType === "timeline-track" || sourceType === "timeline-event"
           ? "timeline"

@@ -112,6 +112,42 @@ describe("作品混合检索", () => {
     expect(updated.body.data).toEqual([expect.objectContaining({ id: setting.id, type: "setting" })]);
   });
 
+  it("实体工具只检索请求的设定库类型，不扫描正文与对话历史", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "正文包含实体工具性能标记，但实体工具不应扫描正文。");
+    const workId = String(seeded.work.id);
+    runtime.store.createSetting(workId, {
+      title: "实体工具性能标记",
+      category: "规则",
+      content: "只返回设定库结果。"
+    });
+    const search = vi.spyOn(runtime.store, "search");
+    const internalAi = runtime.ai as unknown as {
+      executeAgentTool: (
+        candidateWorkId: string,
+        toolCall: Record<string, unknown>
+      ) => Promise<Record<string, unknown>>;
+    };
+
+    const execution = await internalAi.executeAgentTool(workId, {
+      id: "entity-only-search",
+      type: "function",
+      function: {
+        name: "search_story_entities",
+        arguments: JSON.stringify({ query: "实体工具性能标记", categories: ["setting", "timeline"] })
+      }
+    });
+
+    expect(execution.status).toBe("completed");
+    expect(search).toHaveBeenCalledWith(
+      workId,
+      "实体工具性能标记",
+      new Set(["setting", "timeline-track", "timeline-event"])
+    );
+    expect(search.mock.calls[0]?.[2]).not.toContain("chapter");
+    expect(search.mock.calls[0]?.[2]).not.toContain("agent-history");
+  });
+
   it("三条正文搜索路径复用版本化行号索引并对缺失索引执行有界自修复", async () => {
     runtime = createTestRuntime();
     const longPrefix = Array.from({ length: 2_000 }, (_, index) => `铺垫行 ${index + 1}`).join("\n");
