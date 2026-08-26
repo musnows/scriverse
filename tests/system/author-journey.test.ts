@@ -630,7 +630,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('class="prompt-composer"');
     expect(page.text).toContain('class="ai-send-button"');
     expect(page.text).toContain('id="ai-context-meter"');
-    expect(application.text).toContain('description.textContent = item.key === "skills" ? "待加入" : "用户和 agent 的交互";');
+    expect(application.text).toContain('description.textContent = item.key === "skills"\n        ? "待加入"\n        : item.key === "input" ? "用户和 agent 的交互" : "模型输出预留";');
     expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
     expect(application.text).toContain("多人协作，自动保存已关闭");
     expect(application.text).toContain("if (automatic) {");
@@ -912,8 +912,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('const stateName = sending ? "stop" : switching ? "switching" : "send";');
     expect(application.text).toContain('button.disabled = switching;');
     expect(application.text).toContain('button.classList.toggle("is-stop", sending);');
-    expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
-    expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
+    expect(application.text).toContain('content: $("#chapter-content").value');
+    expect(application.text).not.toContain("collapseChapterInputBlankLines");
+    expect(application.text).not.toContain("collapseExcessBlankLines");
+    expect(application.text).toContain("function tidyChapterBlankLines()");
+    expect(application.text).toContain("const normalized = normalizeParagraphSpacing(input.value)");
     expect(application.text).toContain("function openVolumeDialog(item)");
     expect(application.text).toContain('openDialog(item ? "分卷详情" : "新建分卷"');
     expect(application.text).toContain('data-dialog-volume-export>导出 EPUB</button>');

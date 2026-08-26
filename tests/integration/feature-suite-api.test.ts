@@ -2742,7 +2742,6 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       category: "人物关系",
       content: settingContent
     }).expect(201);
-    runtime.database.run("UPDATE chapters SET content = ? WHERE id = ?", chapterContent, chapters[0].id);
     runtime.database.run("UPDATE settings SET content = ? WHERE id = ?", settingContent, setting.body.data.id);
     await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
     await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);

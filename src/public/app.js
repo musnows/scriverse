@@ -1,5 +1,5 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1";
-import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
+import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import {
@@ -32,7 +32,7 @@ import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount } from "/ai-usage.js?v=20260821-ai-usage-pricing-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260819-context-percent-v1";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260827-context-input-output-v1";
 import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
@@ -1935,19 +1935,6 @@ function scheduleChapterLineNumbers(delay = 0) {
     chapterLineNumberTimer = null;
     requestChapterLineNumberFrame();
   }, wait);
-}
-
-function collapseChapterInputBlankLines(input) {
-  const value = input.value;
-  const normalized = collapseExcessBlankLines(value);
-  if (normalized === value) return false;
-  const selectionStart = input.selectionStart ?? value.length;
-  const selectionEnd = input.selectionEnd ?? selectionStart;
-  const nextStart = collapseExcessBlankLines(value.slice(0, selectionStart)).length;
-  const nextEnd = collapseExcessBlankLines(value.slice(0, selectionEnd)).length;
-  input.value = normalized;
-  input.setSelectionRange(nextStart, nextEnd);
-  return true;
 }
 
 function lineIndexAtPointer(clientY) {
@@ -5635,7 +5622,7 @@ function chapterDraftSnapshot() {
   return {
     chapterId: state.chapter.id,
     title: $("#chapter-title").value.trim(),
-    content: normalizeParagraphSpacing($("#chapter-content").value)
+    content: $("#chapter-content").value
   };
 }
 
@@ -5691,11 +5678,6 @@ async function persistChapter({ automatic = false } = {}) {
     setSaveState("标题不能为空", true);
     if (!automatic) toast("章节标题不能为空", "error");
     return null;
-  }
-  const input = $("#chapter-content");
-  if (input.value !== draft.content) {
-    input.value = draft.content;
-    scheduleChapterLineNumbers();
   }
   if (sameChapterSnapshot(draft, lastSavedChapterSnapshot)) {
     setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
@@ -8078,9 +8060,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   $("#chapter-path").textContent = chapterPath;
   $("#chapter-path").title = chapterPath;
   $("#chapter-title").value = state.chapter.title;
-  const normalizedContent = normalizeParagraphSpacing(state.chapter.content);
-  const spacingChanged = normalizedContent !== state.chapter.content;
-  $("#chapter-content").value = normalizedContent;
+  $("#chapter-content").value = state.chapter.content;
   chapterAnnotationCounts = new Map();
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
@@ -8091,7 +8071,6 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   updateChapterStats();
   if (!canEditProse()) setSaveState("正文只读");
   else if (chapterEditorReadOnly) setSaveState("阅读模式");
-  else if (spacingChanged) scheduleChapterAutoSave(120);
   else setSaveState("已保存");
   renderTree();
   replacePageRoute({ view: "editor", workId: state.work.id, chapterId: state.chapter.id });
@@ -12903,9 +12882,11 @@ function renderAiContextDistribution(usage) {
     label.className = "ai-context-distribution-label";
     const title = document.createElement("span");
     title.textContent = item.label;
-    if (item.key === "skills" || item.key === "context") {
+    if (item.key === "skills" || item.key === "input" || item.key === "output") {
       const description = document.createElement("small");
-      description.textContent = item.key === "skills" ? "待加入" : "用户和 agent 的交互";
+      description.textContent = item.key === "skills"
+        ? "待加入"
+        : item.key === "input" ? "用户和 agent 的交互" : "模型输出预留";
       title.append(" ", description);
     }
     const value = document.createElement("strong");
@@ -12922,6 +12903,7 @@ function renderAiContextDistribution(usage) {
     return row;
   }));
   popover.dataset.hasUsage = String(Boolean(usage));
+  return distribution;
 }
 
 function setAiContextMeter(usage, allowShrink = true) {
@@ -12931,7 +12913,7 @@ function setAiContextMeter(usage, allowShrink = true) {
   latestAiContextUsage = displayUsage;
   const meter = $("#ai-context-meter");
   const value = meter.querySelector("b");
-  renderAiContextDistribution(displayUsage);
+  const distribution = renderAiContextDistribution(displayUsage);
   if (!displayUsage) {
     meter.classList.add("is-empty");
     meter.classList.remove("is-warning", "is-danger");
@@ -12942,14 +12924,14 @@ function setAiContextMeter(usage, allowShrink = true) {
     meter.setAttribute("aria-label", tooltip);
     return;
   }
-  const percent = Math.max(0, Math.min(100, Number(displayUsage.usagePercent) || 0));
+  const percent = distribution.contextWindow > 0
+    ? Math.min(100, distribution.occupiedTokens / distribution.contextWindow * 100)
+    : 0;
   meter.classList.remove("is-empty");
   meter.classList.toggle("is-warning", percent >= 70 && percent < 90);
   meter.classList.toggle("is-danger", percent >= 90);
   meter.style.setProperty("--context-usage", String(percent));
-  value.textContent = Number(displayUsage.inputTokens) > 0
-    ? formatAiContextUsagePercent(displayUsage.inputTokens, displayUsage.contextWindow)
-    : `${percent}%`;
+  value.textContent = formatAiContextUsagePercent(distribution.occupiedTokens, distribution.contextWindow);
   const tooltip = formatAiContextUsageTooltip(displayUsage);
   meter.dataset.tooltip = tooltip;
   meter.setAttribute("aria-label", `当前上下文用量：${tooltip}`);
@@ -18570,8 +18552,7 @@ $("#appearance-form").addEventListener("submit", (event) => {
   toast(persisted ? "显示设置已保存" : "显示设置已应用，但当前浏览器无法保存偏好", persisted ? "info" : "error");
 });
 $("#chapter-title").addEventListener("input", () => scheduleChapterAutoSave());
-$("#chapter-content").addEventListener("input", (event) => {
-  if (!event.isComposing) collapseChapterInputBlankLines(event.currentTarget);
+$("#chapter-content").addEventListener("input", () => {
   updateChapterStats();
   scheduleChapterAutoSave();
   clearChapterLineSelection();

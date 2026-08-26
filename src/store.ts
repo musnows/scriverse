@@ -31,7 +31,6 @@ import {
   id,
   json,
   normalizeDocumentSearchText,
-  normalizeParagraphSpacing,
   now,
   splitDocumentParagraphs
 } from "./utils.js";
@@ -3239,7 +3238,7 @@ export class Store {
     const current = this.getChapter(chapterId);
     this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(current.versionNo));
     const nextTitle = input.title ?? String(current.title);
-    const nextContent = input.content === undefined ? String(current.content) : normalizeParagraphSpacing(input.content);
+    const nextContent = input.content === undefined ? String(current.content) : input.content;
     const nextExcluded = input.excludedFromAnalysis ?? Boolean(current.excludedFromAnalysis);
     const nextChapterType = input.chapterType ?? String(current.chapterType) as ChapterType;
     const hasTextChange = nextTitle !== current.title || nextContent !== current.content;
@@ -4085,7 +4084,6 @@ export class Store {
   ): string {
     const chapterId = id("chapter");
     const timestamp = now();
-    const normalizedContent = normalizeParagraphSpacing(content);
     this.db.run(
       `INSERT INTO chapters (id, work_id, volume_id, title, content, chapter_type, sort_order, word_count, version_no, analysis_status, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', ?, ?)`,
@@ -4093,20 +4091,20 @@ export class Store {
       workId,
       volumeId,
       title,
-      normalizedContent,
+      content,
       chapterType,
       sortOrder,
-      countWords(normalizedContent),
+      countWords(content),
       timestamp,
       timestamp
     );
-    this.syncChapterParagraphSearch(workId, chapterId, normalizedContent);
+    this.syncChapterParagraphSearch(workId, chapterId, content);
     this.insertChapterVersionRow({
       workId,
       chapterId,
       versionNo: 1,
       title,
-      content: normalizedContent,
+      content,
       volumeId,
       sortOrder,
       chapterType,
