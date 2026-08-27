@@ -33,6 +33,17 @@ import {
   CHARACTER_EXTRACTION_MAX_NAME_LENGTH,
   CHARACTER_EXTRACTION_MAX_SPECIES_LENGTH
 } from "./character-extraction.js";
+import {
+  AiWritePlanManager,
+  AI_USER_QUESTION_STATUSES,
+  AI_WRITE_PLAN_STATUSES,
+  aiWriteToolDescriptions,
+  aiWriteToolLabels,
+  aiWriteToolsUpdateSchema,
+  answerAiUserQuestionSchema,
+  resolveAiWritePlanMaxOperations,
+  type PlanViewer
+} from "./ai-write-plans.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
@@ -1547,6 +1558,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       allowPrivateAiEndpoints: options.security?.allowPrivateAiEndpoints === true
     }
   );
+  // AI 可写工具与审批工作流：计划创建只能由侧边栏 AI 发起，确认入口只接收审批 ID。
+  const aiWritePlanManager = new AiWritePlanManager({
+    database,
+    store,
+    auth,
+    startAnalysisTask: (workId, input) => ai.createTask(workId, input)
+  });
+  ai.attachWritePlanManager(aiWritePlanManager);
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -3264,6 +3283,82 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         scope: input.scope
       })
     });
+  });
+
+  // ---------------------------------------------------------------- AI 可写工具与审批中心
+
+  const planViewer = (): PlanViewer => {
+    const actor = currentRequestActor();
+    return actor ? { userId: actor.userId, role: actor.role } : null;
+  };
+
+  app.get("/api/works/:workId/ai/tools", (request, response) => {
+    store.getWork(request.params.workId);
+    data(response, {
+      tools: aiWritePlanManager.getEnabledTools(request.params.workId),
+      labels: aiWriteToolLabels,
+      descriptions: aiWriteToolDescriptions,
+      maxOperations: resolveAiWritePlanMaxOperations(process.env.AI_WRITE_PLAN_MAX_OPERATIONS)
+    });
+  });
+  app.put("/api/works/:workId/ai/tools", (request, response) => {
+    const input = parse(aiWriteToolsUpdateSchema, request.body ?? {});
+    data(response, {
+      tools: aiWritePlanManager.updateToolSettings(request.params.workId, input.tools, currentRequestActor()?.userId ?? null)
+    });
+  });
+
+  app.get("/api/works/:workId/ai/write-plans", (request, response) => {
+    const status = typeof request.query.status === "string"
+      ? parse(z.enum(AI_WRITE_PLAN_STATUSES), request.query.status)
+      : undefined;
+    const limit = Number.parseInt(typeof request.query.limit === "string" ? request.query.limit : "", 10);
+    data(response, {
+      plans: aiWritePlanManager.listPlansForWork(request.params.workId, {
+        status,
+        ...(Number.isFinite(limit) ? { limit } : {})
+      })
+    });
+  });
+  app.get("/api/works/:workId/ai/write-plans/:planId", (request, response) => {
+    data(response, aiWritePlanManager.getPlanDetail(request.params.planId, planViewer()));
+  });
+  app.post("/api/works/:workId/ai/write-plans/:planId/confirm", async (request, response) => {
+    data(response, await aiWritePlanManager.confirmPlan(request.params.planId, planViewer()));
+  });
+  app.post("/api/works/:workId/ai/write-plans/:planId/reject", (request, response) => {
+    data(response, aiWritePlanManager.rejectPlan(request.params.planId, planViewer()));
+  });
+  app.post("/api/works/:workId/ai/write-plans/:planId/undo", (request, response) => {
+    data(response, aiWritePlanManager.createUndoPlan(request.params.planId, planViewer()), 201);
+  });
+
+  app.get("/api/works/:workId/ai/questions", (request, response) => {
+    const conversationId = typeof request.query.conversationId === "string"
+      ? parse(identifier, request.query.conversationId)
+      : undefined;
+    const status = typeof request.query.status === "string"
+      ? parse(z.enum(AI_USER_QUESTION_STATUSES), request.query.status)
+      : undefined;
+    const limit = Number.parseInt(typeof request.query.limit === "string" ? request.query.limit : "", 10);
+    data(response, {
+      questions: aiWritePlanManager.listQuestions(request.params.workId, {
+        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(Number.isFinite(limit) ? { limit } : {})
+      })
+    });
+  });
+  app.post("/api/works/:workId/ai/questions/:questionId/answer", (request, response) => {
+    const input = parse(answerAiUserQuestionSchema, request.body ?? {});
+    data(response, aiWritePlanManager.answerQuestion(
+      request.params.questionId,
+      planViewer(),
+      { ...(input.selectedOption !== undefined ? { selectedOption: input.selectedOption } : {}), ...(input.customAnswer !== undefined ? { customAnswer: input.customAnswer } : {}) }
+    ));
+  });
+  app.post("/api/works/:workId/ai/questions/:questionId/reject", (request, response) => {
+    data(response, aiWritePlanManager.rejectQuestion(request.params.questionId, planViewer()));
   });
 
   app.get("/api/works/:workId/providers", (request, response) => {

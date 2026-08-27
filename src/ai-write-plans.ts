@@ -79,9 +79,9 @@ export function defaultAiWriteToolToggles(): Record<AiWriteToolId, boolean> {
 
 const aiWriteToolIdSchema = z.enum(AI_WRITE_TOOL_IDS);
 
-/** 作品设置页提交的工具开关增量。 */
+/** 作品设置页提交的工具开关增量；未知工具 ID 由管理器在合并时拒绝。 */
 export const aiWriteToolsUpdateSchema = z.object({
-  tools: z.record(aiWriteToolIdSchema, z.boolean()).refine(
+  tools: z.record(z.string(), z.boolean()).refine(
     (value) => Object.keys(value).length > 0,
     { message: "至少需要更新一个工具开关" }
   )
@@ -419,12 +419,20 @@ export const aiPlanStatusLabels: Record<string, string> = {
   failed: "执行失败"
 };
 
+/** 审批计划的全部状态，供路由层校验过滤参数。 */
+export const AI_WRITE_PLAN_STATUSES = Object.keys(aiPlanStatusLabels) as Array<keyof typeof aiPlanStatusLabels>;
+export type WritePlanStatus = (typeof AI_WRITE_PLAN_STATUSES)[number];
+
 export const aiQuestionStatusLabels: Record<string, string> = {
   pending: "待回答",
   answered: "已回答",
   rejected: "已拒绝",
   expired: "已过期"
 };
+
+/** 提问的全部状态，供路由层校验过滤参数。 */
+export const AI_USER_QUESTION_STATUSES = Object.keys(aiQuestionStatusLabels) as Array<keyof typeof aiQuestionStatusLabels>;
+export type QuestionStatus = (typeof AI_USER_QUESTION_STATUSES)[number];
 
 export const annotationKindLabels: Record<string, string> = {
   note: "评论",
@@ -1064,7 +1072,8 @@ export class AiWritePlanManager {
     return view;
   }
 
-  updateToolSettings(workId: string, updates: Record<AiWriteToolId, boolean>, updaterUserId: string | null): AiWriteToolsView {
+  /** 增量更新工具开关：未提及的开关保持不变；未知工具 ID 直接拒绝。 */
+  updateToolSettings(workId: string, updates: Partial<Record<AiWriteToolId, boolean>>, updaterUserId: string | null): AiWriteToolsView {
     this.store.getWork(workId);
     const next = this.getEnabledTools(workId);
     for (const [toolId, enabled] of Object.entries(updates)) {
@@ -2246,6 +2255,43 @@ export class AiWritePlanManager {
       workId,
       timestamp
     );
+  }
+
+  /**
+   * 解析一次对话的“发起人/对话属主”：
+   * 侧边栏对话以 created_by_user_id 为唯一归属，发起人与属主一致，
+   * 写入权限取两者交集后仍然等价于归属用户本人的权限。
+   */
+  resolveConversationActor(conversationId: string | null): { viewer: PlanViewer; conversationOwnerUserId: string | null } {
+    if (!conversationId) return { viewer: null, conversationOwnerUserId: null };
+    const row = this.database.get<{ created_by_user_id: string | null }>(
+      "SELECT created_by_user_id FROM ai_conversations WHERE id = ?",
+      conversationId
+    );
+    if (!row) return { viewer: null, conversationOwnerUserId: null };
+    const ownerId = row.created_by_user_id === null || row.created_by_user_id === undefined ? null : String(row.created_by_user_id);
+    return { viewer: ownerId ? { userId: ownerId, role: "member" } : null, conversationOwnerUserId: ownerId };
+  }
+
+  /** 会话最近的审批计划（用于系统上下文注入与回显）。 */
+  listRecentPlansForConversation(workId: string, conversationId: string, limit = 5): WritePlanSummaryView[] {
+    const rows = this.database.all<PlanRow>(
+      "SELECT * FROM ai_write_plans WHERE work_id = ? AND conversation_id = ? ORDER BY created_at DESC LIMIT ?",
+      workId,
+      conversationId,
+      Math.min(Math.max(limit, 1), 10)
+    );
+    return rows.map((row) => this.expireStalePlan(row)).map((row) => this.toSummaryView(row));
+  }
+
+  /** 会话最近的问题（含已回答/已过期），供系统上下文注入。 */
+  listRecentQuestionsForConversation(conversationId: string, limit = 3): QuestionView[] {
+    const rows = this.database.all<QuestionRow>(
+      "SELECT * FROM ai_user_questions WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?",
+      conversationId,
+      Math.min(Math.max(limit, 1), 10)
+    );
+    return rows.map((row) => this.toQuestionView(row));
   }
 
   private expireQuestion(row: QuestionRow): QuestionRow {
