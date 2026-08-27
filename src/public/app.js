@@ -15,6 +15,7 @@ import { createAiChatTabManager, normalizeAiChatTabLimit } from "/ai-chat-tabs.j
 import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260816-ai-chat-tabs-v1";
 import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
+import { CHAPTER_PARAGRAPH_INDENT, insertIndentedParagraph } from "/chapter-editor-behavior.js?v=20260828-auto-indent-v1";
 import {
   FORESHADOW_REMINDER_SNOOZE_STORAGE_KEY,
   foreshadowReminderRequestTargetsState,
@@ -18670,6 +18671,22 @@ $("#appearance-form").addEventListener("submit", (event) => {
   toast(persisted ? "显示设置已保存" : "显示设置已应用，但当前浏览器无法保存偏好", persisted ? "info" : "error");
 });
 $("#chapter-title").addEventListener("input", () => scheduleChapterAutoSave());
+$("#chapter-content").addEventListener("keydown", (event) => {
+  const input = event.currentTarget;
+  if (
+    event.key !== "Enter"
+    || event.isComposing
+    || event.altKey
+    || event.ctrlKey
+    || event.metaKey
+    || input.readOnly
+  ) return;
+  event.preventDefault();
+  const next = insertIndentedParagraph(input.value, input.selectionStart, input.selectionEnd);
+  input.setRangeText(`\n${CHAPTER_PARAGRAPH_INDENT}`, input.selectionStart, input.selectionEnd, "end");
+  input.setSelectionRange(next.selectionStart, next.selectionEnd);
+  input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertLineBreak" }));
+});
 $("#chapter-content").addEventListener("input", () => {
   updateChapterStats();
   scheduleChapterAutoSave();
