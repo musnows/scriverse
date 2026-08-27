@@ -332,6 +332,7 @@
           <div class="ai-heading-actions">
             <button id="ai-conversation-switcher" class="ai-conversation-switcher" type="button" aria-label="切换打开的对话" aria-controls="ai-conversation-switcher-menu" aria-expanded="false" aria-haspopup="dialog" title="切换打开的对话"><span id="ai-conversation-title">新对话</span><small id="ai-open-conversation-count">1</small><svg viewBox="0 0 12 8" aria-hidden="true" focusable="false"><path d="M1 1.5 6 6.5l5-5"></path></svg></button>
             <button id="ai-history-toggle" type="button" aria-label="历史记录" aria-controls="ai-history-dialog" aria-expanded="false" aria-haspopup="dialog" title="历史记录"><svg class="ai-heading-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5M12 7v5l3.5 2"></path></svg></button>
+            <button id="ai-approval-center-toggle" type="button" aria-label="AI 操作审批中心" aria-controls="ai-approval-center-dialog" aria-expanded="false" aria-haspopup="dialog" title="AI 操作审批中心"><svg class="ai-heading-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3l7 3v5c0 4.4-2.9 8.2-7 10-4.1-1.8-7-5.6-7-10V6z"></path><path d="M9 12l2.2 2.2L15.5 9.5"></path></svg></button>
             <button id="ai-new-conversation" type="button" aria-label="新建对话" title="新建对话">＋</button>
           </div>
         </div>
@@ -1225,6 +1226,58 @@
           <span>清理对话</span>
           <small>删除当前对话及其消息，且无法恢复</small>
         </button>
+      </div>
+    </dialog>
+
+    <dialog id="ai-write-plan-dialog" class="dialog wide-dialog ai-write-plan-dialog" aria-labelledby="ai-write-plan-title">
+      <div class="dialog-header">
+        <div><span class="eyebrow">写入审批</span><h2 id="ai-write-plan-title">AI 修改计划 · 完整明细</h2></div>
+        <button id="ai-write-plan-close" class="dialog-close" aria-label="关闭审批详情" type="button">×</button>
+      </div>
+      <div id="ai-write-plan-body" class="ai-write-plan-body" aria-live="polite"></div>
+      <div class="card-actions ai-plan-actions">
+        <button id="ai-write-plan-refresh" class="ghost-button" type="button">刷新状态</button>
+        <button id="ai-write-plan-reject" class="ghost-button" type="button">拒绝</button>
+        <button id="ai-write-plan-undo" class="ghost-button hidden" type="button">撤销本次审批</button>
+        <button id="ai-write-plan-confirm" class="primary-button" type="button">确认执行</button>
+      </div>
+    </dialog>
+
+    <dialog id="ai-question-dialog" class="dialog ai-question-dialog" aria-labelledby="ai-question-title">
+      <div class="dialog-header">
+        <div><span class="eyebrow">AI 提问</span><h2 id="ai-question-title">需要你的回答</h2></div>
+        <button id="ai-question-close" class="dialog-close" aria-label="关闭提问" type="button">×</button>
+      </div>
+      <div class="ai-question-body">
+        <p id="ai-question-text" class="ai-question-text"></p>
+        <form id="ai-question-form">
+          <div id="ai-question-options" class="ai-question-options" role="radiogroup" aria-label="预设选项"></div>
+          <label class="ai-question-custom-field"><span class="field-label">自定义回答</span><input id="ai-question-custom-answer" type="text" maxlength="2000" placeholder="填写自定义回答后提交" autocomplete="off"></label>
+          <p id="ai-question-expiry" class="usage-measurement-note" role="status"></p>
+        </form>
+      </div>
+      <div class="card-actions">
+        <button id="ai-question-skip" class="ghost-button" type="button">暂不回答</button>
+        <button id="ai-question-submit" class="primary-button" type="button" disabled>提交回答</button>
+      </div>
+    </dialog>
+
+    <dialog id="ai-approval-center-dialog" class="dialog wide-dialog ai-approval-center-dialog" aria-labelledby="ai-approval-center-title">
+      <div class="dialog-header">
+        <div><span class="eyebrow">审批工作流</span><h2 id="ai-approval-center-title">AI 操作审批中心</h2></div>
+        <button id="ai-approval-center-close" class="dialog-close" aria-label="关闭审批中心" type="button">×</button>
+      </div>
+      <div class="ai-approval-center-body">
+        <div class="ai-approval-filters" role="group" aria-label="按状态筛选审批记录">
+          <button type="button" data-status-filter="" aria-pressed="true">全部</button>
+          <button type="button" data-status-filter="pending" aria-pressed="false">待确认</button>
+          <button type="button" data-status-filter="executed" aria-pressed="false">执行成功</button>
+          <button type="button" data-status-filter="rejected" aria-pressed="false">已拒绝</button>
+          <button type="button" data-status-filter="invalidated" aria-pressed="false">已失效</button>
+          <button type="button" data-status-filter="expired" aria-pressed="false">已过期</button>
+          <button type="button" data-status-filter="failed" aria-pressed="false">执行失败</button>
+        </div>
+        <div id="ai-approval-list-host" class="ai-approval-list-host" aria-live="polite"></div>
       </div>
     </dialog>
 
