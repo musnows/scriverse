@@ -1,0 +1,109 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AiWritePlanManager } from "../../src/ai-write-plans.js";
+import { createTestRuntime, seedChapter } from "../helpers.js";
+import type { Runtime } from "../../src/app.js";
+
+// AiManager 的工具执行入口是私有方法；测试通过结构化类型直接调用，
+// 与生成管线的实际调用方式保持一致（conversationId 在管线中经由 chatContext 传入）。
+type InteractiveToolExecutor = {
+  executeAgentTool(
+    workId: string,
+    toolCall: { id: string; type: "function"; function: { name: string; arguments: unknown } },
+    maximumResultChars?: number,
+    roleplayCharacterId?: string | null,
+    allowedToolIds?: ReadonlySet<string>,
+    signal?: AbortSignal,
+    onUsage?: (usage: unknown) => void,
+    chatContext?: { conversationId?: string | null }
+  ): Promise<{ id: string; name: string; status: "completed" | "failed"; result: Record<string, unknown> }>;
+};
+
+describe("AI 可写交互工具（propose_write_plan / ask_user_question）", () => {
+  let runtime: Runtime;
+  let manager: AiWritePlanManager;
+  let workId: string;
+
+  beforeEach(async () => {
+    runtime = createTestRuntime();
+    manager = new AiWritePlanManager({
+      database: runtime.database,
+      store: runtime.store,
+      auth: runtime.auth,
+      startAnalysisTask: (id, input) => runtime.ai.createTask(id, input as never)
+    });
+    runtime.ai.attachWritePlanManager(manager);
+    const { work } = await seedChapter(runtime, "第一段。\n第二段。");
+    workId = String(work.id);
+  });
+
+  afterEach(() => runtime.close());
+
+  function executor(): InteractiveToolExecutor {
+    return runtime.ai as unknown as InteractiveToolExecutor;
+  }
+
+  async function callTool(name: string, args: unknown, conversationId?: string) {
+    return executor().executeAgentTool(
+      workId,
+      { id: `call_${name}`, type: "function", function: { name, arguments: args } },
+      undefined,
+      null,
+      undefined,
+      undefined,
+      undefined,
+      { conversationId: conversationId ?? null }
+    );
+  }
+
+  it("未开启任何写入开关时两个交互工具都不可用", async () => {
+    const withoutConversation = await callTool("propose_write_plan", { aiSummary: "x", operations: [{ opType: "create_task", taskType: "structure" }] });
+    expect(withoutConversation.status).toBe("failed");
+    expect((withoutConversation.result.error as { code: string }).code).toBe("TOOL_CONVERSATION_REQUIRED");
+
+    const conversation = await runtime.store.createAiConversation(workId, "会话");
+    const gated = await callTool("ask_user_question", { question: "选哪个？", options: ["甲", "乙"] }, String(conversation.id));
+    expect(gated.status).toBe("failed");
+    expect((gated.result.error as { code: string }).code).toBe("TOOL_NOT_AVAILABLE");
+  });
+
+  it("开启开关后可以提交计划并创建提问，计划与提问都进入审批流", async () => {
+    const conversation = await runtime.store.createAiConversation(workId, "侧边栏会话");
+    const conversationId = String(conversation.id);
+    manager.updateToolSettings(workId, { analysis_tasks: true, ask_user_questions: true }, null);
+
+    const submitted = await callTool(
+      "propose_write_plan",
+      {
+        aiSummary: "发起一次结构分析",
+        operations: [{ opType: "create_task", taskType: "structure" }]
+      },
+      conversationId
+    );
+    expect(submitted.status).toBe("completed");
+    expect(submitted.result.ok).toBe(true);
+    const planRef = submitted.result.plan as { id: string; status: string };
+    expect(planRef.status).toBe("pending");
+    // 计划已经持久化，等待审批中心确认。
+    expect(manager.getPlanDetail(planRef.id, null).status).toBe("pending");
+
+    const question = await callTool("ask_user_question", { question: "分析用哪个视角？", options: ["全局", "单章"] }, conversationId);
+    expect(question.status).toBe("completed");
+    expect((question.result.question as { status: string }).status).toBe("pending");
+    expect(manager.latestPendingQuestion(conversationId)?.question).toBe("分析用哪个视角？");
+  });
+
+  it("参数不合法的操作返回失败结果而不是抛出异常", async () => {
+    const conversation = await runtime.store.createAiConversation(workId, "会话二");
+    manager.updateToolSettings(workId, { settings: true }, null);
+    const rejected = await callTool(
+      "propose_write_plan",
+      {
+        aiSummary: "字段越权",
+        operations: [{ opType: "create_entry", entityType: "setting", input: { title: "t", category: "c", content: "x", locked: true } }]
+      },
+      String(conversation.id)
+    );
+    expect(rejected.status).toBe("failed");
+    expect(String(rejected.result.ok)).toBe("false");
+  });
+});
