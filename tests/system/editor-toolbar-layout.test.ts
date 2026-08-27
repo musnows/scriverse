@@ -23,7 +23,9 @@ describe("编辑器工具栏布局", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
 
     expect(page.text).toContain('<span id="chapter-path" class="eyebrow">未选择章节</span>\n            <input id="chapter-title"');
-    expect(page.text).toContain('id="chapter-edit-button" class="primary-button hidden"');
+    expect(page.text).toContain('id="chapter-edit-button" class="primary-button hidden" type="button" aria-pressed="false" aria-label="切换到编辑模式">编辑</button>');
+    expect(page.text).not.toContain('id="chapter-reader-button"');
+    expect(page.text).not.toContain('id="chapter-delete-button"');
     expect(page.text).toContain('id="chapter-annotations-button"');
     expect(page.text).toContain('id="chapter-annotations-dialog"');
     expect(page.text).toContain('class="module-nav-secondary hidden" type="button" data-module="comments"');
@@ -66,8 +68,9 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain("function enterChapterEditMode()");
     expect(application.text).toContain('persistentToast("正在保存中")');
     expect(application.text).toContain('toast(`保存成功（正文 v${saved.versionNo}）`)');
-    expect(application.text).toContain('$("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);');
-    expect(application.text).toContain('$("#chapter-edit-button").addEventListener("click", enterChapterEditMode)');
+    expect(application.text).toContain('editButton.textContent = chapterEditorReadOnly ? "编辑" : "预览";');
+    expect(application.text).toContain('function toggleChapterEditPreviewMode()');
+    expect(application.text).toContain('$("#chapter-edit-button").addEventListener("click", toggleChapterEditPreviewMode)');
     expect(styles.text).toContain('#chapter-path { grid-area: path;');
     expect(styles.text).toContain('.file-button, .add-button { display: grid; place-items: center;');
     expect(page.text).toContain('id="new-volume-button" class="add-button"');

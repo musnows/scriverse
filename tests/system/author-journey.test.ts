@@ -143,7 +143,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("overflow-wrap: anywhere; line-height: 1.45; white-space: normal");
     expect(page.text).toContain('id="ai-citations"');
     expect(page.text).toContain('id="line-citation-menu"');
-    expect(page.text).toContain('<button id="chapter-delete-button" class="danger-button" type="button">删除章节</button>');
+    expect(page.text).not.toContain('id="chapter-delete-button"');
     expect(page.text).toContain('data-delete-chapter');
     expect(application.text).toContain("async function deleteChapter(chapterId)");
     expect(application.text).toContain('title: "删除章节"');
