@@ -204,6 +204,16 @@ function workIdFromPath(database: Database, pathname: string): string | null {
   if (root !== "api") return null;
   if (resource === "works" && decoded[3] && decoded[3].toLocaleLowerCase("en-US") !== "import") return decoded[3];
   if (resource === "sync" && decoded[3]?.toLocaleLowerCase("en-US") === "works" && decoded[4]) return decoded[4];
+  if (resource === "roleplay-memories" && decoded[3]) {
+    const row = database.get<{ work_id: string }>(
+      `SELECT scope.work_id FROM roleplay_memories memory
+       JOIN roleplay_memory_scopes scope ON scope.id = memory.scope_id
+       WHERE memory.id = ?`,
+      decoded[3]
+    );
+    if (row) return row.work_id;
+    throw notFound("角色扮演记忆");
+  }
   const tableByResource: Record<string, string> = {
     volumes: "volumes",
     chapters: "chapters",
@@ -1341,6 +1351,9 @@ function workModuleRequirements(request: Request, write: boolean, annotationAcce
   const conversationRoleplayWrite = /^\/api\/ai-conversations\/[^/]+\/roleplay$/u.test(pathname);
   if (write && conversationRoleplayWrite) {
     return { read: ["characters"], write: ["ai-chat"] };
+  }
+  if (/^\/api\/(?:works\/[^/]+\/roleplay-memory-scopes|roleplay-memories\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    return write ? { read: ["characters"], write: ["ai-chat"] } : { read: ["ai-chat"] };
   }
   const conversationHistoryWrite = /^\/api\/ai-conversations\/[^/]+\/(?:fork|context\/prepare|compact)$/u.test(pathname)
     || (/^\/api\/works\/[^/]+\/chat\/stream$/u.test(pathname) && typeof requestBodyRecord(request).conversationId === "string");

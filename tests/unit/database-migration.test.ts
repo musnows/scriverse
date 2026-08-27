@@ -102,6 +102,46 @@ describe("数据库版本化迁移", () => {
     database.close();
   });
 
+  it("迁移 122 为历史角色扮演建立空记忆线且不迁移 compact 摘要", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-122-"));
+    roots.push(root);
+    const filename = join(root, "migration-122.db");
+    const current = new Database(filename);
+    insertSystemOwnedWork(current, "work-roleplay-memory", "角色扮演迁移", "2025-01-01");
+    current.run(
+      `INSERT INTO characters (id, work_id, name, created_at, updated_at)
+       VALUES ('character-roleplay-memory', 'work-roleplay-memory', '林舟', '2025-01-01', '2025-01-01')`
+    );
+    current.run(
+      `INSERT INTO ai_conversations (
+        id, work_id, roleplay_character_id, task_type, title, compacted_summary,
+        compacted_message_count, created_at, updated_at, created_by_user_id
+      ) VALUES (?, ?, ?, 'roleplay', '旧扮演', ?, 4, '2025-01-01', '2025-01-01', ?)`,
+      "conversation-roleplay-memory",
+      "work-roleplay-memory",
+      "character-roleplay-memory",
+      JSON.stringify({ storyFacts: [{ text: "这只是上下文摘要" }] }),
+      SYSTEM_USER_ID
+    );
+    current.run("DELETE FROM schema_migrations WHERE version = 122");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get(
+      `SELECT scope.roleplay_character_name, scope.revision_no
+       FROM ai_conversations conversation
+       JOIN roleplay_memory_scopes scope ON scope.id = conversation.roleplay_memory_scope_id
+       WHERE conversation.id = 'conversation-roleplay-memory'`
+    )).toEqual({ roleplay_character_name: "林舟", revision_no: 0 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM roleplay_memories")).toEqual({ count: 0 });
+    expect(migrated.get("SELECT compacted_summary FROM ai_conversations WHERE id = 'conversation-roleplay-memory'")).toEqual({
+      compacted_summary: JSON.stringify({ storyFacts: [{ text: "这只是上下文摘要" }] })
+    });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
   it("无损回填角色主名与别名并支持幂等重启", () => {
     const filename = createLegacyDatabase();
     const first = new Database(filename);
