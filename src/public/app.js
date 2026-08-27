@@ -15,7 +15,7 @@ import { createAiChatTabManager, normalizeAiChatTabLimit } from "/ai-chat-tabs.j
 import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260816-ai-chat-tabs-v1";
 import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
-import { CHAPTER_PARAGRAPH_INDENT, insertIndentedParagraph } from "/chapter-editor-behavior.js?v=20260828-auto-indent-v1";
+import { CHAPTER_PARAGRAPH_INDENT, calculateChapterCaretScroll, chapterLineIndexAtOffset, insertIndentedParagraph } from "/chapter-editor-behavior.js?v=20260828-centered-scroll-v1";
 import {
   FORESHADOW_REMINDER_SNOOZE_STORAGE_KEY,
   foreshadowReminderRequestTargetsState,
@@ -1465,6 +1465,7 @@ let chapterLineNumberFrame = null;
 let chapterLineNumberTimer = null;
 let chapterLineLayout = null;
 let chapterLineVirtualWindow = null;
+let chapterCaretScrollFrame = null;
 let chapterLineSelection = null;
 let chapterLineDrag = null;
 let chapterWhitespaceVisible = true;
@@ -1958,6 +1959,37 @@ function scheduleChapterLineNumbers(delay = 0) {
     chapterLineNumberTimer = null;
     requestChapterLineNumberFrame();
   }, wait);
+}
+
+function scheduleChapterCaretScroll() {
+  if (chapterCaretScrollFrame !== null) return;
+  chapterCaretScrollFrame = requestAnimationFrame(() => {
+    chapterCaretScrollFrame = null;
+    const input = $("#chapter-content");
+    const measure = $("#chapter-line-measure");
+    if (document.activeElement !== input || input.readOnly || input.clientWidth === 0 || input.clientHeight === 0) return;
+    const style = getComputedStyle(input);
+    const paddingTop = parseFloat(style.paddingTop) || 0;
+    const paddingBottom = parseFloat(style.paddingBottom) || 0;
+    const contentWidth = Math.max(1, input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+    const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.55;
+    const layout = prepareChapterLineLayout(input, measure, style, contentWidth);
+    const scrollContentHeight = input.scrollHeight - paddingTop - paddingBottom;
+    const targetHeight = input.scrollHeight > input.clientHeight + 1 ? scrollContentHeight : null;
+    const { getLineBounds } = createChapterLineBoundsGetter(layout, measure, lineHeight, targetHeight);
+    const lineIndex = Math.min(layout.lines.length - 1, chapterLineIndexAtOffset(input.value, input.selectionEnd));
+    const caretBottom = getLineBounds(lineIndex).bottom + paddingTop;
+    const nextScrollTop = calculateChapterCaretScroll({
+      caretBottom,
+      scrollTop: input.scrollTop,
+      clientHeight: input.clientHeight,
+      scrollHeight: input.scrollHeight
+    });
+    if (nextScrollTop === input.scrollTop) return;
+    input.scrollTop = nextScrollTop;
+    syncChapterLineNumberScroll();
+    scheduleChapterLineNumbers();
+  });
 }
 
 function lineIndexAtPointer(clientY) {
@@ -18692,6 +18724,7 @@ $("#chapter-content").addEventListener("input", () => {
   scheduleChapterAutoSave();
   clearChapterLineSelection();
   scheduleChapterLineNumbers(chapterLineInputRenderDelay);
+  scheduleChapterCaretScroll();
   setAiContextMeter(null);
 });
 $("#chapter-content").addEventListener("select", () => setAiContextMeter(null));
