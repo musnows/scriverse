@@ -54,6 +54,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1102.0",
     "@smithy/node-http-handler": "^4.9.13",
+    "compression": "^1.8.1",
     "docx": "^9.7.1",
     "express": "^5.1.0",
     "jszip": "^3.10.1",
@@ -66,6 +67,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@types/compression": "^1.8.1",
     "@types/express": "^5.0.3",
     "@types/multer": "^2.0.0",
     "@types/node": "^24.10.0",

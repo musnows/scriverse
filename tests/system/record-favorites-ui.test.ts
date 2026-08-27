@@ -45,7 +45,7 @@ describe("资料收藏界面", () => {
     expect(styles.text).toContain(".record-favorite-button.is-favorite {");
     expect(styles.text).toContain(".record-pin-button.is-pinned {");
     expect(styles.text).toContain(".module-row .record-favorite-button { position: static; }");
-    expect(page.text.match(/feature=record-favorites-v1/gu)).toHaveLength(2);
+    expect(page.text.match(/<(?:link rel="stylesheet"|script type="module")[^>]*feature=record-favorites-v1/gu)).toHaveLength(2);
     expect(page.text).toContain("feature=entity-pin-v1");
   });
 });
