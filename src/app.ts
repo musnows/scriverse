@@ -3349,6 +3349,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       })
     });
   });
+  app.get("/api/works/:workId/ai/questions/:questionId", (request, response) => {
+    data(response, aiWritePlanManager.getQuestion(request.params.questionId));
+  });
   app.post("/api/works/:workId/ai/questions/:questionId/answer", (request, response) => {
     const input = parse(answerAiUserQuestionSchema, request.body ?? {});
     data(response, aiWritePlanManager.answerQuestion(

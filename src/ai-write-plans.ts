@@ -972,6 +972,8 @@ export type WritePlanSummaryView = {
   expiresAt: string | null;
   initiatorUserId: string | null;
   conversationOwnerUserId: string | null;
+  /** 确认/拒绝/撤销该审批的用户：即“操作者”审计口径。 */
+  decidedByUserId: string | null;
   sourcePlanId: string | null;
 };
 
@@ -2001,6 +2003,7 @@ export class AiWritePlanManager {
       expiresAt: row.status === "pending" ? isoFromNow(row.created_at, this.planTtlMs) : null,
       initiatorUserId: row.initiator_user_id,
       conversationOwnerUserId: row.conversation_owner_user_id,
+      decidedByUserId: row.executed_by_user_id,
       sourcePlanId: row.source_plan_id
     };
   }
