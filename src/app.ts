@@ -80,6 +80,7 @@ import {
   UserAuthService,
   type AuthUser
 } from "./user-auth.js";
+import { extractStaticModuleImports, injectModulePreloads } from "./ui-module-preload.js";
 
 const chapterAnnotationKinds = ["note", "todo"] as const;
 
@@ -3793,13 +3794,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   if (options.serveUi ?? true) {
     const publicPath = options.publicPath ?? join(process.cwd(), "src", "public");
+    const publicApplicationModuleImports = extractStaticModuleImports(readFileSync(join(publicPath, "app.js"), "utf8"));
     // API 与 SSE 路由已经在此前注册；压缩只作用于页面和静态资源，避免缓冲流式响应。
     app.use(compression());
     // index.html 按登录态动态下发：未登录时注入 login-route 类，首帧直接渲染登录页；
     // 已登录时保持骨架屏，由前端恢复会话后进入工作台，避免两种闪烁。
     const sendIndexHtml = (request: Request, response: Response) => {
       const authenticated = options.disableUserAuth === true || auth.authenticate(request) !== null;
-      let html = readFileSync(join(publicPath, "index.html"), "utf8");
+      let html = injectModulePreloads(
+        readFileSync(join(publicPath, "index.html"), "utf8"),
+        publicApplicationModuleImports
+      );
       if (!authenticated) html = html.replace('<html lang="zh-CN">', '<html lang="zh-CN" class="login-route">');
       if (options.disableUserAuth === true) {
         html = html.replace('<html lang="zh-CN">', '<html lang="zh-CN" class="dev-auth-bypass">');

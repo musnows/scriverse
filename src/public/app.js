@@ -274,6 +274,7 @@ let readingReturnRoute = null;
 let readingPreviousFocus = null;
 let readingPositionSaveTimer = null;
 let readingResizeFrame = null;
+const readingVolumeDirectoryConcurrency = 4;
 
 let timelineMultiSelectEnabled = false;
 let timelineActiveTrackId = null;
@@ -779,6 +780,8 @@ const aiConversationHistoryPageLimit = 20;
 let aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
 let workScopedUiGeneration = 0;
 let workSelectionRequestGeneration = 0;
+let initialWorkDetail = null;
+let initialReaderChapterRequest = null;
 let chapterSelectionRequestGeneration = 0;
 let aiConversationNavigationGeneration = 0;
 let aiConversationNavigationPending = null;
@@ -5786,13 +5789,35 @@ function restoredSettingsReturnContext(route) {
 }
 
 async function initializePage() {
+  const route = parsePageRoute(window.location.hash);
+  const earlyReaderChapterRequest = window.__scriverseReaderChapterPrefetch;
+  const earlyReaderWorksRequest = window.__scriverseReaderWorksPrefetch;
+  const earlyReaderWorkRequest = window.__scriverseReaderWorkPrefetch;
   const [authenticated] = await Promise.all([initializeAuthentication(), initializeProductFooters()]);
   if (!authenticated) {
     restoringPageRoute = false;
     return;
   }
-  const route = parsePageRoute(window.location.hash);
-  state.works = (await apiPage("/api/works")).items;
+  const requestedWorkDetailRequest = route.workId
+    ? earlyReaderWorkRequest?.workId === route.workId
+      ? earlyReaderWorkRequest.request.then((result) => result.work ?? api(`/api/works/${encodeURIComponent(route.workId)}?directory=volumes`).catch(() => null))
+      : api(`/api/works/${encodeURIComponent(route.workId)}?directory=volumes`).catch(() => null)
+    : Promise.resolve(null);
+  initialReaderChapterRequest = route.view === "reader" && route.chapterId
+    ? earlyReaderChapterRequest?.chapterId === route.chapterId
+      ? earlyReaderChapterRequest
+      : {
+        chapterId: route.chapterId,
+        request: api(`/api/chapters/${encodeURIComponent(route.chapterId)}`)
+          .then((chapter) => ({ chapter }), (error) => ({ error }))
+      }
+    : null;
+  const [worksPage, requestedWorkDetail] = await Promise.all([
+    earlyReaderWorksRequest?.request.then((result) => result.works ?? apiPage("/api/works")) ?? apiPage("/api/works"),
+    requestedWorkDetailRequest
+  ]);
+  state.works = worksPage.items;
+  initialWorkDetail = requestedWorkDetail;
   try {
     if (route.view === "shelf") {
       showShelf();
@@ -5864,6 +5889,11 @@ async function initializePage() {
       settingsReturnContext = restoredSettingsReturnContext(route);
     }
   } finally {
+    delete window.__scriverseReaderChapterPrefetch;
+    delete window.__scriverseReaderWorksPrefetch;
+    delete window.__scriverseReaderWorkPrefetch;
+    initialWorkDetail = null;
+    initialReaderChapterRequest = null;
     document.body.classList.remove("auth-pending");
     document.documentElement.removeAttribute("data-pending-view");
     document.documentElement.classList.remove("pending-shelf-mode");
@@ -7395,7 +7425,9 @@ async function selectWork(workId, preferredChapterId = null) {
     volumeChapterLoadingIds.clear();
     volumeChapterRequests.clear();
   }
-  const nextWork = await api(`/api/works/${workId}?directory=volumes`);
+  const prefetchedWork = initialWorkDetail?.id === workId ? initialWorkDetail : null;
+  initialWorkDetail = null;
+  const nextWork = prefetchedWork ?? await api(`/api/works/${workId}?directory=volumes`);
   if (selectionGeneration !== workSelectionRequestGeneration) return false;
   if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
   showSystemStatus();
@@ -7465,9 +7497,12 @@ async function loadVolumeChapters(volumeId) {
 async function loadAllVolumeChapters(workId) {
   const generation = workScopedUiGeneration;
   const volumeIds = state.work?.id === workId ? state.work.volumes.map((volume) => volume.id) : [];
-  for (const volumeId of volumeIds) {
-    if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
-    await loadVolumeChapters(volumeId);
+  for (let index = 0; index < volumeIds.length; index += readingVolumeDirectoryConcurrency) {
+    const batch = volumeIds.slice(index, index + readingVolumeDirectoryConcurrency);
+    await Promise.all(batch.map(async (volumeId) => {
+      if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
+      await loadVolumeChapters(volumeId);
+    }));
   }
 }
 
@@ -8359,7 +8394,13 @@ async function loadReadingChapter(chapterId, { scrollRatio = null, pageIndex = n
   renderReadingStatus("正在载入章节……");
   replacePageRoute({ view: "reader", workId: state.work.id, chapterId: target.id });
   try {
-    const chapter = await api(`/api/chapters/${encodeURIComponent(target.id)}`, { signal: request.signal });
+    const initialRequest = initialReaderChapterRequest?.chapterId === target.id
+      ? initialReaderChapterRequest.request
+      : null;
+    if (initialRequest) initialReaderChapterRequest = null;
+    const prefetchedResult = initialRequest ? await initialRequest : null;
+    if (prefetchedResult?.error) throw prefetchedResult.error;
+    const chapter = prefetchedResult?.chapter ?? await api(`/api/chapters/${encodeURIComponent(target.id)}`, { signal: request.signal });
     if (!readingRequestGate.isCurrent(request)) return false;
     if (String(chapter?.id ?? "") !== target.id || String(chapter?.workId ?? "") !== String(state.work.id)) {
       throw new Error("章节响应与当前作品不匹配");
