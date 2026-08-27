@@ -619,6 +619,36 @@ type CharacterExtractionApplicationItem = {
   conflicts?: string[];
 };
 
+type TimelineEvidence = {
+  chapterId: string;
+  chapterTitle: string;
+  quote: string;
+};
+
+type TimelineCandidateFields = {
+  name: string;
+  description: string;
+  eventType: string;
+  timeLabel: string;
+  timeSort: number | null;
+  location: string;
+  impactScope: "personal" | "organization" | "regional" | "world" | "galaxy";
+};
+
+type TimelineLedgerCandidate = TimelineCandidateFields & {
+  candidateId: string;
+  chapterIds: string[];
+  participantIds: string[];
+  evidence: TimelineEvidence[];
+};
+
+type TimelineAggregationNode = TimelineCandidateFields & {
+  nodeId: string;
+  sourceCandidateIds: string[];
+  participantIds: string[];
+  evidenceRefs: string[];
+};
+
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
 const DEFAULT_MAX_TOKENS = 32_000;
 const MAX_MODEL_OUTPUT_TOKENS = 2_000_000;
@@ -631,6 +661,11 @@ const RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS = 4_000_000;
 const RELATIONSHIP_MAX_FUZZY_MATCHES = 600;
 const RELATIONSHIP_MAX_SOURCE_MATCHES = 256;
 const RELATIONSHIP_PREFILTER_DISABLE_HINT = "请取消勾选“分析前按人物名称和拼音过滤来源”后重新预览";
+const TIMELINE_CHUNK_MAX_CHARS = 10_000;
+const TIMELINE_CHUNK_OVERLAP_CHARS = 600;
+const TIMELINE_AGGREGATION_MAX_CHARS = 55_000;
+const TIMELINE_MAX_CANDIDATES_PER_CHUNK = 200;
+const TIMELINE_MAX_EVIDENCE_PER_CANDIDATE = 24;
 
 type HybridChapterLineRangeFallbackChapter = {
   chapterVersion: number;
@@ -4580,7 +4615,12 @@ export class AiManager {
       instruction = `审核角色规范表，找出疑似重复角色并给出原文证据。角色规范表：\n${roster}`;
       agentToolIds = ["search_story_entities", "grep", "read_chapters"];
     } else if (taskType === "timeline-analysis") {
-      instruction = "抽取所选范围内的大事件候选，区分发生时间与叙述时间，并为每项提供原文证据。";
+      const chapters = this.getScopeChapters(workId, scope);
+      if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "时间轴分析范围内没有章节");
+      const chunks = this.buildTimelineChapterChunks(chapters);
+      const selection = [...chunks].sort((left, right) => right.text.length - left.text.length)[0]?.text ?? "";
+      previewScope = { type: "selection", selection };
+      instruction = "从本批正文抽取大事件证据账本，区分发生时间与叙述时间，并为每项提供可核验的原文证据。";
     } else if (taskType === "worldview-analysis") {
       instruction = "分析所选范围内已经出现的世界观，区分事实、传闻和未知项，并为结论提供原文证据。";
     } else if (taskType === "consistency-check") {
@@ -8343,13 +8383,17 @@ export class AiManager {
   }
 
   private generateTaggedJson(input: GenerateInput): Promise<GenerateResult> {
+    return this.generate(this.taggedJsonInput(input));
+  }
+
+  private taggedJsonInput(input: GenerateInput): GenerateInput {
     const userRequirement = "将最终 JSON 放在唯一一对 <json> 和 </json> 标签中；标签外不要输出任何内容，也不要使用 Markdown 代码块。";
     const systemRequirement = "结构化响应要求：最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。";
-    return this.generate({
+    return {
       ...input,
       instruction: `${input.instruction}\n${userRequirement}`,
       extraSystemPrompt: [input.extraSystemPrompt, systemRequirement].filter(Boolean).join("\n")
-    });
+    };
   }
 
   async generate(input: GenerateInput, onDelta?: (delta: string) => void): Promise<GenerateResult> {
@@ -9634,38 +9678,488 @@ export class AiManager {
   }
 
   private async runTimelineAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
-    const generated = await this.generateTaggedJson({
+    const chapters = this.getScopeChapters(workId, scope);
+    if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "时间轴分析范围内没有章节");
+    const chunks = this.buildTimelineChapterChunks(chapters);
+    const concurrency = this.configuredConcurrency(workId, "timeline-analysis", modelId);
+    const chunkResults = await this.processChunks(chunks, concurrency, async (chunk) => {
+      if (taskId && this.store.getTask(taskId).status !== "running") return { candidates: [], callId: null };
+      const generated = await this.generateTaggedJson({
+        workId,
+        taskId,
+        taskType: "timeline-analysis",
+        signal: this.taskSignal(taskId),
+        maxAttempts: 2,
+        instruction: [
+          "从本批正文抽取时间线事件证据账本，输出 JSON 数组；没有合格事件时输出 []。",
+          "每项字段：name、description、eventType、timeLabel、timeSort、location、impactScope、participantReferences、evidence。",
+          "timeSort 只有在原文明示了可用于排序的故事发生时间时才能填写有限数字，否则必须为 null；不得用章节顺序或叙述顺序代替故事发生顺序。",
+          "impactScope 只能是 personal、organization、regional、world、galaxy。participantReferences 只填写原文中的人物姓名、无歧义别名或给定 ID，禁止创造人物 ID。",
+          "每条 evidence 必须包含 chapterId、chapterTitle、quote；quote 必须是对应章节中的连续短引文且不超过 120 字。",
+          "倒叙、回忆和转述按事件实际发生时间理解；证据不足的相似事件保持分开。相邻片段重复出现的同一事件仍应保留相同名称和时间描述，交由后续归并。"
+        ].join("\n"),
+        scope: { type: "selection", selection: chunk.text },
+        ...(modelId ? { modelId } : {}),
+        parameters: { temperature: 0.1 },
+        extraSystemPrompt: "你是严格的小说时间线证据抽取器。只记录给定正文中的事实，不得补写、推断缺失时间或声称候选已确认。"
+      });
+      const extracted = extractJson<unknown>(generated.content);
+      if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "时间轴分片分析结果必须是数组");
+      return {
+        candidates: extracted
+          .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+          .slice(0, TIMELINE_MAX_CANDIDATES_PER_CHUNK),
+        callId: generated.callId
+      };
+    }, (completed) => {
+      if (taskId && this.store.getTask(taskId).status === "running") {
+        this.store.updateTask(taskId, { status: "running", progress: Math.min(65, 5 + Math.round(completed / chunks.length * 60)) });
+      }
+    });
+    const rawCandidates = chunkResults.flatMap((result) => result.candidates);
+    const callIds = chunkResults.map((result) => result.callId).filter((callId): callId is string => typeof callId === "string");
+    const interruptedResult = (): Record<string, unknown> => ({
+      interrupted: true,
+      callId: callIds[0] ?? null,
+      callIds,
+      batchCount: chunks.length,
+      coveredChapterCount: chapters.length,
+      rawCandidateCount: rawCandidates.length
+    });
+    if (!this.taskCanCommit(taskId)) return interruptedResult();
+
+    const skipped: Array<{ index: number; name: string; reason: string }> = [];
+    const characterIds = new Set(this.store.listCharacters(workId).map((character) => String(character.id)));
+    const validated = rawCandidates.flatMap((candidate, index) => {
+      const normalized = this.normalizeTimelineLedgerCandidate(workId, chapters, characterIds, candidate, index);
+      if ("reason" in normalized) {
+        skipped.push({ index, name: normalized.name, reason: normalized.reason });
+        return [];
+      }
+      return [normalized.candidate];
+    });
+    const ledger = this.mergeExactTimelineCandidates(validated);
+    if (!this.taskCanCommit(taskId)) return { ...interruptedResult(), skipped };
+
+    const aggregation = await this.aggregateTimelineCandidates(workId, ledger, concurrency, modelId, taskId);
+    callIds.push(...aggregation.callIds);
+    if (!this.taskCanCommit(taskId)) return { ...interruptedResult(), skipped };
+    const finalCandidates = this.materializeTimelineCandidates(aggregation.nodes, ledger);
+    if (!this.taskCanCommit(taskId)) return { ...interruptedResult(), skipped };
+
+    const eventIds = this.store.db.transaction(() => finalCandidates.map((event) => {
+      const created = this.store.createTimelineEvent(workId, {
+        name: event.name,
+        description: event.description,
+        eventType: event.eventType,
+        timeLabel: event.timeLabel,
+        timeSort: event.timeSort,
+        chapterIds: event.chapterIds,
+        participantIds: event.participantIds,
+        location: event.location,
+        impactScope: event.impactScope,
+        evidence: event.evidence,
+        status: "candidate"
+      }, "analysis", taskId ?? callIds[0] ?? null);
+      return String(created.id);
+    }));
+    return {
+      eventIds,
+      candidateCount: eventIds.length,
+      callId: callIds[0] ?? null,
+      callIds,
+      batchCount: chunks.length,
+      aggregationBatchCount: aggregation.batchCount,
+      coveredChapterCount: chapters.length,
+      rawCandidateCount: rawCandidates.length,
+      skipped
+    };
+  }
+
+  private normalizeTimelineLedgerCandidate(
+    workId: string,
+    chapters: Record<string, unknown>[],
+    characterIds: Set<string>,
+    raw: Record<string, unknown>,
+    index: number
+  ): { candidate: TimelineLedgerCandidate } | { name: string; reason: string } {
+    const name = typeof raw.name === "string" ? raw.name.normalize("NFKC").trim() : "";
+    if (!name) return { name: "未命名候选", reason: "事件名称为空" };
+    const description = typeof raw.description === "string" ? raw.description.trim() : "";
+    const eventType = typeof raw.eventType === "string" && raw.eventType.trim() ? raw.eventType.trim() : "other";
+    const rawTimeLabel = typeof raw.timeLabel === "string" && raw.timeLabel.trim() ? raw.timeLabel.trim() : "时间待定";
+    const location = typeof raw.location === "string" ? raw.location.trim() : "";
+    if (name.length > 300 || description.length > 100_000 || eventType.length > 100 || rawTimeLabel.length > 300 || location.length > 500) {
+      return { name: name.slice(0, 300), reason: "事件字段超过允许长度" };
+    }
+    const evidenceInput = (Array.isArray(raw.evidence) ? raw.evidence : []).filter((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+      const quote = (item as Record<string, unknown>).quote;
+      return typeof quote === "string" && quote.trim().length > 0 && quote.trim().length <= 120;
+    });
+    const evidence = this.validateAnalysisEvidence(chapters, evidenceInput)
+      .map((item) => ({
+        chapterId: String(item.chapterId),
+        chapterTitle: String(item.chapterTitle),
+        quote: String(item.quote)
+      }))
+      .filter((item, evidenceIndex, items) => items.findIndex((candidate) => this.timelineEvidenceKey(candidate) === this.timelineEvidenceKey(item)) === evidenceIndex)
+      .slice(0, TIMELINE_MAX_EVIDENCE_PER_CANDIDATE);
+    if (evidence.length === 0) return { name, reason: "原文证据无效或不属于本次章节范围" };
+    const allowedImpactScopes = new Set<TimelineCandidateFields["impactScope"]>(["personal", "organization", "regional", "world", "galaxy"]);
+    if (raw.impactScope !== undefined && (typeof raw.impactScope !== "string" || !allowedImpactScopes.has(raw.impactScope as TimelineCandidateFields["impactScope"]))) {
+      return { name, reason: "影响范围枚举无效" };
+    }
+    const timeLabel = rawTimeLabel;
+    const timeSort = typeof raw.timeSort === "number" && Number.isFinite(raw.timeSort) && !/待定|未知|不明|unknown/iu.test(timeLabel)
+      ? raw.timeSort
+      : null;
+    const participantReferences = [raw.participantReferences, raw.participants, raw.participantIds]
+      .flatMap((value) => Array.isArray(value) ? value : [])
+      .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+      .map((value) => value.normalize("NFKC").trim().slice(0, 300))
+      .slice(0, 60);
+    const participantIds = [...new Set(participantReferences.flatMap((reference) => {
+      if (characterIds.has(reference)) return [reference];
+      try {
+        const resolved = this.store.resolveCharacterReference(workId, reference);
+        return resolved && characterIds.has(resolved) ? [resolved] : [];
+      } catch {
+        return [];
+      }
+    }))];
+    return {
+      candidate: {
+        candidateId: `timeline-candidate-${index + 1}`,
+        name,
+        description,
+        eventType,
+        timeLabel,
+        timeSort,
+        location,
+        impactScope: typeof raw.impactScope === "string" ? raw.impactScope as TimelineCandidateFields["impactScope"] : "personal",
+        chapterIds: [...new Set(evidence.map((item) => item.chapterId))],
+        participantIds,
+        evidence
+      }
+    };
+  }
+
+  private timelineEvidenceKey(evidence: Pick<TimelineEvidence, "chapterId" | "quote">): string {
+    return `${evidence.chapterId}|${evidence.quote.normalize("NFKC").replace(/\s+/gu, "").trim()}`;
+  }
+
+  private mergeExactTimelineCandidates(candidates: TimelineLedgerCandidate[]): TimelineLedgerCandidate[] {
+    const buckets = new Map<string, TimelineLedgerCandidate[]>();
+    const merged: TimelineLedgerCandidate[] = [];
+    for (const candidate of candidates) {
+      const key = [candidate.name, candidate.timeLabel, candidate.location]
+        .map((value) => this.normalizeReference(value))
+        .join("|");
+      const bucket = buckets.get(key) ?? [];
+      const evidenceKeys = new Set(candidate.evidence.map((item) => this.timelineEvidenceKey(item)));
+      const duplicate = bucket.find((item) => item.evidence.some((evidence) => evidenceKeys.has(this.timelineEvidenceKey(evidence))));
+      if (!duplicate) {
+        const copy = {
+          ...candidate,
+          chapterIds: [...candidate.chapterIds],
+          participantIds: [...candidate.participantIds],
+          evidence: [...candidate.evidence]
+        };
+        bucket.push(copy);
+        buckets.set(key, bucket);
+        merged.push(copy);
+        continue;
+      }
+      if (candidate.description.length > duplicate.description.length) duplicate.description = candidate.description;
+      if (duplicate.eventType === "other" && candidate.eventType !== "other") duplicate.eventType = candidate.eventType;
+      if (duplicate.timeSort === null && candidate.timeSort !== null) duplicate.timeSort = candidate.timeSort;
+      duplicate.chapterIds = [...new Set([...duplicate.chapterIds, ...candidate.chapterIds])];
+      duplicate.participantIds = [...new Set([...duplicate.participantIds, ...candidate.participantIds])];
+      const seenEvidence = new Set(duplicate.evidence.map((item) => this.timelineEvidenceKey(item)));
+      for (const evidence of candidate.evidence) {
+        if (!seenEvidence.has(this.timelineEvidenceKey(evidence))) duplicate.evidence.push(evidence);
+      }
+    }
+    return merged;
+  }
+
+  private async aggregateTimelineCandidates(
+    workId: string,
+    candidates: TimelineLedgerCandidate[],
+    concurrency: number,
+    modelId?: string,
+    taskId?: string
+  ): Promise<{ nodes: TimelineAggregationNode[]; callIds: string[]; batchCount: number }> {
+    const { model } = this.resolveModel(workId, "timeline-analysis", modelId);
+    let nodes = candidates.map((candidate) => ({
+      nodeId: candidate.candidateId,
+      sourceCandidateIds: [candidate.candidateId],
+      name: candidate.name,
+      description: candidate.description,
+      eventType: candidate.eventType,
+      timeLabel: candidate.timeLabel,
+      timeSort: candidate.timeSort,
+      location: candidate.location,
+      impactScope: candidate.impactScope,
+      participantIds: [...candidate.participantIds],
+      evidenceRefs: candidate.evidence.map((_evidence, index) => `${candidate.candidateId}#evidence-${index + 1}`)
+    }));
+    if (nodes.length <= 1) return { nodes, callIds: [], batchCount: 0 };
+    const callIds: string[] = [];
+    let batchCount = 0;
+    for (let level = 0; level < 6 && nodes.length > 1; level += 1) {
+      const includeEvidence = level === 0;
+      const orderedNodes = level === 0
+        ? nodes
+        : [...nodes].sort((left, right) => [left.name, left.timeLabel, left.location].join("|").localeCompare(
+          [right.name, right.timeLabel, right.location].join("|"),
+          "zh-CN"
+        ));
+      const batches = this.buildTimelineAggregationBatches(workId, orderedNodes, candidates, includeEvidence, model, modelId, taskId);
+      const aggregationResults = await this.processChunks(batches, Math.min(concurrency, 4), async (batch, batchIndex) => {
+        if (taskId && this.store.getTask(taskId).status !== "running") return { nodes: batch, callId: null };
+        const payload = batch.map((node) => this.timelineAggregationPayload(node, candidates, includeEvidence));
+        const generated = await this.generateTaggedJson(this.timelineAggregationInput(workId, payload, includeEvidence, modelId, taskId));
+        const extracted = extractJson<unknown>(generated.content);
+        if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "时间线归并结果必须是数组");
+        return {
+          nodes: this.applyTimelineAggregation(batch, extracted, level, batchIndex),
+          callId: generated.callId
+        };
+      }, (completed) => {
+        if (taskId && this.store.getTask(taskId).status === "running") {
+          const targetProgress = Math.min(92, 65 + level * 8 + Math.round(completed / batches.length * 8));
+          const currentProgress = Number(this.store.getTask(taskId).progress ?? 0);
+          this.store.updateTask(taskId, { status: "running", progress: Math.max(currentProgress, targetProgress) });
+        }
+      });
+      batchCount += batches.length;
+      callIds.push(...aggregationResults.map((result) => result.callId).filter((callId): callId is string => typeof callId === "string"));
+      const nextNodes = aggregationResults.flatMap((result) => result.nodes);
+      nodes = nextNodes;
+      if (batches.length === 1) break;
+      if (level > 0 && nextNodes.length >= orderedNodes.length) break;
+    }
+    return { nodes, callIds, batchCount };
+  }
+
+  private buildTimelineAggregationBatches(
+    workId: string,
+    nodes: TimelineAggregationNode[],
+    candidates: TimelineLedgerCandidate[],
+    includeEvidence: boolean,
+    model: ModelRow,
+    modelId?: string,
+    taskId?: string
+  ): TimelineAggregationNode[][] {
+    const characterBoundedBatches: TimelineAggregationNode[][] = [];
+    let batch: TimelineAggregationNode[] = [];
+    let batchLength = 2;
+    for (const node of nodes) {
+      const itemLength = JSON.stringify(this.timelineAggregationPayload(node, candidates, includeEvidence)).length + 1;
+      if (batch.length > 0 && batchLength + itemLength > TIMELINE_AGGREGATION_MAX_CHARS) {
+        characterBoundedBatches.push(batch);
+        batch = [];
+        batchLength = 2;
+      }
+      batch.push(node);
+      batchLength += itemLength;
+    }
+    if (batch.length > 0) characterBoundedBatches.push(batch);
+
+    const fitToModelBudget = (candidateBatch: TimelineAggregationNode[]): TimelineAggregationNode[][] => {
+      const payload = candidateBatch.map((node) => this.timelineAggregationPayload(node, candidates, includeEvidence));
+      const usage = this.timelineAggregationInputUsage(
+        this.timelineAggregationInput(workId, payload, includeEvidence, modelId, taskId),
+        model
+      );
+      if (usage.inputTokens <= usage.maximumInputTokens) return [candidateBatch];
+      if (candidateBatch.length === 1) {
+        throw new AppError(413, "TIMELINE_AGGREGATION_CONTEXT_TOO_LARGE", "单个时间线候选连同归并提示已超过所选模型的安全上下文容量", {
+          candidateId: candidateBatch[0]?.nodeId,
+          inputTokens: usage.inputTokens,
+          maximumInputTokens: usage.maximumInputTokens,
+          contextWindow: usage.contextWindow,
+          outputReserveTokens: usage.outputReserveTokens
+        });
+      }
+      const middle = Math.ceil(candidateBatch.length / 2);
+      return [
+        ...fitToModelBudget(candidateBatch.slice(0, middle)),
+        ...fitToModelBudget(candidateBatch.slice(middle))
+      ];
+    };
+    return characterBoundedBatches.flatMap((candidateBatch) => fitToModelBudget(candidateBatch));
+  }
+
+  private timelineAggregationInput(
+    workId: string,
+    payload: Record<string, unknown>[],
+    includeEvidence: boolean,
+    modelId?: string,
+    taskId?: string
+  ): GenerateInput {
+    return {
       workId,
       taskId,
       taskType: "timeline-analysis",
       signal: this.taskSignal(taskId),
-      instruction: "抽取大事件候选并输出 JSON 数组。每项字段：name、description、eventType、timeLabel、timeSort（无法确定为 null）、location、impactScope、chapterIds、participantIds、evidence。必须区分发生时间与叙述时间；不确定时使用‘时间待定’。",
-      scope,
+      maxAttempts: 2,
+      scope: { type: "entities", suppressAutomaticContext: true },
       ...(modelId ? { modelId } : {}),
-      extraSystemPrompt: "本任务要求严格输出可解析的 JSON。仅生成候选，不得声称已确认。"
+      parameters: { temperature: 0.1 },
+      agentToolIds: [],
+      disableTools: true,
+      instruction: [
+        "你是小说时间线候选归并器。请对下面的证据账本候选做保守归并，输出 JSON 数组。",
+        "每项字段：candidateIds、name、description、eventType、timeLabel、timeSort、location、impactScope。candidateIds 只能引用输入对象的 candidateId，不能引用 sourceCandidateIds，并且每个输入 candidateId 最多出现一次。",
+        "只有证据足以确认是同一个故事事件时才能把多个 ID 放入一组；名称相似、参与者相同或章节相邻本身都不够。证据不足时保持单项组，禁止省略候选。",
+        "timeSort 只能沿用组内已经存在且有明确时间依据的有限数字；不得按章节或叙述顺序新造排序值。倒叙和回忆以事件发生时间为准。",
+        includeEvidence
+          ? "本层包含经服务端核验的短引文。只可据此归并，不得补充新证据、章节或人物。"
+          : "本层只包含下层摘要和证据引用，不含正文。只可归并这些摘要，不得推断引用之外的新事实。",
+        `候选账本：${JSON.stringify(payload)}`
+      ].join("\n"),
+      extraSystemPrompt: "归并结果只定义本次任务内的候选分组。宁可保留两个候选，也不要误合并证据不足的事件。"
+    };
+  }
+
+  private timelineAggregationInputUsage(input: GenerateInput, model: ModelRow): {
+    inputTokens: number;
+    maximumInputTokens: number;
+    contextWindow: number;
+    outputReserveTokens: number;
+  } {
+    const taggedInput = this.taggedJsonInput(input);
+    const budget = this.contextBudget(taggedInput, model);
+    const conversation = budget.conversation as AiConversationContext | null;
+    const context = this.buildContext(taggedInput, model, budget);
+    const messages = this.buildMessages(taggedInput, context, conversation);
+    const tools = taggedInput.disableTools
+      ? []
+      : this.enabledAgentTools(
+        taggedInput.workId,
+        taggedInput.taskType,
+        taggedInput.agentToolIds,
+        taggedInput.conversationId,
+        this.roleplayCharacterIdFromConversation(taggedInput.workId, conversation)
+      );
+    return {
+      inputTokens: estimateCompletionMessageTokens(messages)
+        + (tools.length > 0 ? estimateAiTokens(JSON.stringify(tools)) : 0),
+      maximumInputTokens: Number(budget.availableInputTokens),
+      contextWindow: Number(budget.contextWindow),
+      outputReserveTokens: Number(budget.outputReserveTokens)
+    };
+  }
+
+  private timelineAggregationPayload(
+    node: TimelineAggregationNode,
+    candidates: TimelineLedgerCandidate[],
+    includeEvidence: boolean
+  ): Record<string, unknown> {
+    const sourceCandidates = node.sourceCandidateIds.flatMap((candidateId) => {
+      const candidate = candidates.find((item) => item.candidateId === candidateId);
+      return candidate ? [candidate] : [];
     });
-    const events = extractJson<Array<Record<string, unknown>>>(generated.content);
-    if (!Array.isArray(events)) throw new AppError(502, "AI_INVALID_JSON", "时间轴分析结果必须是数组");
-    if (!this.taskCanCommit(taskId)) return { interrupted: true, callId: generated.callId };
-    const eventIds: string[] = [];
-    for (const event of events) {
-      if (typeof event.name !== "string" || !event.name.trim()) continue;
-      const created = this.store.createTimelineEvent(workId, {
-        name: event.name,
-        description: typeof event.description === "string" ? event.description : "",
-        eventType: typeof event.eventType === "string" ? event.eventType : "other",
-        timeLabel: typeof event.timeLabel === "string" ? event.timeLabel : "时间待定",
-        timeSort: typeof event.timeSort === "number" ? event.timeSort : null,
-        chapterIds: Array.isArray(event.chapterIds) ? event.chapterIds.filter((value): value is string => typeof value === "string") : [],
-        participantIds: Array.isArray(event.participantIds) ? event.participantIds.filter((value): value is string => typeof value === "string") : [],
-        location: typeof event.location === "string" ? event.location : "",
-        impactScope: typeof event.impactScope === "string" ? event.impactScope : "personal",
-        evidence: Array.isArray(event.evidence) ? event.evidence : [],
-        status: "candidate"
-      }, "analysis", taskId ?? generated.callId);
-      eventIds.push(String(created.id));
-    }
-    return { eventIds, candidateCount: eventIds.length, callId: generated.callId };
+    return {
+      candidateId: node.nodeId,
+      sourceCandidateIds: node.sourceCandidateIds,
+      name: node.name,
+      description: node.description.slice(0, includeEvidence ? 2_000 : 600),
+      eventType: node.eventType,
+      timeLabel: node.timeLabel,
+      timeSort: node.timeSort,
+      location: node.location,
+      impactScope: node.impactScope,
+      participantIds: node.participantIds,
+      ...(includeEvidence ? {
+        evidence: sourceCandidates.flatMap((candidate) => candidate.evidence.map((evidence, index) => ({
+          evidenceRef: `${candidate.candidateId}#evidence-${index + 1}`,
+          chapterId: evidence.chapterId,
+          chapterTitle: evidence.chapterTitle,
+          quote: evidence.quote
+        })))
+      } : { evidenceRefs: node.evidenceRefs })
+    };
+  }
+
+  private applyTimelineAggregation(
+    nodes: TimelineAggregationNode[],
+    rawGroups: unknown[],
+    level: number,
+    batchIndex: number
+  ): TimelineAggregationNode[] {
+    const available = new Map(nodes.map((node) => [node.nodeId, node]));
+    const assigned = new Set<string>();
+    const result: TimelineAggregationNode[] = [];
+    rawGroups.forEach((rawGroup, groupIndex) => {
+      if (!rawGroup || typeof rawGroup !== "object" || Array.isArray(rawGroup)) return;
+      const group = rawGroup as Record<string, unknown>;
+      const candidateIds = [...new Set((Array.isArray(group.candidateIds) ? group.candidateIds : [])
+        .filter((candidateId): candidateId is string => typeof candidateId === "string" && available.has(candidateId) && !assigned.has(candidateId)))];
+      if (candidateIds.length === 0) return;
+      candidateIds.forEach((candidateId) => assigned.add(candidateId));
+      const members = candidateIds.map((candidateId) => available.get(candidateId)).filter((node): node is TimelineAggregationNode => Boolean(node));
+      const fallback = members[0] as TimelineAggregationNode;
+      const allowedImpactScopes = new Set<TimelineCandidateFields["impactScope"]>(["personal", "organization", "regional", "world", "galaxy"]);
+      const reportedTimeSort = typeof group.timeSort === "number" && Number.isFinite(group.timeSort)
+        ? group.timeSort
+        : null;
+      const timeSort = reportedTimeSort !== null && members.some((member) => member.timeSort === reportedTimeSort)
+        ? reportedTimeSort
+        : members.every((member) => member.timeSort === members[0]?.timeSort)
+          ? members[0]?.timeSort ?? null
+          : null;
+      result.push({
+        nodeId: `timeline-group-${level + 1}-${batchIndex + 1}-${groupIndex + 1}`,
+        sourceCandidateIds: [...new Set(members.flatMap((member) => member.sourceCandidateIds))],
+        name: typeof group.name === "string" && group.name.trim() ? group.name.normalize("NFKC").trim().slice(0, 300) : fallback.name,
+        description: typeof group.description === "string" ? group.description.trim().slice(0, 100_000) : fallback.description,
+        eventType: typeof group.eventType === "string" && group.eventType.trim() ? group.eventType.trim().slice(0, 100) : fallback.eventType,
+        timeLabel: typeof group.timeLabel === "string" && group.timeLabel.trim() ? group.timeLabel.trim().slice(0, 300) : fallback.timeLabel,
+        timeSort,
+        location: typeof group.location === "string" ? group.location.trim().slice(0, 500) : fallback.location,
+        impactScope: typeof group.impactScope === "string" && allowedImpactScopes.has(group.impactScope as TimelineCandidateFields["impactScope"])
+          ? group.impactScope as TimelineCandidateFields["impactScope"]
+          : fallback.impactScope,
+        participantIds: [...new Set(members.flatMap((member) => member.participantIds))],
+        evidenceRefs: [...new Set(members.flatMap((member) => member.evidenceRefs))]
+      });
+    });
+    for (const node of nodes) if (!assigned.has(node.nodeId)) result.push(node);
+    return result;
+  }
+
+  private materializeTimelineCandidates(
+    nodes: TimelineAggregationNode[],
+    ledger: TimelineLedgerCandidate[]
+  ): TimelineLedgerCandidate[] {
+    const byCandidateId = new Map(ledger.map((candidate) => [candidate.candidateId, candidate]));
+    const candidates = nodes.flatMap((node) => {
+      const sources = node.sourceCandidateIds.flatMap((candidateId) => {
+        const candidate = byCandidateId.get(candidateId);
+        return candidate ? [candidate] : [];
+      });
+      if (sources.length === 0) return [];
+      const evidence = sources.flatMap((source) => source.evidence)
+        .filter((item, index, items) => items.findIndex((candidate) => this.timelineEvidenceKey(candidate) === this.timelineEvidenceKey(item)) === index);
+      return [{
+        candidateId: node.nodeId,
+        name: node.name,
+        description: node.description,
+        eventType: node.eventType,
+        timeLabel: node.timeLabel,
+        timeSort: node.timeSort,
+        location: node.location,
+        impactScope: node.impactScope,
+        chapterIds: [...new Set(evidence.map((item) => item.chapterId))],
+        participantIds: [...new Set(sources.flatMap((source) => source.participantIds))],
+        evidence
+      }];
+    });
+    return this.mergeExactTimelineCandidates(candidates);
   }
 
   private async runWorldviewAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
@@ -12793,6 +13287,46 @@ export class AiManager {
         text = `${header.replace("<CHAPTER ", `<CHAPTER part="${part}" `)}${content.slice(offset, offset + segmentSize)}${footer}`;
         chapterIds = [String(chapter.id)];
         flush();
+      }
+    }
+    flush();
+    return chunks;
+  }
+
+  private buildTimelineChapterChunks(chapters: Record<string, unknown>[]): Array<{ text: string; chapterIds: string[] }> {
+    const chunks: Array<{ text: string; chapterIds: string[] }> = [];
+    let text = "";
+    let chapterIds: string[] = [];
+    const flush = (): void => {
+      if (!text) return;
+      chunks.push({ text, chapterIds });
+      text = "";
+      chapterIds = [];
+    };
+    for (const chapter of chapters) {
+      const chapterId = String(chapter.id);
+      const title = String(chapter.title).replaceAll('"', "'");
+      const header = `\n<CHAPTER id="${chapterId}" title="${title}">\n`;
+      const footer = "\n</CHAPTER>\n";
+      const content = String(chapter.content);
+      const block = `${header}${content}${footer}`;
+      if (text && text.length + block.length > TIMELINE_CHUNK_MAX_CHARS) flush();
+      if (block.length <= TIMELINE_CHUNK_MAX_CHARS) {
+        text += block;
+        chapterIds.push(chapterId);
+        continue;
+      }
+      flush();
+      const segmentSize = Math.max(1_000, TIMELINE_CHUNK_MAX_CHARS - header.length - footer.length - 120);
+      let start = 0;
+      let part = 1;
+      while (start < content.length) {
+        const end = Math.min(content.length, start + segmentSize);
+        const partHeader = header.replace("<CHAPTER ", `<CHAPTER part="${part}" `);
+        chunks.push({ text: `${partHeader}${content.slice(start, end)}${footer}`, chapterIds: [chapterId] });
+        if (end >= content.length) break;
+        start = Math.max(start + 1, end - TIMELINE_CHUNK_OVERLAP_CHARS);
+        part += 1;
       }
     }
     flush();
