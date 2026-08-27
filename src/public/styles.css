@@ -2909,7 +2909,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-attachment-button:hover, .ai-attachment-button:focus-visible, .ai-scene-button:hover, .ai-scene-button:focus-visible, .ai-scene-button[aria-expanded="true"], .ai-scene-button.is-active, .ai-roleplay-memory-button:hover, .ai-roleplay-memory-button:focus-visible { border-color: color-mix(in srgb, var(--accent) 56%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); color: var(--accent-dark); outline: 0; }
 .ai-attachment-button:disabled, .ai-scene-button:disabled, .ai-roleplay-memory-button:disabled { cursor: wait; opacity: .56; }
 .ai-scene-button.hidden, .ai-roleplay-memory-button.hidden { display: none; }
-.ai-image-button-icon, .ai-scene-button-icon, .ai-roleplay-memory-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.ai-image-button-icon, .ai-scene-button-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.ai-roleplay-memory-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 
 .roleplay-memory-dialog { width: min(920px, 94vw); max-width: calc(100vw - 24px); }
 .roleplay-memory-dialog-body { display: grid; gap: 14px; min-height: min(480px, 68vh); max-height: 72vh; padding: 16px 22px 22px; overflow-y: auto; }
