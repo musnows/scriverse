@@ -1,5 +1,6 @@
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { estimateAiTokens } from "../../src/ai.js";
 import type { Runtime } from "../../src/app.js";
 import { createTestRuntime } from "../helpers.js";
 
@@ -192,6 +193,71 @@ describe("时间线分片分析", () => {
     expect(runtime.store.listTimelineEvents(workId)[0]?.evidence).toEqual([
       { chapterId, chapterTitle: "超长章", quote: boundaryQuote }
     ]);
+  });
+
+  it("按 32K 模型输入预算拆分 50 个长描述归并候选", async () => {
+    let chapterId = "";
+    const quotes = Array.from({ length: 50 }, (_value, index) => `第${index + 1}号事件证据。`);
+    const aggregationInputTokens: number[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ role?: string; content?: string }> };
+      const messages = body.messages ?? [];
+      const prompt = messages.map((message) => message.content ?? "").join("\n");
+      if (prompt.includes("小说时间线候选归并器")) {
+        aggregationInputTokens.push(estimateAiTokens(JSON.stringify(messages.map((message) => ({
+          ...message,
+          content: message.content ?? ""
+        })))));
+        const candidateIds = [...prompt.matchAll(/"candidateId":"([^"]+)"/gu)].map((match) => String(match[1]));
+        return completion(candidateIds.map((candidateId, index) => ({
+          candidateIds: [candidateId],
+          name: `预算内候选${index + 1}`,
+          description: "",
+          eventType: "other",
+          timeLabel: "时间待定",
+          timeSort: null,
+          location: "北港",
+          impactScope: "personal"
+        })));
+      }
+      return completion(quotes.map((quote, index) => ({
+        name: `第${index + 1}号事件`,
+        description: "长".repeat(2_000),
+        eventType: "other",
+        timeLabel: "时间待定",
+        timeSort: null,
+        location: "北港",
+        impactScope: "personal",
+        evidence: [{ chapterId, chapterTitle: "候选压力章", quote }]
+      })));
+    });
+    runtime = createTestRuntime(fetchMock);
+    const work = runtime.store.createWork({ title: "归并预算压力测试" });
+    const workId = String(work.id);
+    const volume = runtime.store.createVolume(workId, { title: "第一卷" });
+    const chapter = runtime.store.createChapter(workId, {
+      volumeId: String(volume.id),
+      title: "候选压力章",
+      content: quotes.join("")
+    });
+    chapterId = String(chapter.id);
+    const modelId = await configureModel(runtime, workId);
+    runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", 32_768, modelId);
+    const task = runtime.store.createTask(workId, { taskType: "timeline-analysis", scope: { type: "book" }, modelId });
+
+    const completed = await request(runtime.app).post(`/api/tasks/${task.id}/run`).send({}).expect(200);
+
+    expect(completed.body.data).toMatchObject({ status: "review", progress: 100 });
+    expect(completed.body.data.result).toMatchObject({
+      candidateCount: 50,
+      rawCandidateCount: 50,
+      batchCount: 1,
+      coveredChapterCount: 1
+    });
+    expect(completed.body.data.result.aggregationBatchCount).toBeGreaterThan(1);
+    expect(aggregationInputTokens.length).toBe(completed.body.data.result.aggregationBatchCount);
+    expect(Math.max(...aggregationInputTokens)).toBeLessThanOrEqual(24_064);
+    expect(runtime.store.listTimelineEvents(workId)).toHaveLength(50);
   });
 
   it("任一正文分片双重失败时不写入候选、版本或审计记录", async () => {

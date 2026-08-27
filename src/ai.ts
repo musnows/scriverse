@@ -8353,13 +8353,17 @@ export class AiManager {
   }
 
   private generateTaggedJson(input: GenerateInput): Promise<GenerateResult> {
+    return this.generate(this.taggedJsonInput(input));
+  }
+
+  private taggedJsonInput(input: GenerateInput): GenerateInput {
     const userRequirement = "将最终 JSON 放在唯一一对 <json> 和 </json> 标签中；标签外不要输出任何内容，也不要使用 Markdown 代码块。";
     const systemRequirement = "结构化响应要求：最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。";
-    return this.generate({
+    return {
       ...input,
       instruction: `${input.instruction}\n${userRequirement}`,
       extraSystemPrompt: [input.extraSystemPrompt, systemRequirement].filter(Boolean).join("\n")
-    });
+    };
   }
 
   async generate(input: GenerateInput, onDelta?: (delta: string) => void): Promise<GenerateResult> {
@@ -9857,6 +9861,7 @@ export class AiManager {
     modelId?: string,
     taskId?: string
   ): Promise<{ nodes: TimelineAggregationNode[]; callIds: string[]; batchCount: number }> {
+    const { model } = this.resolveModel(workId, "timeline-analysis", modelId);
     let nodes = candidates.map((candidate) => ({
       nodeId: candidate.candidateId,
       sourceCandidateIds: [candidate.candidateId],
@@ -9881,31 +9886,11 @@ export class AiManager {
           [right.name, right.timeLabel, right.location].join("|"),
           "zh-CN"
         ));
-      const batches = this.buildTimelineAggregationBatches(orderedNodes, candidates, includeEvidence);
+      const batches = this.buildTimelineAggregationBatches(workId, orderedNodes, candidates, includeEvidence, model, modelId, taskId);
       const aggregationResults = await this.processChunks(batches, Math.min(concurrency, 4), async (batch, batchIndex) => {
         if (taskId && this.store.getTask(taskId).status !== "running") return { nodes: batch, callId: null };
         const payload = batch.map((node) => this.timelineAggregationPayload(node, candidates, includeEvidence));
-        const generated = await this.generateTaggedJson({
-          workId,
-          taskId,
-          taskType: "timeline-analysis",
-          signal: this.taskSignal(taskId),
-          maxAttempts: 2,
-          scope: { type: "entities", suppressAutomaticContext: true },
-          ...(modelId ? { modelId } : {}),
-          parameters: { temperature: 0.1 },
-          instruction: [
-            "你是小说时间线候选归并器。请对下面的证据账本候选做保守归并，输出 JSON 数组。",
-            "每项字段：candidateIds、name、description、eventType、timeLabel、timeSort、location、impactScope。candidateIds 只能引用输入对象的 candidateId，不能引用 sourceCandidateIds，并且每个输入 candidateId 最多出现一次。",
-            "只有证据足以确认是同一个故事事件时才能把多个 ID 放入一组；名称相似、参与者相同或章节相邻本身都不够。证据不足时保持单项组，禁止省略候选。",
-            "timeSort 只能沿用组内已经存在且有明确时间依据的有限数字；不得按章节或叙述顺序新造排序值。倒叙和回忆以事件发生时间为准。",
-            includeEvidence
-              ? "本层包含经服务端核验的短引文。只可据此归并，不得补充新证据、章节或人物。"
-              : "本层只包含下层摘要和证据引用，不含正文。只可归并这些摘要，不得推断引用之外的新事实。",
-            `候选账本：${JSON.stringify(payload)}`
-          ].join("\n"),
-          extraSystemPrompt: "归并结果只定义本次任务内的候选分组。宁可保留两个候选，也不要误合并证据不足的事件。"
-        });
+        const generated = await this.generateTaggedJson(this.timelineAggregationInput(workId, payload, includeEvidence, modelId, taskId));
         const extracted = extractJson<unknown>(generated.content);
         if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "时间线归并结果必须是数组");
         return {
@@ -9930,25 +9915,113 @@ export class AiManager {
   }
 
   private buildTimelineAggregationBatches(
+    workId: string,
     nodes: TimelineAggregationNode[],
     candidates: TimelineLedgerCandidate[],
-    includeEvidence: boolean
+    includeEvidence: boolean,
+    model: ModelRow,
+    modelId?: string,
+    taskId?: string
   ): TimelineAggregationNode[][] {
-    const batches: TimelineAggregationNode[][] = [];
+    const characterBoundedBatches: TimelineAggregationNode[][] = [];
     let batch: TimelineAggregationNode[] = [];
     let batchLength = 2;
     for (const node of nodes) {
       const itemLength = JSON.stringify(this.timelineAggregationPayload(node, candidates, includeEvidence)).length + 1;
       if (batch.length > 0 && batchLength + itemLength > TIMELINE_AGGREGATION_MAX_CHARS) {
-        batches.push(batch);
+        characterBoundedBatches.push(batch);
         batch = [];
         batchLength = 2;
       }
       batch.push(node);
       batchLength += itemLength;
     }
-    if (batch.length > 0) batches.push(batch);
-    return batches;
+    if (batch.length > 0) characterBoundedBatches.push(batch);
+
+    const fitToModelBudget = (candidateBatch: TimelineAggregationNode[]): TimelineAggregationNode[][] => {
+      const payload = candidateBatch.map((node) => this.timelineAggregationPayload(node, candidates, includeEvidence));
+      const usage = this.timelineAggregationInputUsage(
+        this.timelineAggregationInput(workId, payload, includeEvidence, modelId, taskId),
+        model
+      );
+      if (usage.inputTokens <= usage.maximumInputTokens) return [candidateBatch];
+      if (candidateBatch.length === 1) {
+        throw new AppError(413, "TIMELINE_AGGREGATION_CONTEXT_TOO_LARGE", "单个时间线候选连同归并提示已超过所选模型的安全上下文容量", {
+          candidateId: candidateBatch[0]?.nodeId,
+          inputTokens: usage.inputTokens,
+          maximumInputTokens: usage.maximumInputTokens,
+          contextWindow: usage.contextWindow,
+          outputReserveTokens: usage.outputReserveTokens
+        });
+      }
+      const middle = Math.ceil(candidateBatch.length / 2);
+      return [
+        ...fitToModelBudget(candidateBatch.slice(0, middle)),
+        ...fitToModelBudget(candidateBatch.slice(middle))
+      ];
+    };
+    return characterBoundedBatches.flatMap((candidateBatch) => fitToModelBudget(candidateBatch));
+  }
+
+  private timelineAggregationInput(
+    workId: string,
+    payload: Record<string, unknown>[],
+    includeEvidence: boolean,
+    modelId?: string,
+    taskId?: string
+  ): GenerateInput {
+    return {
+      workId,
+      taskId,
+      taskType: "timeline-analysis",
+      signal: this.taskSignal(taskId),
+      maxAttempts: 2,
+      scope: { type: "entities", suppressAutomaticContext: true },
+      ...(modelId ? { modelId } : {}),
+      parameters: { temperature: 0.1 },
+      agentToolIds: [],
+      disableTools: true,
+      instruction: [
+        "你是小说时间线候选归并器。请对下面的证据账本候选做保守归并，输出 JSON 数组。",
+        "每项字段：candidateIds、name、description、eventType、timeLabel、timeSort、location、impactScope。candidateIds 只能引用输入对象的 candidateId，不能引用 sourceCandidateIds，并且每个输入 candidateId 最多出现一次。",
+        "只有证据足以确认是同一个故事事件时才能把多个 ID 放入一组；名称相似、参与者相同或章节相邻本身都不够。证据不足时保持单项组，禁止省略候选。",
+        "timeSort 只能沿用组内已经存在且有明确时间依据的有限数字；不得按章节或叙述顺序新造排序值。倒叙和回忆以事件发生时间为准。",
+        includeEvidence
+          ? "本层包含经服务端核验的短引文。只可据此归并，不得补充新证据、章节或人物。"
+          : "本层只包含下层摘要和证据引用，不含正文。只可归并这些摘要，不得推断引用之外的新事实。",
+        `候选账本：${JSON.stringify(payload)}`
+      ].join("\n"),
+      extraSystemPrompt: "归并结果只定义本次任务内的候选分组。宁可保留两个候选，也不要误合并证据不足的事件。"
+    };
+  }
+
+  private timelineAggregationInputUsage(input: GenerateInput, model: ModelRow): {
+    inputTokens: number;
+    maximumInputTokens: number;
+    contextWindow: number;
+    outputReserveTokens: number;
+  } {
+    const taggedInput = this.taggedJsonInput(input);
+    const budget = this.contextBudget(taggedInput, model);
+    const conversation = budget.conversation as AiConversationContext | null;
+    const context = this.buildContext(taggedInput, model, budget);
+    const messages = this.buildMessages(taggedInput, context, conversation);
+    const tools = taggedInput.disableTools
+      ? []
+      : this.enabledAgentTools(
+        taggedInput.workId,
+        taggedInput.taskType,
+        taggedInput.agentToolIds,
+        taggedInput.conversationId,
+        this.roleplayCharacterIdFromConversation(taggedInput.workId, conversation)
+      );
+    return {
+      inputTokens: estimateCompletionMessageTokens(messages)
+        + (tools.length > 0 ? estimateAiTokens(JSON.stringify(tools)) : 0),
+      maximumInputTokens: Number(budget.availableInputTokens),
+      contextWindow: Number(budget.contextWindow),
+      outputReserveTokens: Number(budget.outputReserveTokens)
+    };
   }
 
   private timelineAggregationPayload(
