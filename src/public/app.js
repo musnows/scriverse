@@ -197,6 +197,7 @@ const state = {
   aiConversations: [],
   aiRoleplayCharacter: null,
   aiRoleplayUserCharacter: null,
+  aiRoleplayMemoryScope: null,
   aiLastMessageAt: null,
   settings: [],
   dirty: false,
@@ -481,6 +482,7 @@ function applyWorkAccessMode() {
   $("#ai-scene-time").readOnly = aiReadOnly;
   $("#ai-send").classList.toggle("permission-hidden", aiReadOnly);
   renderAiRoleplayCharacterSelect();
+  syncAiRoleplayMemoryControls();
   updateBackgroundTaskCenterVisibility();
   if (proseReadOnly) {
     chapterEditorReadOnly = true;
@@ -2111,6 +2113,7 @@ function createAiChatTabState(input = {}) {
     contextScope: input.contextScope ?? { type: "none" },
     roleplayCharacter: input.roleplayCharacter ?? null,
     roleplayUserCharacter: input.roleplayUserCharacter ?? null,
+    roleplayMemoryScope: input.roleplayMemoryScope ?? null,
     citations: input.citations ?? [],
     references: input.references ?? [],
     composer: input.composer ?? { text: "", citations: [], references: [], images: [], sceneDirection: "", scenePin: emptyRoleplayScenePin() },
@@ -2140,6 +2143,7 @@ function persistActiveAiChatTab() {
   tab.contextScope = { ...state.aiContextScope };
   tab.roleplayCharacter = state.aiRoleplayCharacter ? { ...state.aiRoleplayCharacter } : null;
   tab.roleplayUserCharacter = state.aiRoleplayUserCharacter ? { ...state.aiRoleplayUserCharacter } : null;
+  tab.roleplayMemoryScope = state.aiRoleplayMemoryScope ? { ...state.aiRoleplayMemoryScope } : null;
   setAiChatTabComposerSnapshot(tab, captureAiPromptComposer());
   tab.contextUsage = latestAiContextUsage;
   tab.contextWarning = !$("#ai-context-warning").classList.contains("hidden");
@@ -2185,6 +2189,7 @@ function applyAiChatTabState(tab) {
   applyAiConversationTaskType(tab.taskType);
   applyAiConversationContextScope(tab.contextScope);
   applyAiRoleplayCharacter(tab.roleplayCharacter, tab.roleplayUserCharacter);
+  applyAiRoleplayMemoryScope(tab.roleplayMemoryScope);
   const selectedModelId = tab.modelId ?? tab.selectedModelId;
   if (selectedModelId && state.models.some((model) => model.id === selectedModelId)) $("#ai-model").value = selectedModelId;
   syncAiModelPicker();
@@ -2718,6 +2723,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   recall_other: "回忆相识角色",
   recall_known: "回忆知情设定",
   recall_story: "回忆故事",
+  recall_roleplay_memory: "回忆当前扮演线",
+  remember_roleplay: "整理扮演记忆",
   calculate_time: "计算日期"
 };
 
@@ -2734,6 +2741,8 @@ const AI_TOOL_DESCRIPTIONS = {
   recall_other: "读取自己通过关系、同一组织或共同参与时间线而认识的其他角色公开摘要。",
   recall_known: "读取自己所属种族、组织，以及与自己身份相关的世界设定。",
   recall_story: "查询自己姓名或别名出现过的正文段落，避免全知回忆。",
+  recall_roleplay_memory: "查询当前对话绑定的非正史角色扮演记忆线，不读取其他会话或作品正史。",
+  remember_roleplay: "暂存本轮值得保持的扮演经历；最终角色回复成功保存后才提交。",
   calculate_time: "计算两个 YYYY-MM-DD 日期之间的天数差。"
 };
 
@@ -3231,6 +3240,215 @@ function renderAiConversationHistory() {
   }
 }
 
+const roleplayMemoryCategoryLabels = Object.freeze({
+  event: "事件",
+  state: "状态",
+  relationship: "关系",
+  commitment: "承诺",
+  knowledge: "知识",
+  scene: "场景"
+});
+const roleplayMemoryImportanceLabels = Object.freeze({ low: "低重要度", medium: "中重要度", high: "高重要度" });
+const roleplayMemoryCertaintyLabels = Object.freeze({ experienced: "亲历", observed: "观察", heard: "听说", believed: "相信" });
+const roleplayMemoryStatusLabels = Object.freeze({ active: "生效中", superseded: "已取代", archived: "已归档" });
+let roleplayMemoryItems = [];
+let roleplayMemoryScopes = [];
+let roleplayMemoryPagination = { cursor: 0, limit: 20, total: 0, nextCursor: null };
+let roleplayMemoryCursorHistory = [0];
+let roleplayMemorySearchTimer = null;
+
+function roleplayMemoryReadOnly() {
+  return Boolean(state.work) && !canWritePermissionModule(state.work, "ai-chat");
+}
+
+function roleplayMemoryQuery() {
+  const parameters = new URLSearchParams({
+    cursor: String(roleplayMemoryCursorHistory.at(-1) ?? 0),
+    limit: "20"
+  });
+  const query = $("#roleplay-memory-search").value.trim();
+  const category = $("#roleplay-memory-category").value;
+  const status = $("#roleplay-memory-status").value;
+  if (query) parameters.set("q", query);
+  if (category) parameters.set("categories", category);
+  if (status === "all") parameters.set("statuses", "active,superseded,archived");
+  else parameters.set("statuses", status || "active");
+  return parameters;
+}
+
+function renderRoleplayMemoryScopeOptions() {
+  const select = $("#roleplay-memory-scope-select");
+  const currentScopeId = String(state.aiRoleplayMemoryScope?.id ?? "");
+  const compatibleScopes = roleplayMemoryScopes.filter((scope) => (
+    String(scope.roleplayCharacter?.id ?? "") === String(state.aiRoleplayCharacter?.id ?? "")
+    && String(scope.roleplayUserCharacter?.id ?? "") === String(state.aiRoleplayUserCharacter?.id ?? "")
+  ));
+  select.innerHTML = compatibleScopes.length
+    ? compatibleScopes.map((scope) => `<option value="${esc(scope.id)}" ${scope.id === currentScopeId ? "selected" : ""}>${esc(scope.title)} · ${Number(scope.activeMemoryCount ?? 0)} 条</option>`).join("")
+    : '<option value="">没有可延续的记忆线</option>';
+  const locked = state.aiPromptSent || roleplayMemoryReadOnly();
+  select.disabled = locked || compatibleScopes.length === 0;
+  $("#roleplay-memory-use-scope").disabled = locked || compatibleScopes.length === 0;
+  $("#roleplay-memory-new-scope").disabled = locked;
+  const lockReason = state.aiPromptSent ? "角色扮演开始后不能切换记忆线" : roleplayMemoryReadOnly() ? "当前权限不能修改 AI 对话" : "";
+  for (const control of [select, $("#roleplay-memory-use-scope"), $("#roleplay-memory-new-scope")]) control.title = lockReason;
+}
+
+function roleplayMemorySourceHtml(source) {
+  const canOpen = source.conversationId && source.messageId;
+  return `<article class="roleplay-memory-source"><p><strong>${source.role === "assistant" ? "角色回复" : "用户消息"}</strong> · ${esc(source.evidence || "来源消息已删除，保留证据快照")}</p>${canOpen ? `<button type="button" data-roleplay-memory-source-conversation="${esc(source.conversationId)}" data-roleplay-memory-source-message="${esc(source.messageId)}">查看来源</button>` : ""}</article>`;
+}
+
+function renderRoleplayMemoryList() {
+  const host = $("#roleplay-memory-list");
+  const currentScope = state.aiRoleplayMemoryScope;
+  $("#roleplay-memory-current-scope").textContent = currentScope?.title || "尚未绑定";
+  $("#roleplay-memory-dialog-meta").textContent = currentScope
+    ? `${currentScope.title} · revision ${Number(currentScope.revisionNo ?? 0)} · 与正文及设定库隔离`
+    : "只保存当前记忆线内发生的互动";
+  $("#roleplay-memory-scope-note").textContent = state.aiPromptSent
+    ? "当前对话已开始，记忆线已锁定；可以继续管理线内记忆"
+    : "首轮发送前可新建空白记忆线，或从已有记忆线显式克隆";
+  renderRoleplayMemoryScopeOptions();
+  $("#roleplay-memory-add").disabled = roleplayMemoryReadOnly();
+  if (!roleplayMemoryItems.length) {
+    host.innerHTML = '<p class="roleplay-memory-empty">当前筛选下没有记忆。可以手工添加，AI 也会在成功回复后整理值得保留的扮演经历。</p>';
+  } else {
+    host.innerHTML = roleplayMemoryItems.map((memory) => {
+      const sources = Array.isArray(memory.sources) ? memory.sources : [];
+      const editable = !roleplayMemoryReadOnly();
+      const actions = editable
+        ? memory.status === "archived"
+          ? `<button type="button" data-roleplay-memory-action="restore" data-memory-id="${esc(memory.id)}">恢复</button>`
+          : `<button type="button" data-roleplay-memory-action="pin" data-memory-id="${esc(memory.id)}">${memory.isPinned ? "取消置顶" : "置顶"}</button><button type="button" data-roleplay-memory-action="edit" data-memory-id="${esc(memory.id)}">编辑</button><button class="danger-button" type="button" data-roleplay-memory-action="archive" data-memory-id="${esc(memory.id)}">归档</button>`
+        : "";
+      return `<article class="roleplay-memory-card${memory.status === "archived" ? " is-archived" : ""}" data-roleplay-memory-id="${esc(memory.id)}">
+        <header class="roleplay-memory-card-header"><div class="roleplay-memory-card-badges"><span class="roleplay-memory-badge">${esc(roleplayMemoryCategoryLabels[memory.category] ?? memory.category)}</span><span class="roleplay-memory-badge">${esc(roleplayMemoryImportanceLabels[memory.importance] ?? memory.importance)}</span><span class="roleplay-memory-badge">${esc(roleplayMemoryCertaintyLabels[memory.certainty] ?? memory.certainty)}</span><span class="roleplay-memory-badge">${esc(roleplayMemoryStatusLabels[memory.status] ?? memory.status)}</span><span class="roleplay-memory-badge is-noncanonical">非正史</span>${memory.isPinned ? '<span class="roleplay-memory-badge is-pinned">已置顶</span>' : ""}</div><time datetime="${esc(memory.updatedAt)}">${esc(formatDateTime(memory.updatedAt))}</time></header>
+        <p class="roleplay-memory-content">${esc(memory.content)}</p>
+        <p class="roleplay-memory-card-meta">${memory.sourceType === "ai" ? "AI 整理" : "手工添加"} · 版本 ${Number(memory.versionNo ?? 1)} · scope revision ${Number(memory.createdRevision ?? 0)}</p>
+        ${sources.length ? `<details class="roleplay-memory-sources"><summary>来源消息与证据快照 · ${sources.length} 条</summary><div class="roleplay-memory-source-list">${sources.map(roleplayMemorySourceHtml).join("")}</div></details>` : ""}
+        ${actions ? `<div class="roleplay-memory-card-actions">${actions}</div>` : ""}
+      </article>`;
+    }).join("");
+  }
+  const page = roleplayMemoryCursorHistory.length;
+  const hasPrevious = roleplayMemoryCursorHistory.length > 1;
+  const hasNext = roleplayMemoryPagination.nextCursor !== null;
+  $("#roleplay-memory-pagination").classList.toggle("hidden", !hasPrevious && !hasNext);
+  $("#roleplay-memory-previous").disabled = !hasPrevious;
+  $("#roleplay-memory-next").disabled = !hasNext;
+  $("#roleplay-memory-page-label").textContent = `第 ${page} 页 · 共 ${Number(roleplayMemoryPagination.total ?? 0)} 条`;
+}
+
+async function loadRoleplayMemories({ resetCursor = false } = {}) {
+  if (!state.aiConversationId) return;
+  if (resetCursor) roleplayMemoryCursorHistory = [0];
+  $("#roleplay-memory-list").innerHTML = '<p class="roleplay-memory-empty">正在读取角色扮演记忆……</p>';
+  const [result, scopes] = await Promise.all([
+    api(`/api/ai-conversations/${encodeURIComponent(state.aiConversationId)}/roleplay-memories?${roleplayMemoryQuery()}`),
+    api(`/api/works/${encodeURIComponent(state.work.id)}/roleplay-memory-scopes`)
+  ]);
+  roleplayMemoryItems = Array.isArray(result.items) ? result.items : [];
+  roleplayMemoryScopes = Array.isArray(scopes) ? scopes : [];
+  roleplayMemoryPagination = result.pagination ?? { cursor: 0, limit: 20, total: roleplayMemoryItems.length, nextCursor: null };
+  if (result.scope) applyAiRoleplayMemoryScope({ ...state.aiRoleplayMemoryScope, ...result.scope });
+  renderRoleplayMemoryList();
+}
+
+async function openRoleplayMemoryDialog() {
+  if (!state.aiRoleplayCharacter) return toast("请先选择角色卡", "error");
+  const conversationId = await ensureAiConversation();
+  if (!conversationId) return;
+  const dialog = $("#roleplay-memory-dialog");
+  if (!dialog.open) dialog.showModal();
+  try {
+    await loadRoleplayMemories({ resetCursor: true });
+    queueMicrotask(() => $("#roleplay-memory-filter-toggle").focus());
+  } catch (error) {
+    $("#roleplay-memory-list").innerHTML = '<p class="roleplay-memory-empty">角色扮演记忆加载失败，请稍后重试。</p>';
+    toast(`角色扮演记忆加载失败：${error.message}`, "error");
+  }
+}
+
+function roleplayMemoryEditorFields(memory = null) {
+  return field("category", "记忆类别", "select", memory?.category ?? "event", Object.entries(roleplayMemoryCategoryLabels))
+    + field("importance", "重要度", "select", memory?.importance ?? "medium", Object.entries(roleplayMemoryImportanceLabels))
+    + field("certainty", "可信状态", "select", memory?.certainty ?? "experienced", Object.entries(roleplayMemoryCertaintyLabels))
+    + field("isPinned", "置顶这条记忆", "checkbox", memory?.isPinned === true)
+    + field("content", "记忆内容", "textarea", memory?.content ?? "");
+}
+
+function openRoleplayMemoryEditor(memory = null) {
+  openDialog(memory ? "编辑角色扮演记忆" : "手工添加角色扮演记忆", roleplayMemoryEditorFields(memory), async (form) => {
+    const body = {
+      category: String(form.get("category") ?? "event"),
+      importance: String(form.get("importance") ?? "medium"),
+      certainty: String(form.get("certainty") ?? "experienced"),
+      isPinned: form.get("isPinned") === "on",
+      content: String(form.get("content") ?? "").trim(),
+      ...(memory ? { expectedVersion: Number(memory.versionNo) } : {})
+    };
+    if (!body.content) throw new Error("请输入记忆内容");
+    await api(memory
+      ? `/api/roleplay-memories/${encodeURIComponent(memory.id)}`
+      : `/api/ai-conversations/${encodeURIComponent(state.aiConversationId)}/roleplay-memories`, {
+      method: memory ? "PATCH" : "POST",
+      body
+    });
+    await loadRoleplayMemories();
+    toast(memory ? "角色扮演记忆已更新" : "角色扮演记忆已添加");
+  }, memory ? "版本化编辑" : "非正史 · 手工添加", {
+    submitLabel: memory ? "保存记忆" : "添加记忆",
+    errorPrefix: "记忆保存失败：",
+    meta: "只记录当前记忆线内的虚构互动，不会写入正文、角色卡或设定库。"
+  });
+  const textarea = $("#dialog-fields textarea[name='content']");
+  if (textarea) {
+    textarea.maxLength = 2_000;
+    textarea.rows = 7;
+    textarea.focus();
+  }
+}
+
+async function updateRoleplayMemoryAction(memory, action) {
+  if (!memory) return;
+  if (action === "edit") return openRoleplayMemoryEditor(memory);
+  if (action === "archive" && !await confirmToast("归档后 AI 不再召回这条记忆，可稍后从“已归档”筛选中恢复。", {
+    title: "归档角色扮演记忆",
+    confirmLabel: "确认归档"
+  })) return;
+  if (action === "pin") {
+    await api(`/api/roleplay-memories/${encodeURIComponent(memory.id)}`, {
+      method: "PATCH",
+      body: { expectedVersion: Number(memory.versionNo), isPinned: memory.isPinned !== true }
+    });
+  } else if (action === "archive") {
+    await api(`/api/roleplay-memories/${encodeURIComponent(memory.id)}`, {
+      method: "DELETE",
+      body: { expectedVersion: Number(memory.versionNo) }
+    });
+  } else if (action === "restore") {
+    await api(`/api/roleplay-memories/${encodeURIComponent(memory.id)}/restore`, {
+      method: "POST",
+      body: { expectedVersion: Number(memory.versionNo) }
+    });
+  }
+  await loadRoleplayMemories();
+  toast(action === "pin" ? (memory.isPinned ? "已取消置顶" : "记忆已置顶") : action === "archive" ? "记忆已归档" : "记忆已恢复");
+}
+
+async function selectRoleplayMemoryScope(sourceScopeId = null) {
+  if (state.aiPromptSent) return toast("角色扮演开始后不能切换记忆线", "error");
+  const conversation = await api(`/api/ai-conversations/${encodeURIComponent(state.aiConversationId)}/roleplay-memory-scope`, {
+    method: "POST",
+    body: sourceScopeId ? { sourceScopeId } : {}
+  });
+  upsertAiConversationSummary(conversation);
+  applyAiRoleplayMemoryScope(conversation.roleplayMemoryScope);
+  await loadRoleplayMemories({ resetCursor: true });
+  toast(sourceScopeId ? "已从所选记忆线创建独立延续线" : "已创建空白角色扮演记忆线");
+}
+
 function defaultAiConversationTitle(prompt) {
   const normalized = roleplayUserTurnTitleSource(String(prompt ?? "")).replace(/\s+/gu, " ").trim();
   return Array.from(normalized).slice(0, 15).join("") || "新对话";
@@ -3396,6 +3614,7 @@ function applyConversationToAiChatTab(tab, conversation) {
   tab.contextScope = conversation.contextScope ?? { type: "none" };
   tab.roleplayCharacter = conversation.roleplayCharacter ?? null;
   tab.roleplayUserCharacter = conversation.roleplayUserCharacter ?? null;
+  tab.roleplayMemoryScope = conversation.roleplayMemoryScope ?? null;
   tab.citations = [];
   tab.references = [];
   tab.composer = {
@@ -3676,6 +3895,7 @@ function syncAiTaskOptions() {
     : roleplaySelected ? "角色扮演模式可以查询角色记忆、相识角色、知情设定、故事正文和设定图片" : "";
   syncAiModelPicker();
   syncAiSceneComposer();
+  syncAiRoleplayMemoryControls();
 }
 
 function applyAiConversationTaskType(taskType) {
@@ -3720,6 +3940,35 @@ function applyAiRoleplayCharacter(character, userCharacter = null) {
   renderAiQuickActions();
 }
 
+function applyAiRoleplayMemoryScope(scope) {
+  state.aiRoleplayMemoryScope = scope?.id ? { ...scope } : null;
+  const tab = activeAiChatTab();
+  if (tab) tab.roleplayMemoryScope = state.aiRoleplayMemoryScope ? { ...state.aiRoleplayMemoryScope } : null;
+  const title = state.aiRoleplayMemoryScope?.title || "尚未绑定记忆线";
+  const line = $("#ai-roleplay-memory-line");
+  if (line) {
+    line.textContent = title;
+    line.title = title;
+  }
+  syncAiRoleplayMemoryControls();
+}
+
+function syncAiRoleplayMemoryControls() {
+  const visible = Boolean(state.aiRoleplayCharacter) && $("#ai-task").value === "roleplay";
+  const readOnly = Boolean(state.work) && !canWritePermissionModule(state.work, "ai-chat");
+  const busy = aiInteractionBusy();
+  const button = $("#ai-roleplay-memory-button");
+  const manage = $("#ai-roleplay-memory-manage");
+  if (button) {
+    button.classList.toggle("hidden", !visible);
+    button.disabled = !visible || busy;
+    button.setAttribute("aria-hidden", String(!visible));
+  }
+  if (manage) manage.disabled = !visible || busy;
+  $("#ai-roleplay-memory-add")?.classList.toggle("hidden", readOnly);
+  if (!visible && $("#roleplay-memory-dialog")?.open) $("#roleplay-memory-dialog").close();
+}
+
 function refreshAiMessageRoleLabels() {
   $("#ai-feed").querySelectorAll(".assistant-message .message-heading > span").forEach((label) => {
     label.textContent = aiAssistantLabel();
@@ -3738,6 +3987,7 @@ async function updateAiRoleplayCharacter(characterId, userCharacterId = null) {
   upsertAiConversationSummary(conversation);
   applyAiConversationTaskType(conversation.taskType);
   applyAiRoleplayCharacter(conversation.roleplayCharacter, conversation.roleplayUserCharacter);
+  applyAiRoleplayMemoryScope(conversation.roleplayMemoryScope);
   resetAiContextMeter();
   if ($("#ai-feed").querySelector("[data-message-id]")) refreshAiMessageRoleLabels();
   else resetAiFeed();
@@ -3763,6 +4013,7 @@ async function persistAiConversationTaskType(taskType) {
   upsertAiConversationSummary(conversation);
   applyAiConversationTaskType(conversation.taskType);
   applyAiRoleplayCharacter(conversation.roleplayCharacter, conversation.roleplayUserCharacter);
+  applyAiRoleplayMemoryScope(conversation.roleplayMemoryScope);
   return conversation;
 }
 
@@ -19335,6 +19586,87 @@ $("#ai-history-dialog").addEventListener("cancel", (event) => {
   if ($("#ai-history-action-menu").classList.contains("hidden")) return;
   event.preventDefault();
   closeAiHistoryActionMenu(true);
+});
+for (const button of [$("#ai-roleplay-memory-button"), $("#ai-roleplay-memory-manage")]) {
+  button.addEventListener("click", () => {
+    void openRoleplayMemoryDialog();
+  });
+}
+$("#roleplay-memory-close").addEventListener("click", () => $("#roleplay-memory-dialog").close());
+$("#roleplay-memory-dialog").addEventListener("close", () => {
+  if (!$("#ai-roleplay-memory-button").classList.contains("hidden")) $("#ai-roleplay-memory-button").focus();
+});
+$("#roleplay-memory-filter-toggle").addEventListener("click", (event) => {
+  const panel = $("#roleplay-memory-filter-panel");
+  const expanded = panel.classList.contains("hidden");
+  panel.classList.toggle("hidden", !expanded);
+  event.currentTarget.setAttribute("aria-expanded", String(expanded));
+  if (expanded) $("#roleplay-memory-search").focus();
+});
+$("#roleplay-memory-add").addEventListener("click", () => openRoleplayMemoryEditor());
+$("#roleplay-memory-use-scope").addEventListener("click", async () => {
+  const scopeId = $("#roleplay-memory-scope-select").value;
+  if (!scopeId) return;
+  try { await selectRoleplayMemoryScope(scopeId); }
+  catch (error) { toast(`记忆线切换失败：${error.message}`, "error"); }
+});
+$("#roleplay-memory-new-scope").addEventListener("click", async () => {
+  try { await selectRoleplayMemoryScope(null); }
+  catch (error) { toast(`记忆线创建失败：${error.message}`, "error"); }
+});
+$("#roleplay-memory-list").addEventListener("click", async (event) => {
+  const sourceButton = event.target.closest("[data-roleplay-memory-source-conversation]");
+  if (sourceButton) {
+    $("#roleplay-memory-dialog").close();
+    try {
+      await openAiConversation(
+        sourceButton.dataset.roleplayMemorySourceConversation,
+        true,
+        sourceButton.dataset.roleplayMemorySourceMessage
+      );
+    } catch (error) {
+      toast(`来源消息打开失败：${error.message}`, "error");
+    }
+    return;
+  }
+  const actionButton = event.target.closest("[data-roleplay-memory-action]");
+  if (!actionButton) return;
+  const memory = roleplayMemoryItems.find((item) => item.id === actionButton.dataset.memoryId);
+  actionButton.disabled = true;
+  try {
+    await updateRoleplayMemoryAction(memory, actionButton.dataset.roleplayMemoryAction);
+  } catch (error) {
+    toast(`记忆操作失败：${error.message}`, "error");
+  } finally {
+    if (actionButton.isConnected) actionButton.disabled = false;
+  }
+});
+$("#roleplay-memory-search").addEventListener("input", () => {
+  if (roleplayMemorySearchTimer) window.clearTimeout(roleplayMemorySearchTimer);
+  roleplayMemorySearchTimer = window.setTimeout(() => {
+    void loadRoleplayMemories({ resetCursor: true }).catch((error) => toast(`记忆搜索失败：${error.message}`, "error"));
+  }, 250);
+});
+for (const select of [$("#roleplay-memory-category"), $("#roleplay-memory-status")]) {
+  select.addEventListener("change", () => {
+    void loadRoleplayMemories({ resetCursor: true }).catch((error) => toast(`记忆筛选失败：${error.message}`, "error"));
+  });
+}
+$("#roleplay-memory-filter-reset").addEventListener("click", () => {
+  $("#roleplay-memory-search").value = "";
+  $("#roleplay-memory-category").value = "";
+  $("#roleplay-memory-status").value = "active";
+  void loadRoleplayMemories({ resetCursor: true }).catch((error) => toast(`记忆筛选重置失败：${error.message}`, "error"));
+});
+$("#roleplay-memory-previous").addEventListener("click", () => {
+  if (roleplayMemoryCursorHistory.length <= 1) return;
+  roleplayMemoryCursorHistory.pop();
+  void loadRoleplayMemories().catch((error) => toast(`记忆分页失败：${error.message}`, "error"));
+});
+$("#roleplay-memory-next").addEventListener("click", () => {
+  if (roleplayMemoryPagination.nextCursor === null) return;
+  roleplayMemoryCursorHistory.push(roleplayMemoryPagination.nextCursor);
+  void loadRoleplayMemories().catch((error) => toast(`记忆分页失败：${error.message}`, "error"));
 });
 $("#ai-history-action-menu").addEventListener("click", async (event) => {
   const option = event.target.closest("[data-ai-history-action]");
