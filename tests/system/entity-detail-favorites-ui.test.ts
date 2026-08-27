@@ -47,6 +47,6 @@ describe("资料详情收藏界面", () => {
     expect(styles.text).toContain('.entity-detail-pin-button.is-pinned svg { fill: currentColor; }');
     expect(styles.text).toContain('.dialog-context-actions { display: flex; align-items: center; gap: 8px; }');
     expect(styles.text).toContain('.entity-editor-mode-actions > .entity-detail-favorite-button, .entity-editor-mode-actions > .entity-detail-pin-button, .character-editor-header-actions > .entity-detail-favorite-button, .character-editor-header-actions > .entity-detail-pin-button { flex: 0 0 40px;');
-    expect(page.text.match(/feature=entity-detail-favorites-v1/gu)).toHaveLength(2);
+    expect(page.text.match(/<(?:link rel="stylesheet"|script type="module")[^>]*feature=entity-detail-favorites-v1/gu)).toHaveLength(2);
   });
 });
