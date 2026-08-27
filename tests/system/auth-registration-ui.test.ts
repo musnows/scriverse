@@ -47,5 +47,9 @@ describe("注册入口状态", () => {
     expect(page.text).not.toContain('data-password-toggle="login-password"');
     expect(page.text).toContain('id="login-lock-hint" class="auth-security-hint">登录和注册采用验证码与来源限速防护，不会因他人输错密码而锁定账户。</p>');
     expect(styles.text).toContain(".auth-security-hint {");
+    expect(styles.text).toContain("width: min(400px, 100%);");
+    expect(styles.text).toContain("padding: 24px;");
+    expect(styles.text).toContain(".auth-product-footer { align-self: end; max-width: 400px;");
+    expect(page.text).toContain("feature=auth-compact-v2");
   });
 });
