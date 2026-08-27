@@ -220,7 +220,7 @@ function buildPlanCard(model, actions) {
   const liveDetail = model.plan ? cachedAiWritePlanDetail(model.plan.id) : null;
   const status = liveDetail?.status ?? model.plan?.status ?? "";
   const statusLabel = liveDetail?.statusLabel ?? aiPlanStatusLabel(status);
-  const summary = liveDetail?.aiSummary ?? "";
+  const summary = liveDetail?.aiSummary ?? model.plan?.aiSummary ?? "";
   const operationCount = liveDetail?.operationCount ?? model.plan?.operationCount ?? 0;
   const card = cardShell("write-plan", `${INTERACTIVE_AI_TOOL_NAMES.propose_write_plan}`, model.name);
   const head = card.querySelector(".ai-interactive-card-head");
@@ -233,9 +233,12 @@ function buildPlanCard(model, actions) {
     card.append(body);
   }
 
-  const items = [["操作对象", `${operationCount} 个操作`]];
-  if (Array.isArray(liveDetail?.moduleLabels) && liveDetail.moduleLabels.length > 0) {
-    items.push(["涉及模块", liveDetail.moduleLabels.join("、")]);
+  const targets = liveDetail?.operations?.map((operation) => operation.title)
+    ?? (Array.isArray(model.plan?.targets) ? model.plan.targets : []);
+  const moduleLabels = liveDetail?.moduleLabels ?? model.plan?.moduleLabels;
+  const items = [["操作对象", targets.length > 0 ? targets.join("、") : `${operationCount} 个操作`]];
+  if (Array.isArray(moduleLabels) && moduleLabels.length > 0) {
+    items.push(["涉及模块", moduleLabels.join("、")]);
   }
   if (status === "executed") items.push(["执行时间", formatDateTime(liveDetail?.executedAt)]);
   if (status === "rejected") items.push(["处理时间", formatDateTime(liveDetail?.decidedAt)]);
@@ -400,10 +403,13 @@ function operationSection(operation) {
   const result = operation.result
     ? `<div class="ai-op-result"><strong>执行结果</strong><p>${esc(operation.result.summary)}</p><small>版本号：${operation.result.versionNo ?? "-"} · 操作者与审计记录见本页底部。</small></div>`
     : "";
+  const audits = operation.auditRecords?.length
+    ? `<ul class="ai-op-audits">${operation.auditRecords.map((record) => `<li><strong>${esc(record.actor)}</strong><span>${esc(record.action)} · ${esc(formatDateTime(record.createdAt))}</span></li>`).join("")}</ul>`
+    : "";
   return `<section class="ai-operation-item${operation.restricted ? " is-restricted" : ""}">
     <header><h4>${headingBits.map((bit) => esc(bit)).join(" · ")}</h4>${operation.restricted ? '<span class="ai-status-chip" data-tone="muted">无权查看内容</span>' : ""}</header>
     <h5>${esc(operation.title)}</h5>
-    ${annotation}${task}${fieldDiffRows(operation)}${result}${modules}
+    ${annotation}${task}${fieldDiffRows(operation)}${result}${audits}${modules}
   </section>`;
 }
 
@@ -424,7 +430,7 @@ export function renderWritePlanDetailMarkup(detail) {
   const footerBits = [];
   if (detail.sourcePlanId) footerBits.push(`来源审批：${detail.sourcePlanId}`);
   if (detail.initiatorUserId) footerBits.push(`发起人 ID：${detail.initiatorUserId}`);
-  if (detail.decidedByUserId) footerBits.push(`操作者 ID：${detail.decidedByUserId}`);
+  if (detail.decidedByName || detail.decidedByUserId) footerBits.push(`操作者：${detail.decidedByName || detail.decidedByUserId}`);
   footerBits.push("每次确认都会写入审计日志");
   return `
     <div class="ai-plan-detail-head">
@@ -439,11 +445,11 @@ export function renderWritePlanDetailMarkup(detail) {
 }
 
 /** 审批中心列表行。 */
-export function renderApprovalCenterRows(plans) {
-  if (!plans.length) {
-    return '<p class="usage-measurement-note ai-approval-empty">还没有审批记录。AI 提交修改计划后会出现在这里。</p>';
+export function renderApprovalCenterRows(plans, questions = []) {
+  if (!plans.length && !questions.length) {
+    return '<p class="usage-measurement-note ai-approval-empty">还没有审批或提问记录。AI 提交交互后会出现在这里。</p>';
   }
-  return `<ul class="ai-approval-list">${plans.map((plan) => `
+  const planRows = plans.map((plan) => `
     <li>
       <button type="button" class="ai-approval-row" data-plan-id="${esc(plan.id)}">
         <span class="ai-status-chip" data-tone="${statusTone(plan.status)}">${esc(plan.statusLabel)}</span>
@@ -453,7 +459,19 @@ export function renderApprovalCenterRows(plans) {
         </span>
         <span class="ai-approval-row-open" aria-hidden="true">查看</span>
       </button>
-    </li>`).join("")}</ul>`;
+    </li>`).join("");
+  const questionRows = questions.map((question) => `
+    <li>
+      <button type="button" class="ai-approval-row" data-question-id="${esc(question.id)}">
+        <span class="ai-status-chip" data-tone="${statusTone(question.status)}">${esc(question.statusLabel)}</span>
+        <span class="ai-approval-row-main">
+          <strong>AI 提问 · ${esc(question.question)}</strong>
+          <small>${question.answerText ? `回答：${esc(question.answerText)} · ` : ""}${esc(formatDateTime(question.createdAt))}</small>
+        </span>
+        <span class="ai-approval-row-open">查看</span>
+      </button>
+    </li>`).join("");
+  return `<ul class="ai-approval-list">${planRows}${questionRows}</ul>`;
 }
 
 export { esc as aiEsc, formatDateTime as aiFormatDateTime };

@@ -45,7 +45,7 @@ import {
   renderWritePlanDetailMarkup,
   isInteractiveToolPending,
   aiFormatDateTime
-} from "/ai-interactive.js?v=20260827-ai-write-tools-v2";
+} from "/ai-interactive.js?v=20260828-ai-write-tools-v3";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
@@ -2948,7 +2948,10 @@ function handleInteractiveToolCallEvent(toolCall) {
       toast(`AI 的写入审批提交失败：${message}`, "error");
       return;
     }
-    toast("AI 提交了写入审批：请在消息卡片或 AI 操作审批中心确认");
+    const payload = parseInteractiveToolPayload(toolCall);
+    const targets = Array.isArray(payload?.plan?.targets) ? payload.plan.targets.join("、") : "待确认操作";
+    const summary = String(payload?.plan?.aiSummary ?? "");
+    toast(`AI 提交了写入审批：${targets}${summary ? ` · ${summary}` : ""}`);
     return;
   }
   if (name !== "ask_user_question" || toolCall.status === "failed") return;
@@ -3056,9 +3059,13 @@ async function openAiWritePlanDetail(planId, options = {}) {
 
 async function loadAiApprovalCenterPlans() {
   const statusQuery = aiApprovalCenterState.status ? `?status=${encodeURIComponent(aiApprovalCenterState.status)}&limit=50` : "?limit=50";
-  const payload = await api(plansEndpoint(statusQuery));
-  const plans = Array.isArray(payload) ? payload : (Array.isArray(payload?.plans) ? payload.plans : []);
-  $("#ai-approval-list-host").innerHTML = renderApprovalCenterRows(plans);
+  const [planPayload, questionPayload] = await Promise.all([
+    api(plansEndpoint(statusQuery)),
+    api(questionsEndpoint(statusQuery))
+  ]);
+  const plans = Array.isArray(planPayload) ? planPayload : (Array.isArray(planPayload?.plans) ? planPayload.plans : []);
+  const questions = Array.isArray(questionPayload) ? questionPayload : (Array.isArray(questionPayload?.questions) ? questionPayload.questions : []);
+  $("#ai-approval-list-host").innerHTML = renderApprovalCenterRows(plans, questions);
 }
 
 function openAiApprovalCenter() {
@@ -19709,8 +19716,12 @@ $("#ai-approval-center-dialog .ai-approval-filters").addEventListener("click", (
 });
 $("#ai-approval-list-host").addEventListener("click", (event) => {
   const row = event.target.closest("[data-plan-id]");
-  if (!row) return;
-  openAiWritePlanDetail(row.dataset.planId).catch((error) => toast(`审批详情加载失败：${error.message}`, "error"));
+  if (row) {
+    openAiWritePlanDetail(row.dataset.planId).catch((error) => toast(`审批详情加载失败：${error.message}`, "error"));
+    return;
+  }
+  const questionRow = event.target.closest("[data-question-id]");
+  if (questionRow) openAiUserQuestionDialog(questionRow.dataset.questionId).catch((error) => toast(`提问详情加载失败：${error.message}`, "error"));
 });
 $("#ai-write-plan-close").addEventListener("click", () => $("#ai-write-plan-dialog").close());
 $("#ai-write-plan-refresh").addEventListener("click", () => {

@@ -2928,6 +2928,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-op-result strong { color: var(--green); font-size: 10px; }
 .ai-op-result p { margin: 0; color: var(--ink); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .ai-op-result small { color: var(--muted); font-size: 9px; font-family: var(--font-latin), monospace; }
+.ai-op-audits { display: grid; gap: 5px; margin: 0; padding: 8px 0 0; list-style: none; border-top: 1px dashed var(--line); }
+.ai-op-audits li { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 10px; }
+.ai-op-audits strong { color: var(--ink); }
 .ai-plan-audit-note { margin: 0; }
 .ai-plan-actions { flex-wrap: wrap; }
 .ai-question-dialog { width: min(540px, 92vw); }

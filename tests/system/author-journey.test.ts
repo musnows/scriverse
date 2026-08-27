@@ -348,8 +348,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(page.text).toContain('feature=ai-provider-thinking-type-v1');
     expect(page.text).toContain('feature=ai-provider-analysis-timeout-v1');
-    expect(page.text).toContain('feature=ai-write-tools-v1');
     expect(page.text).toContain('feature=ai-write-tools-v2');
+    expect(page.text).toContain('feature=ai-write-tools-v3');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
