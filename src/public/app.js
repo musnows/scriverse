@@ -1553,6 +1553,7 @@ let characterSectionEditorDirty = false;
 let settingEditorVditor = null;
 let knowledgeSectionVditor = null;
 let characterSectionVditor = null;
+let vditorResourcesPromise = null;
 const settingEditorDirtyTracker = createEditorDirtyTracker();
 const characterSectionEditorDirtyTracker = createEditorDirtyTracker();
 let formDialogVditors = [];
@@ -5832,7 +5833,7 @@ async function initializePage() {
         return;
       }
       const options = { readOnly: route.entityMode === "read" };
-      if (route.entity === "setting") openSettingEditor(item, options);
+      if (route.entity === "setting") await openSettingEditor(item, options);
       else if (route.entity === "character") await openCharacterEditor(item, options);
       else if (route.entity === "race") await openRaceDialog(item, options);
       else if (route.entity === "organization") await openOrganizationDialog(item, options);
@@ -13208,7 +13209,7 @@ function commitRelationshipKeywordInputs(container) {
   container.querySelectorAll("[data-keyword-chips]").forEach(commitRelationshipKeywordInput);
 }
 
-function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
+async function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   formDialogVditors.forEach(destroyVditorEditor);
   formDialogVditors = [];
   void discardPendingMarkdownAttachments();
@@ -13258,6 +13259,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   dialog.classList.toggle("editor-dialog", Boolean(options.editor));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
+  if ($("#dialog-fields").querySelector("[data-vditor-editor]") && !(await loadVditorResources())) return;
   formDialogVditors = bindVditorEditors($("#dialog-fields"));
   form.onclick = null;
   form.onkeydown = null;
@@ -13676,7 +13678,8 @@ function syncSettingEditorDirty(markdown = null) {
   entityEditorDirty = settingEditorDirtyTracker.isDirty(settingEditorSnapshot(currentMarkdown));
 }
 
-function openSettingEditor(item = null, { readOnly = false } = {}) {
+async function openSettingEditor(item = null, { readOnly = false } = {}) {
+  if (!(await loadVditorResources())) return;
   entityEditorReadOnly = readOnly;
   destroyVditorEditor(settingEditorVditor);
   settingEditorVditor = null;
@@ -13691,7 +13694,7 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   $("#setting-editor-form").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = viewOnly; });
   const editButton = $("#setting-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("settings"));
-  editButton.onclick = () => openSettingEditor(settingEditorItem);
+  editButton.onclick = () => { void openSettingEditor(settingEditorItem); };
   bindEntityDetailPinButton($("#setting-editor-pin"), "setting", () => viewOnly ? settingEditorItem : null, (updated) => {
     settingEditorItem = updated;
     state.settings = upsertEntityCollection(state.settings, updated);
@@ -14055,12 +14058,69 @@ function createVditorUploadHandler(uploadAttachment, getEditor) {
   };
 }
 
+function loadVditorStylesheet() {
+  const existing = document.getElementById("vditorStylesheet");
+  if (existing?.dataset.loaded === "true") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const link = existing ?? document.createElement("link");
+    link.id = "vditorStylesheet";
+    link.rel = "stylesheet";
+    link.href = "/vendor/vditor/dist/index.css?v=3.11.2";
+    link.addEventListener("load", () => {
+      link.dataset.loaded = "true";
+      resolve();
+    }, { once: true });
+    link.addEventListener("error", () => {
+      link.remove();
+      reject(new Error("Vditor stylesheet failed to load"));
+    }, { once: true });
+    if (!existing) document.head.append(link);
+  });
+}
+
+function loadVditorScript(id, src) {
+  const existing = document.getElementById(id);
+  if (existing?.dataset.loaded === "true") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = existing ?? document.createElement("script");
+    script.id = id;
+    script.src = src;
+    script.addEventListener("load", () => {
+      script.dataset.loaded = "true";
+      resolve();
+    }, { once: true });
+    script.addEventListener("error", () => {
+      script.remove();
+      reject(new Error(`Vditor script failed to load: ${id}`));
+    }, { once: true });
+    if (!existing) document.body.append(script);
+  });
+}
+
+async function loadVditorResources() {
+  if (window.Vditor && document.getElementById("vditorStylesheet")) return true;
+  if (!vditorResourcesPromise) {
+    vditorResourcesPromise = Promise.all([
+      loadVditorStylesheet(),
+      loadVditorScript("vditorIconScript", "/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"),
+      loadVditorScript("vditorMainScript", "/vendor/vditor/dist/index.min.js?v=3.11.2")
+    ]).then(() => {
+      if (!window.Vditor) throw new Error("Vditor constructor is unavailable");
+      return true;
+    }).catch(() => {
+      vditorResourcesPromise = null;
+      toast("Markdown 编辑器资源加载失败，请检查网络后重试", "error");
+      return false;
+    });
+  }
+  return vditorResourcesPromise;
+}
+
 function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment = null, attachmentModule = "settings", placeholder = "", readOnly = false, width = "auto" } = {}) {
   if (!window.Vditor) {
     toast("Markdown 编辑器资源加载失败，请刷新页面后重试", "error");
     return null;
   }
-  ensureVditorIconScript();
   let editor = null;
   editor = new window.Vditor(host, {
     cdn: "/vendor/vditor",
@@ -14294,14 +14354,6 @@ function normalizeVditorAttachmentImages(editor) {
   });
 }
 
-function ensureVditorIconScript() {
-  if (document.getElementById("vditorIconScript")) return;
-  const script = document.createElement("script");
-  script.id = "vditorIconScript";
-  script.src = "/vendor/vditor/dist/js/icons/ant.js?v=3.11.2";
-  document.body.appendChild(script);
-}
-
 function destroyVditorEditor(editor) {
   if (!editor) return;
   editor.__attachmentObserver?.disconnect();
@@ -14410,6 +14462,7 @@ async function closeKnowledgeSectionEditor({ force = false } = {}) {
 
 async function openKnowledgeSectionEditor(index = null) {
   if (!canEditModule(knowledgeEditorKind === "race" ? "races" : "organizations")) return;
+  if (!(await loadVditorResources())) return;
   const label = knowledgeEditorKind === "race" ? "种族" : "组织";
   destroyVditorEditor(knowledgeSectionVditor);
   knowledgeSectionVditor = null;
@@ -14522,6 +14575,7 @@ function syncCharacterSectionEditorDirty(markdown = null) {
 }
 
 async function openCharacterSectionEditor(section = null) {
+  if (!(await loadVditorResources())) return;
   await discardPendingCharacterAttachments();
   destroyVditorEditor(characterSectionVditor);
   characterSectionVditor = null;

@@ -339,9 +339,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('feature=ai-token-usage-details-centered-v1');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
-    expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
-    expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
+    expect(page.text).not.toContain('/vendor/vditor/dist/index.css?v=3.11.2');
+    expect(page.text).not.toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
+    expect(page.text).not.toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
     expect(styles.text).toContain('.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; color: #fff; border-radius: 3px; font-weight: 700; }');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
@@ -644,6 +644,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('/markdown.js?v=20260731-no-external-images-v1');
     expect(application.text).toContain('/upload-progress.js?v=20260812-upload-progress-v1');
     expect(application.text).toContain('new window.Vditor');
+    expect(application.text).toContain('async function loadVditorResources()');
+    expect(application.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
+    expect(application.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
+    expect(application.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(application.text).toContain('createVditorUploadHandler');
     expect(application.text).toContain('createVditorUploadPlaceholder');
     expect(page.text).toContain('id="character-section-editor-view"');
