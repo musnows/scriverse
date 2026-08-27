@@ -31,7 +31,7 @@ export const recallRoleplayMemoryArgumentsSchema = z.object({
 export type RoleplayMemoryCandidate = z.infer<typeof roleplayMemoryCandidateSchema>;
 
 export function normalizeRoleplayMemoryContent(value: string, maximumLength = 2_000): string {
-  return Array.from(value.normalize("NFKC")
+  return Array.from(value.normalize("NFC")
     .replace(/\r\n?/gu, "\n")
     .replace(/[\t ]+/gu, " ")
     .replace(/\n{3,}/gu, "\n\n")

@@ -32,7 +32,7 @@ describe("角色扮演记忆存储", () => {
 
     const memory = runtime!.store.createRoleplayMemory(conversationId, {
       category: "commitment",
-      content: "林舟答应会在天亮前返回港口。",
+      content: "林舟答应会在天亮前返回港口，并带回旧航海图。",
       importance: "high",
       certainty: "experienced",
       isPinned: true
@@ -45,6 +45,7 @@ describe("角色扮演记忆存储", () => {
       createdRevision: 1,
       sourceType: "manual"
     });
+    expect(memory.content).toBe("林舟答应会在天亮前返回港口，并带回旧航海图。");
     expect(() => runtime!.database.run(
       "UPDATE roleplay_memories SET canonical = 1 WHERE id = ?",
       String(memory.id)
