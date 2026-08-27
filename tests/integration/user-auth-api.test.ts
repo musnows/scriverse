@@ -2967,6 +2967,19 @@ describe("用户、作品权限与操作者追踪 API", () => {
     ]));
     const ownerView = await owner.agent.get(`/api/characters/${character.body.data.id}/roleplay-memories`).expect(200);
     expect(JSON.stringify(ownerView.body)).toContain("OWNER_PRIVATE_ROLEPLAY_SOURCE");
+    runtime.database.run("UPDATE users SET role = 'admin' WHERE id = ?", collaborator.user.userId);
+    const sourceId = collaboratorView.body.data.items
+      .find((item: { content: string }) => item.content === "林舟记住了一段跨用户共享知识。")
+      .sources[0].id;
+    const adminSourceConversation = await collaborator.agent.get(`/api/ai-conversations/${ownerConversation.body.data.id}`)
+      .query({ messageId: ownerUserMessage.body.data.id, roleplayMemorySourceId: sourceId })
+      .expect(200);
+    expect(JSON.stringify(adminSourceConversation.body)).toContain("OWNER_PRIVATE_ROLEPLAY_SOURCE");
+    const adminMutationDenied = await collaborator.agent.patch(`/api/ai-conversations/${ownerConversation.body.data.id}/favorite`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ isFavorite: true })
+      .expect(403);
+    expect(adminMutationDenied.body.error.code).toBe("AI_CONVERSATION_ACCESS_DENIED");
   });
 
   it("type none 的显式 AI 引用仍要求对应模块读取权限", async () => {

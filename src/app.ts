@@ -3168,6 +3168,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.createAiConversation(request.params.workId, input.title, input.taskType), 201);
   });
   app.use("/api/ai-conversations/:conversationId", (request, _response, next) => {
+    const sourceId = typeof request.query.roleplayMemorySourceId === "string"
+      ? request.query.roleplayMemorySourceId
+      : null;
+    const messageId = typeof request.query.messageId === "string" ? request.query.messageId : null;
+    if (
+      ["GET", "HEAD"].includes(request.method)
+      && request.authUser?.role === "admin"
+      && sourceId !== null
+      && messageId !== null
+      && store.isRoleplayMemorySourceTarget(sourceId, request.params.conversationId, messageId)
+    ) return next();
     assertRequestAiConversationOwner(request, request.params.conversationId);
     next();
   });

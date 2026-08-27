@@ -9163,6 +9163,18 @@ export class Store {
     };
   }
 
+  isRoleplayMemorySourceTarget(sourceId: string, conversationId: string, messageId: string): boolean {
+    return Boolean(this.db.get(
+      `SELECT source.id
+       FROM roleplay_memory_sources source
+       INNER JOIN roleplay_memories memory ON memory.id = source.memory_id
+       WHERE source.id = ? AND source.conversation_id = ? AND source.message_id = ?`,
+      sourceId,
+      conversationId,
+      messageId
+    ));
+  }
+
   getRoleplayMemoryPromptItems(workId: string, characterId: string, limit = 12): Record<string, unknown>[] {
     const character = this.getCharacter(characterId);
     if (String(character.workId) !== workId) throw new AppError(400, "ROLEPLAY_CHARACTER_WORK_MISMATCH", "角色不属于当前作品");
