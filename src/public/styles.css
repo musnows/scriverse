@@ -1494,7 +1494,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-line-number:hover { background: rgba(139,61,44,.08); color: var(--accent-dark); }
 .chapter-line-number.is-line-selected { background: rgba(139,61,44,.16); color: var(--accent-dark); font-weight: 700; }
 .chapter-line-number.is-line-selected::after { content: ""; position: absolute; top: 0; left: 100%; width: 100vw; height: 100%; background: rgba(139,61,44,.085); box-shadow: inset 3px 0 rgba(139,61,44,.28); pointer-events: none; }
-.chapter-content { position: relative; z-index: 1; grid-column: 2; grid-row: 1; resize: none; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 32px 36px 72px; border: 0; background: transparent; border-radius: 0; font-size: var(--editor-font-size); line-height: var(--editor-line-height); letter-spacing: .01em; overflow-wrap: break-word; }
+.chapter-content { position: relative; z-index: 1; grid-column: 2; grid-row: 1; resize: none; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 32px 36px max(72px, 45dvh); border: 0; background: transparent; border-radius: 0; font-size: var(--editor-font-size); line-height: var(--editor-line-height); letter-spacing: .01em; overflow-wrap: break-word; }
 .chapter-content:focus { box-shadow: none; }
 .chapter-whitespace-overlay { position: relative; z-index: 2; grid-column: 2; grid-row: 1; width: 100%; height: 100%; overflow: hidden; opacity: 0; pointer-events: none; }
 .chapter-whitespace-overlay.is-visible { opacity: 1; }
@@ -4095,7 +4095,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .editor-actions .chapter-stats { grid-column: 1 / -1; }
   .editor-view .editor-actions > button { min-width: 0; min-height: 34px; padding-inline: 6px; font-size: 11px; }
   .chapter-title { font-size: 21px; }
-  .chapter-content { padding: 22px 16px 64px 12px; font-size: max(16px, var(--editor-font-size)); }
+  .chapter-content { padding: 22px 16px max(64px, 45dvh) 12px; font-size: max(16px, var(--editor-font-size)); }
   .chapter-line-numbers { width: 32px; font-size: 11px; }
   .chapter-editor-frame { grid-template-columns: 32px minmax(0, 1fr); }
   .chapter-line-measure { left: 32px; }
