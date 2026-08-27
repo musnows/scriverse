@@ -83,6 +83,7 @@ describe("AI 角色扮演界面", () => {
     expect(page).toContain("本会话私有的非正史记忆，不会写入正文或设定库");
     expect(page).toContain('id="roleplay-memory-filter-toggle" class="module-filter-toggle"');
     expect(page).toContain("feature=ai-roleplay-memory-v2");
+    expect(page).toContain("feature=ai-roleplay-memory-v3");
     expect(application).toContain("function openRoleplayMemoryDialog()");
     expect(application).toContain("function openRoleplayMemoryEditor(memory = null)");
     expect(application).toContain("/roleplay-memory-scope`");
@@ -90,6 +91,11 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("recall_roleplay_memory: \"回忆当前扮演线\"");
     expect(application).toContain("remember_roleplay: \"整理扮演记忆\"");
     expect(application).toContain("来源消息与证据快照");
+    expect(page).toContain('<option value="archived">已删除</option>');
+    expect(application).toContain('data-roleplay-memory-action="archive" data-memory-id="${esc(memory.id)}">删除</button>');
+    expect(application).toContain('title: "删除角色扮演记忆"');
+    expect(application).toContain('confirmLabel: "确认删除"');
+    expect(application).toContain('action === "archive" ? "记忆已删除" : "记忆已恢复"');
     expect(styles).toContain(".roleplay-memory-scope-panel { display: grid;");
     expect(styles).toContain(".roleplay-memory-filter-panel { display: grid;");
     expect(styles).toContain(".roleplay-memory-card { display: grid;");

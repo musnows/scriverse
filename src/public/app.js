@@ -3250,7 +3250,7 @@ const roleplayMemoryCategoryLabels = Object.freeze({
 });
 const roleplayMemoryImportanceLabels = Object.freeze({ low: "低重要度", medium: "中重要度", high: "高重要度" });
 const roleplayMemoryCertaintyLabels = Object.freeze({ experienced: "亲历", observed: "观察", heard: "听说", believed: "相信" });
-const roleplayMemoryStatusLabels = Object.freeze({ active: "生效中", superseded: "已取代", archived: "已归档" });
+const roleplayMemoryStatusLabels = Object.freeze({ active: "生效中", superseded: "已取代", archived: "已删除" });
 let roleplayMemoryItems = [];
 let roleplayMemoryScopes = [];
 let roleplayMemoryPagination = { cursor: 0, limit: 20, total: 0, nextCursor: null };
@@ -3320,7 +3320,7 @@ function renderRoleplayMemoryList() {
       const actions = editable
         ? memory.status === "archived"
           ? `<button type="button" data-roleplay-memory-action="restore" data-memory-id="${esc(memory.id)}">恢复</button>`
-          : `<button type="button" data-roleplay-memory-action="pin" data-memory-id="${esc(memory.id)}">${memory.isPinned ? "取消置顶" : "置顶"}</button><button type="button" data-roleplay-memory-action="edit" data-memory-id="${esc(memory.id)}">编辑</button><button class="danger-button" type="button" data-roleplay-memory-action="archive" data-memory-id="${esc(memory.id)}">归档</button>`
+          : `<button type="button" data-roleplay-memory-action="pin" data-memory-id="${esc(memory.id)}">${memory.isPinned ? "取消置顶" : "置顶"}</button><button type="button" data-roleplay-memory-action="edit" data-memory-id="${esc(memory.id)}">编辑</button><button class="danger-button" type="button" data-roleplay-memory-action="archive" data-memory-id="${esc(memory.id)}">删除</button>`
         : "";
       return `<article class="roleplay-memory-card${memory.status === "archived" ? " is-archived" : ""}" data-roleplay-memory-id="${esc(memory.id)}">
         <header class="roleplay-memory-card-header"><div class="roleplay-memory-card-badges"><span class="roleplay-memory-badge">${esc(roleplayMemoryCategoryLabels[memory.category] ?? memory.category)}</span><span class="roleplay-memory-badge">${esc(roleplayMemoryImportanceLabels[memory.importance] ?? memory.importance)}</span><span class="roleplay-memory-badge">${esc(roleplayMemoryCertaintyLabels[memory.certainty] ?? memory.certainty)}</span><span class="roleplay-memory-badge">${esc(roleplayMemoryStatusLabels[memory.status] ?? memory.status)}</span><span class="roleplay-memory-badge is-noncanonical">非正史</span>${memory.isPinned ? '<span class="roleplay-memory-badge is-pinned">已置顶</span>' : ""}</div><time datetime="${esc(memory.updatedAt)}">${esc(formatDateTime(memory.updatedAt))}</time></header>
@@ -3413,9 +3413,9 @@ function openRoleplayMemoryEditor(memory = null) {
 async function updateRoleplayMemoryAction(memory, action) {
   if (!memory) return;
   if (action === "edit") return openRoleplayMemoryEditor(memory);
-  if (action === "archive" && !await confirmToast("归档后 AI 不再召回这条记忆，可稍后从“已归档”筛选中恢复。", {
-    title: "归档角色扮演记忆",
-    confirmLabel: "确认归档"
+  if (action === "archive" && !await confirmToast("删除后 AI 不再召回这条记忆，可稍后从“已删除”筛选中恢复。", {
+    title: "删除角色扮演记忆",
+    confirmLabel: "确认删除"
   })) return;
   if (action === "pin") {
     await api(`/api/roleplay-memories/${encodeURIComponent(memory.id)}`, {
@@ -3434,7 +3434,7 @@ async function updateRoleplayMemoryAction(memory, action) {
     });
   }
   await loadRoleplayMemories();
-  toast(action === "pin" ? (memory.isPinned ? "已取消置顶" : "记忆已置顶") : action === "archive" ? "记忆已归档" : "记忆已恢复");
+  toast(action === "pin" ? (memory.isPinned ? "已取消置顶" : "记忆已置顶") : action === "archive" ? "记忆已删除" : "记忆已恢复");
 }
 
 async function selectRoleplayMemoryScope(sourceScopeId = null) {
