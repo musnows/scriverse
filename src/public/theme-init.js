@@ -12,7 +12,7 @@
     document.documentElement.classList.add("login-route");
   } else {
     // 会话恢复期间按目标路由预显示对应视图的骨架屏
-    const pendingView = ["editor", "module", "welcome"].includes(routeView) && routeParams.get("work")
+    const pendingView = ["editor", "module", "welcome", "reader"].includes(routeView) && routeParams.get("work")
       ? routeView
       : ["settings", "platform-ai", "platform-usage", "work-audit"].includes(routeView) ? routeView : "shelf";
     document.documentElement.dataset.pendingView = pendingView;

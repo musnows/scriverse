@@ -99,6 +99,9 @@
 [data-pending-view="module"] .auth-pending #module-view.hidden { display: block !important; }
 [data-pending-view="welcome"] .auth-pending #welcome-view.hidden,
 [data-pending-view="editor"] .auth-pending #editor-view.hidden { display: grid !important; }
+/* 阅读深链在会话和正文恢复完成前直接显示稳定骨架，并隐藏后台工作台的响应式重排。 */
+[data-pending-view="reader"] #reader-view.hidden { display: grid !important; }
+[data-pending-view="reader"] .app-shell { visibility: hidden; }
 /* 书架/设置/平台 AI 路由的骨架使用整宽布局，与 shelf-mode 一致 */
 .pending-shelf-mode .auth-pending .app-shell { grid-template-columns: 1fr; }
 .pending-shelf-mode .auth-pending .topbar { grid-template-columns: 280px 1fr auto; }

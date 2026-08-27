@@ -5864,6 +5864,8 @@ async function initializePage() {
     }
   } finally {
     document.body.classList.remove("auth-pending");
+    document.documentElement.removeAttribute("data-pending-view");
+    document.documentElement.classList.remove("pending-shelf-mode");
     restoringPageRoute = false;
     replacePageRoute(currentPageRoute());
     scheduleFirstUseOnboarding();
@@ -8183,6 +8185,7 @@ function renderReadingNavigation() {
   $("#reader-next").disabled = !next || readingLoading;
   $("#reader-continue").disabled = !next || readingLoading;
   $("#reader-continue").textContent = next ? `继续下一章 · ${next.title}` : "已读到全书末尾";
+  $("#reader-continuation").classList.toggle("hidden", readingLoading || readingPreferences.mode === "paged");
   const paged = readingPreferences.mode === "paged";
   const previousPage = current && paged ? resolvePagedReadingStep({
     sequence: readingSequence,
@@ -8220,7 +8223,7 @@ function applyReadingPreferences() {
   $("#reader-font-size").value = String(readingPreferences.fontSize);
   $("#reader-line-height").value = String(readingPreferences.lineHeight);
   $("#reader-theme").value = readingPreferences.theme;
-  $("#reader-continuation").classList.toggle("hidden", readingPreferences.mode === "paged");
+  $("#reader-continuation").classList.toggle("hidden", readingLoading || readingPreferences.mode === "paged");
   $("#reader-page-previous").classList.toggle("hidden", readingPreferences.mode !== "paged");
   $("#reader-page-next").classList.toggle("hidden", readingPreferences.mode !== "paged");
 }
