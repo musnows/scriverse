@@ -16,7 +16,8 @@ describe("AI 可写工具与审批中心 API", () => {
       database: runtime.database,
       store: runtime.store,
       auth: runtime.auth,
-      startAnalysisTask: (id, input) => runtime.ai.createTask(id, input as never)
+      resolveAnalysisTask: (id, input) => runtime.ai.resolveTaskInput(id, input),
+      startAnalysisTask: (id, input) => runtime.store.createTask(id, input)
     });
     runtime.ai.attachWritePlanManager(manager);
     const { work } = await seedChapter(runtime, "第一段。\n第二段。");

@@ -4238,4 +4238,48 @@ describe("AI 供应商、模型与建议 API", () => {
     await vi.advanceTimersByTimeAsync(30_001);
     await rejection;
   });
+
+  it("AskUserQuestions 持久化挂起 Agent loop 并在回答后只恢复一次", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({
+      tools: { ask_user_questions: true, settings: true }
+    }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
+          { id: "ask-once", type: "function", function: { name: "ask_user_question", arguments: { question: "采用哪个方向？", options: ["甲", "乙"] } } },
+          { id: "must-not-run", type: "function", function: { name: "propose_write_plan", arguments: { aiSummary: "不应提前执行", operations: [{ opType: "create_entry", entityType: "setting", input: { title: "未确认", category: "地点", content: "内容" } }] } } }
+        ] } }] }), { status: 200 });
+      }
+      expect(body.messages?.map((message) => message.content ?? "").join("\n")).toContain('"toolCallId":"ask-once"');
+      expect(body.messages?.map((message) => message.content ?? "").join("\n")).toContain('"answer":"甲"');
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已按真实回答继续。" } }] }), { status: 200 });
+    });
+
+    const suspended = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "先询问再继续",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      conversationId
+    }).expect(200);
+    expect(suspended.text).toContain('"name":"ask_user_question"');
+    expect(suspended.text).not.toContain('"name":"propose_write_plan"');
+    expect(completionCount).toBe(1);
+    const questions = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}`).expect(200);
+    const questionId = String(questions.body.data.questions[0].id);
+    expect(questions.body.data.questions[0]).toMatchObject({ status: "pending", resumeState: "pending" });
+
+    const answered = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`).send({ selectedOption: 0 }).expect(200);
+    expect(answered.body.data).toMatchObject({ status: "answered", answerText: "甲", resumeState: "completed" });
+    expect(completionCount).toBe(2);
+    await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`).send({ selectedOption: 0 }).expect(409);
+    expect(completionCount).toBe(2);
+  });
 });

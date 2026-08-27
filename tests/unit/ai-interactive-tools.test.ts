@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AiWritePlanManager } from "../../src/ai-write-plans.js";
+import { writePlanToolDefinition } from "../../src/ai.js";
 import { createTestRuntime, seedChapter } from "../helpers.js";
 import type { Runtime } from "../../src/app.js";
 
@@ -14,6 +15,9 @@ type InteractiveToolExecutor = {
     allowedToolIds?: ReadonlySet<string>,
     signal?: AbortSignal,
     onUsage?: (usage: unknown) => void,
+    scope?: unknown,
+    model?: unknown,
+    provider?: unknown,
     chatContext?: { conversationId?: string | null }
   ): Promise<{ id: string; name: string; status: "completed" | "failed"; result: Record<string, unknown> }>;
 };
@@ -29,7 +33,8 @@ describe("AI 可写交互工具（propose_write_plan / ask_user_question）", ()
       database: runtime.database,
       store: runtime.store,
       auth: runtime.auth,
-      startAnalysisTask: (id, input) => runtime.ai.createTask(id, input as never)
+      resolveAnalysisTask: (id, input) => runtime.ai.resolveTaskInput(id, input),
+      startAnalysisTask: (id, input) => runtime.store.createTask(id, input)
     });
     runtime.ai.attachWritePlanManager(manager);
     const { work } = await seedChapter(runtime, "第一段。\n第二段。");
@@ -42,12 +47,34 @@ describe("AI 可写交互工具（propose_write_plan / ask_user_question）", ()
     return runtime.ai as unknown as InteractiveToolExecutor;
   }
 
+  it("写计划 schema 只暴露当前开启的模块与操作类型", () => {
+    const definition = JSON.stringify(writePlanToolDefinition({
+      settings: true,
+      characters: false,
+      races: false,
+      organizations: false,
+      timeline: false,
+      relationships: false,
+      outlines: false,
+      annotations: true,
+      analysis_tasks: false,
+      ask_user_questions: false
+    }));
+    expect(definition).toContain('"setting"');
+    expect(definition).toContain('"create_annotation"');
+    expect(definition).not.toContain('"character"');
+    expect(definition).not.toContain('"create_task"');
+  });
+
   async function callTool(name: string, args: unknown, conversationId?: string) {
     return executor().executeAgentTool(
       workId,
       { id: `call_${name}`, type: "function", function: { name, arguments: args } },
       undefined,
       null,
+      undefined,
+      undefined,
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -84,7 +111,7 @@ describe("AI 可写交互工具（propose_write_plan / ask_user_question）", ()
     const planRef = submitted.result.plan as { id: string; status: string };
     expect(planRef.status).toBe("pending");
     // 计划已经持久化，等待审批中心确认。
-    expect(manager.getPlanDetail(planRef.id, null).status).toBe("pending");
+    expect(manager.getPlanDetail(planRef.id, workId, null).status).toBe("pending");
 
     const question = await callTool("ask_user_question", { question: "分析用哪个视角？", options: ["全局", "单章"] }, conversationId);
     expect(question.status).toBe("completed");

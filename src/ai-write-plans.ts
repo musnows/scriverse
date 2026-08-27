@@ -552,6 +552,33 @@ const enumValueLabelsByField: Record<string, Record<string, string>> = {
   "relationship.category": relationshipCategoryLabels
 };
 
+function completeCreatePreview(entityType: AiEntryEntityType, input: Record<string, unknown>): Record<string, unknown> {
+  const defaults: Record<AiEntryEntityType, Record<string, unknown>> = {
+    setting: { tags: [], authorNote: "" },
+    character: { isDead: false, code: "", aliases: [], raceId: null, organizationIds: [], attributes: {}, profile: {}, currentState: {} },
+    race: { isExtinct: false, parentRaceId: null, description: "", settingsMarkdown: "" },
+    organization: { isDissolved: false, description: "", settingsMarkdown: "" },
+    "timeline-track": { description: "", sortOrder: 0 },
+    "timeline-event": {
+      trackId: null,
+      description: "",
+      eventType: "other",
+      timeLabel: "时间待定",
+      timeSort: null,
+      chapterIds: [],
+      participantIds: [],
+      location: "",
+      causes: [],
+      impactScope: "personal",
+      status: "candidate"
+    },
+    relationship: { subtype: "", keywords: [], directed: false, currentStatus: "", timeRange: {}, confidence: 1 },
+    "chapter-outline": { goal: "", conflict: "", turningPoint: "", notes: "", status: "draft" },
+    foreshadow: { description: "", status: "planned", importance: "medium", plannedPayoffChapterId: null, resolutionNote: "" }
+  };
+  return { ...defaults[entityType], ...input };
+}
+
 /** 字段值的人类可读展示（不泄露模型密钥等信息，仅面向业务字段）。 */
 export function formatFieldValue(contextKey: string, value: unknown): string {
   if (value === undefined || value === "") return "";
@@ -820,7 +847,25 @@ export function planOperationRequirements(operation: NormalizedPlanOperation): P
   const toolId = module === "relationships"
     ? "relationships"
     : (Object.entries(moduleForTool).find(([, value]) => value === module)?.[0] ?? "outlines");
-  return { toolId: toolId as AiWriteToolId, writeModules: [module], readModules: [] };
+  const writeModules = new Set<string>([module]);
+  const readModules = new Set<string>();
+  const input = operation.input;
+  if (operation.entityType === "character") {
+    if (Object.prototype.hasOwnProperty.call(input, "raceId")) writeModules.add("races");
+    if (Object.prototype.hasOwnProperty.call(input, "organizationIds")) writeModules.add("organizations");
+  }
+  if (operation.entityType === "timeline-event") {
+    if (Object.prototype.hasOwnProperty.call(input, "chapterIds")) writeModules.add("prose");
+    if (Object.prototype.hasOwnProperty.call(input, "participantIds")) writeModules.add("characters");
+  }
+  if (operation.entityType === "relationship" && operation.opType === "create_entry") {
+    writeModules.add("characters");
+  }
+  if (operation.entityType === "chapter-outline") readModules.add("prose");
+  if (operation.entityType === "foreshadow" && Object.prototype.hasOwnProperty.call(input, "plannedPayoffChapterId")) {
+    readModules.add("prose");
+  }
+  return { toolId: toolId as AiWriteToolId, writeModules: [...writeModules], readModules: [...readModules] };
 }
 
 /** 转换为既定的操作记录形状（校验后的规范化形态）。 */
@@ -948,6 +993,11 @@ type QuestionRow = {
   selected_option: number | null;
   answer_text: string;
   is_custom_answer: number;
+  tool_call_id: string | null;
+  continuation_json: string;
+  resume_state: string;
+  resume_result_json: string;
+  resumed_at: string | null;
   created_at: string;
   expires_at: string;
   decided_at: string | null;
@@ -974,6 +1024,7 @@ export type WritePlanSummaryView = {
   conversationOwnerUserId: string | null;
   /** 确认/拒绝/撤销该审批的用户：即“操作者”审计口径。 */
   decidedByUserId: string | null;
+  decidedByName: string | null;
   sourcePlanId: string | null;
 };
 
@@ -1005,6 +1056,7 @@ export type PlanDetailOperationView = {
   requiredModuleLabels: string[];
   restricted: boolean;
   result: { entityId: string | null; versionNo: number | null; summary: string } | null;
+  auditRecords: Array<{ action: string; actor: string; userId: string | null; createdAt: string }>;
 };
 
 export type PlanDetailView = WritePlanSummaryView & {
@@ -1029,12 +1081,16 @@ export type QuestionView = {
   createdAt: string;
   expiresAt: string;
   decidedAt: string | null;
+  resumeState: string;
 };
 
 export type AiWriteToolsView = Record<AiWriteToolId, boolean>;
 
+export type AnalysisTaskInput = { taskType: string; scope?: Record<string, unknown>; modelId?: string };
+export type ResolvedAnalysisTaskInput = { taskType: string; scope: Record<string, unknown>; modelId?: string };
+export type AnalysisTaskResolver = (workId: string, input: AnalysisTaskInput) => ResolvedAnalysisTaskInput;
 /** 分析任务的启动器：由应用装配注入（ai.createTask），保持同步、事务安全。 */
-export type AnalysisTaskStarter = (workId: string, input: { taskType: string; scope?: Record<string, unknown>; modelId?: string }) => Record<string, unknown>;
+export type AnalysisTaskStarter = (workId: string, input: ResolvedAnalysisTaskInput) => Record<string, unknown>;
 
 export type AiWritePlanManagerOptions = {
   planTtlMs?: number;
@@ -1045,17 +1101,25 @@ export class AiWritePlanManager {
   private readonly database: Database;
   private readonly store: Store;
   private readonly auth: UserAuthService;
+  private readonly resolveAnalysisTask: AnalysisTaskResolver;
   private readonly startAnalysisTask: AnalysisTaskStarter;
   private readonly planTtlMs: number;
   private readonly questionTtlMs: number;
 
   constructor(
-    deps: { database: Database; store: Store; auth: UserAuthService; startAnalysisTask: AnalysisTaskStarter },
+    deps: {
+      database: Database;
+      store: Store;
+      auth: UserAuthService;
+      resolveAnalysisTask: AnalysisTaskResolver;
+      startAnalysisTask: AnalysisTaskStarter;
+    },
     options: AiWritePlanManagerOptions = {}
   ) {
     this.database = deps.database;
     this.store = deps.store;
     this.auth = deps.auth;
+    this.resolveAnalysisTask = deps.resolveAnalysisTask;
     this.startAnalysisTask = deps.startAnalysisTask;
     this.planTtlMs = options.planTtlMs ?? AI_WRITE_PLAN_TTL_MS;
     this.questionTtlMs = options.questionTtlMs ?? AI_USER_QUESTION_TTL_MS;
@@ -1072,6 +1136,41 @@ export class AiWritePlanManager {
       if (enabled[toolId] === true) view[toolId] = true;
     }
     return view;
+  }
+
+  getConversationTools(workId: string, conversationId: string): AiWriteToolsView {
+    const conversation = this.database.get<{ work_id: string; ai_write_tools_json: string | null; message_count: number }>(
+      `SELECT conversation.work_id, conversation.ai_write_tools_json,
+        (SELECT COUNT(*) FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id) AS message_count
+       FROM ai_conversations conversation WHERE conversation.id = ?`,
+      conversationId
+    );
+    if (!conversation || conversation.work_id !== workId) {
+      throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    }
+    const current = this.getEnabledTools(workId);
+    if (Number(conversation.message_count) === 0) {
+      this.database.run(
+        "UPDATE ai_conversations SET ai_write_tools_json = ?, updated_at = ? WHERE id = ?",
+        JSON.stringify(current),
+        now(),
+        conversationId
+      );
+      return current;
+    }
+    const stored = json<Record<string, unknown>>(conversation.ai_write_tools_json ?? "{}", {});
+    if (conversation.ai_write_tools_json) {
+      const snapshot = defaultAiWriteToolToggles();
+      for (const toolId of AI_WRITE_TOOL_IDS) snapshot[toolId] = stored[toolId] === true;
+      return snapshot;
+    }
+    this.database.run(
+      "UPDATE ai_conversations SET ai_write_tools_json = ?, updated_at = ? WHERE id = ? AND ai_write_tools_json IS NULL",
+      JSON.stringify(current),
+      now(),
+      conversationId
+    );
+    return current;
   }
 
   /** 增量更新工具开关：未提及的开关保持不变；未知工具 ID 直接拒绝。 */
@@ -1124,6 +1223,22 @@ export class AiWritePlanManager {
     return row?.role === "admin";
   }
 
+  private assertPlanViewer(row: PlanRow, workId: string, viewer: PlanViewer): void {
+    if (row.work_id !== workId) throw notFoundPlan();
+    if (!viewer?.userId) return;
+    if (row.initiator_user_id !== viewer.userId && row.conversation_owner_user_id !== viewer.userId) {
+      throw notFoundPlan();
+    }
+  }
+
+  private assertQuestionViewer(row: QuestionRow, workId: string, viewer: PlanViewer): void {
+    if (row.work_id !== workId) throw new AppError(404, "AI_QUESTION_NOT_FOUND", "问题不存在");
+    if (!viewer?.userId) return;
+    if (row.initiator_user_id !== viewer.userId && row.recipient_user_id !== viewer.userId) {
+      throw new AppError(404, "AI_QUESTION_NOT_FOUND", "问题不存在");
+    }
+  }
+
   /** 从数据库静态解析指定用户的模块权限（用于对话属主，避免依赖登录态）。 */
   private permissionsForStoredUser(userId: string | null, workId: string): WorkModulePermissions {
     if (!userId) return emptyWorkModulePermissions();
@@ -1173,6 +1288,87 @@ export class AiWritePlanManager {
     return row?.version_no === null || row?.version_no === undefined ? null : Number(row.version_no);
   }
 
+  private referenceVersion(workId: string, entityType: string, entityId: string): number | null {
+    if (entityType === "chapter") {
+      const chapter = this.store.getChapter(entityId);
+      if (String(chapter.workId) !== workId) throw crossWorkError();
+      return Number(chapter.versionNo);
+    }
+    if (entityType === "chapter-outline") {
+      const chapter = this.store.getChapter(entityId);
+      if (String(chapter.workId) !== workId) throw crossWorkError();
+      return this.currentEntityVersionNo("chapter-outline", entityId);
+    }
+    const loaders: Partial<Record<AiEntryEntityType, () => Record<string, unknown>>> = {
+      setting: () => this.store.getSetting(entityId),
+      character: () => this.store.getCharacter(entityId),
+      race: () => this.store.getRace(entityId),
+      organization: () => this.store.getOrganization(entityId),
+      "timeline-track": () => this.store.getTimelineTrack(entityId),
+      "timeline-event": () => this.store.getTimelineEvent(entityId),
+      relationship: () => this.store.getRelationship(entityId),
+      foreshadow: () => this.store.getForeshadow(entityId)
+    };
+    const normalizedType = entityType === "timeline" ? "timeline-event" : entityType;
+    const loader = loaders[normalizedType as AiEntryEntityType];
+    if (!loader) throw new AppError(400, "AI_PLAN_REFERENCE_TYPE_INVALID", `不支持的版本引用类型：${entityType}`);
+    const entity = loader();
+    if (String(entity.workId) !== workId) throw crossWorkError();
+    return this.currentEntityVersionNo(normalizedType as AiEntryEntityType, entityId);
+  }
+
+  private operationVersionSnapshot(workId: string, operation: NormalizedPlanOperation): Array<{ entityType: string; entityId: string; versionNo: number | null }> {
+    const snapshots = new Map<string, { entityType: string; entityId: string; versionNo: number | null }>();
+    const add = (entityType: string, rawId: unknown): void => {
+      if (typeof rawId !== "string" || !rawId.trim()) return;
+      const entityId = rawId.trim();
+      const key = `${entityType}:${entityId}`;
+      if (!snapshots.has(key)) snapshots.set(key, { entityType, entityId, versionNo: this.referenceVersion(workId, entityType, entityId) });
+    };
+    const addMany = (entityType: string, value: unknown): void => {
+      if (Array.isArray(value)) value.forEach((item) => add(entityType, item));
+    };
+
+    if (operation.opType === "create_annotation") add("chapter", operation.chapterId);
+    if (operation.opType === "create_task") {
+      const scope = operation.scope ?? {};
+      add("chapter", scope.chapterId);
+      addMany("chapter", scope.chapterIds);
+      addMany("character", scope.characterIds);
+      addMany("character", scope.mentionCharacterIds);
+      addMany("setting", scope.settingIds);
+      addMany("race", scope.raceIds);
+      addMany("organization", scope.organizationIds);
+      if (Array.isArray(scope.relationshipSourceRefs)) {
+        for (const reference of scope.relationshipSourceRefs) {
+          if (!reference || typeof reference !== "object" || Array.isArray(reference)) continue;
+          const value = reference as Record<string, unknown>;
+          add(String(value.sourceType ?? ""), value.sourceId);
+        }
+      }
+      return [...snapshots.values()];
+    }
+    if (operation.opType === "create_entry" || operation.opType === "update_entry") {
+      const input = operation.input;
+      if (operation.entityType === "chapter-outline") add("chapter", operation.chapterId);
+      if (operation.entityType === "character") {
+        add("race", input.raceId);
+        addMany("organization", input.organizationIds);
+      }
+      if (operation.entityType === "timeline-event") {
+        add("timeline-track", input.trackId);
+        addMany("chapter", input.chapterIds);
+        addMany("character", input.participantIds);
+      }
+      if (operation.entityType === "relationship") {
+        add("character", input.fromCharacterId);
+        add("character", input.toCharacterId);
+      }
+      if (operation.entityType === "foreshadow") add("chapter", input.plannedPayoffChapterId);
+    }
+    return [...snapshots.values()];
+  }
+
   // --------------------------------------------------------------- 计划创建
 
   createWritePlan(input: {
@@ -1185,6 +1381,9 @@ export class AiWritePlanManager {
   }): PlanDetailView {
     const { workId } = input;
     this.store.getWork(workId);
+    if (input.conversationId && this.latestPendingQuestion(input.conversationId)) {
+      throw new AppError(409, "AI_QUESTION_PENDING", "当前对话仍有待回答问题，不能提交依赖未确认选择的写入计划");
+    }
     const summaryParse = z.string().trim().min(1).max(2000).safeParse(input.aiSummary);
     if (!summaryParse.success) throw new AppError(400, "AI_PLAN_SUMMARY_REQUIRED", "AI 必须提供一段简要说明");
     const maxOperations = resolveAiWritePlanMaxOperations(process.env.AI_WRITE_PLAN_MAX_OPERATIONS);
@@ -1240,7 +1439,7 @@ export class AiWritePlanManager {
       createdBy: input.initiator?.userId ?? null
     });
     logger.info("ai_write_plan.created", { workId, planId, operations: prepared.length });
-    return this.getPlanDetail(planId, input.initiator);
+    return this.getPlanDetail(planId, workId, input.initiator);
   }
 
   /** 创建期的单个操作准备：工具开关、版本、diff 与目标标题都在这里定型。 */
@@ -1273,6 +1472,7 @@ export class AiWritePlanManager {
     }
 
     if (operation.opType === "create_annotation") {
+      const versionSnapshot = this.operationVersionSnapshot(workId, operation);
       const chapter = this.store.getChapter(operation.chapterId);
       if (String(chapter.workId) !== workId) throw crossWorkError();
       const totalLines = splitLines(String(chapter.content)).length;
@@ -1298,16 +1498,20 @@ export class AiWritePlanManager {
           startLine: operation.startLine,
           endLine: operation.endLine,
           quote,
-          note: operation.note
+          note: operation.note,
+          versionSnapshot
         }
       };
     }
 
     if (operation.opType === "create_task") {
-      const taskTypeLabel = aiAnalysisTaskTypeLabels[operation.taskType] ?? operation.taskType;
-      const scopePreview = summarizeTaskScope(operation.taskType, operation.scope);
+      const resolvedOperation = this.resolveAnalysisTask(workId, operation);
+      const normalizedOperation: NormalizedPlanOperation = { opType: "create_task", ...resolvedOperation };
+      const versionSnapshot = this.operationVersionSnapshot(workId, normalizedOperation);
+      const taskTypeLabel = aiAnalysisTaskTypeLabels[resolvedOperation.taskType] ?? resolvedOperation.taskType;
+      const scopePreview = summarizeTaskScope(resolvedOperation.taskType, resolvedOperation.scope);
       return {
-        operation,
+        operation: normalizedOperation,
         requirement,
         targetEntityId: null,
         targetVersionNo: null,
@@ -1316,17 +1520,20 @@ export class AiWritePlanManager {
           affectedModule: "ai-analysis",
           affectedModuleLabel: workPermissionModuleLabels["ai-analysis"],
           action: "新建分析任务",
-          taskType: operation.taskType,
+          taskType: resolvedOperation.taskType,
           taskTypeLabel,
-          modelId: operation.modelId ?? null,
+          modelId: resolvedOperation.modelId ?? null,
+          scope: resolvedOperation.scope,
           scopeSummary: scopePreview.summary,
-          scopeDescription: scopePreview.description
+          scopeDescription: scopePreview.description,
+          versionSnapshot
         }
       };
     }
 
     // 词条创建：无需当前快照，title 由输入决定。
     if (operation.opType === "create_entry") {
+      const versionSnapshot = this.operationVersionSnapshot(workId, operation);
       const input = operation.input as Record<string, unknown>;
       let title = String(input.name ?? input.title ?? "");
       if (operation.entityType === "chapter-outline") {
@@ -1346,7 +1553,8 @@ export class AiWritePlanManager {
           targetTypeLabel: aiEntryEntityTypeLabel(operation.entityType),
           action: "新增",
           title,
-          fields: Object.entries(operation.input as Record<string, unknown>).map(([key, value]) => ({
+          versionSnapshot,
+          fields: Object.entries(completeCreatePreview(operation.entityType, operation.input as Record<string, unknown>)).map(([key, value]) => ({
             key,
             label: fieldLabelsByEntity[operation.entityType][key] ?? key,
             after: formatFieldValue(key, value),
@@ -1369,6 +1577,7 @@ export class AiWritePlanManager {
       target: lookup.targetTitle,
       title: lookup.targetTitle,
       targetVersionNo: lookup.currentVersionNo,
+      versionSnapshot: this.operationVersionSnapshot(workId, operation),
       fields: buildFieldDiffs(operation.entityType, lookup.current, operation.input as Record<string, unknown>)
         .filter((field) => field.changed)
         .map((field) => ({
@@ -1557,26 +1766,31 @@ export class AiWritePlanManager {
     return row;
   }
 
-  listPlansForWork(workId: string, options: { status?: string; limit?: number } = {}): WritePlanSummaryView[] {
+  listPlansForWork(workId: string, viewer: PlanViewer, options: { status?: string; limit?: number } = {}): WritePlanSummaryView[] {
     this.recoverStaleExecutingPlans();
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+    const participantClause = viewer?.userId ? " AND (initiator_user_id = ? OR conversation_owner_user_id = ?)" : "";
+    const participantParams = viewer?.userId ? [viewer.userId, viewer.userId] : [];
     const rows = options.status
       ? this.database.all<PlanRow>(
-        "SELECT * FROM ai_write_plans WHERE work_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
+        `SELECT * FROM ai_write_plans WHERE work_id = ? AND status = ?${participantClause} ORDER BY created_at DESC LIMIT ?`,
         workId,
         options.status,
+        ...participantParams,
         limit
       )
       : this.database.all<PlanRow>(
-        "SELECT * FROM ai_write_plans WHERE work_id = ? ORDER BY created_at DESC LIMIT ?",
+        `SELECT * FROM ai_write_plans WHERE work_id = ?${participantClause} ORDER BY created_at DESC LIMIT ?`,
         workId,
+        ...participantParams,
         limit
       );
     return rows.map((row) => this.expireStalePlan(row)).map((row) => this.toSummaryView(row));
   }
 
-  getPlanDetail(planId: string, viewer: PlanViewer): PlanDetailView {
+  getPlanDetail(planId: string, workId: string, viewer: PlanViewer): PlanDetailView {
     let row = this.loadPlan(planId);
+    this.assertPlanViewer(row, workId, viewer);
     row = this.expireStalePlan(row);
     return this.toDetailView(row, viewer);
   }
@@ -1586,9 +1800,10 @@ export class AiWritePlanManager {
   /**
    * 确认执行。只有待确认状态可以进入执行；重复确认会得到明确的失败提示且绝不重复写入。
    */
-  async confirmPlan(planId: string, confirmer: PlanViewer): Promise<PlanDetailView> {
+  async confirmPlan(planId: string, workId: string, confirmer: PlanViewer): Promise<PlanDetailView> {
     await Promise.resolve();
     let row = this.expireStalePlan(this.loadPlan(planId));
+    this.assertPlanViewer(row, workId, confirmer);
     if (row.status !== "pending") throw decisionConflict(row);
 
     const claim = this.database.run(
@@ -1608,7 +1823,7 @@ export class AiWritePlanManager {
       const outcome = this.database.transaction(() => this.executePlanWithinTransaction(planId, confirmer));
       if (outcome.ok) {
         logger.info("ai_write_plan.executed", { planId, operations: outcome.operationResults.length });
-        return this.getPlanDetail(planId, confirmer);
+        return this.getPlanDetail(planId, workId, confirmer);
       }
       const invalidated = this.database.run(
         `UPDATE ai_write_plans SET status = 'invalidated', invalid_reason = ?
@@ -1668,6 +1883,24 @@ export class AiWritePlanManager {
       if (!this.getEnabledTools(row.work_id)[requirement.toolId]) {
         return { ok: false, reason: `执行前校验失败：「${aiWriteToolLabels[requirement.toolId]}」工具已被关闭（操作 ${operation.seq}）` };
       }
+      const detail = json<Record<string, unknown>>(operation.detail_json, {});
+      const versionSnapshot = Array.isArray(detail.versionSnapshot)
+        ? detail.versionSnapshot as Array<Record<string, unknown>>
+        : [];
+      for (const reference of versionSnapshot) {
+        const entityType = String(reference.entityType ?? "");
+        const entityId = String(reference.entityId ?? "");
+        const expectedVersion = reference.versionNo === null ? null : Number(reference.versionNo);
+        let currentVersion: number | null;
+        try {
+          currentVersion = this.referenceVersion(row.work_id, entityType, entityId);
+        } catch {
+          return { ok: false, reason: `执行前校验失败：关联对象已不存在或不再属于当前作品（${entityType}:${entityId}，操作 ${operation.seq}）` };
+        }
+        if (currentVersion !== expectedVersion) {
+          return { ok: false, reason: `执行前校验失败：关联对象已发生变化（${entityType}:${entityId}，版本 ${expectedVersion ?? "不存在"} -> ${currentVersion ?? "不存在"}，操作 ${operation.seq}）` };
+        }
+      }
       // ---- 再校验 3：目标对象与版本没有变化（R10/R13）。
       if (operation.op_type === "update_entry" && operation.entity_type && operation.entity_id) {
         const entityType = operation.entity_type as AiEntryEntityType;
@@ -1681,6 +1914,12 @@ export class AiWritePlanManager {
             ok: false,
             reason: `执行前校验失败：「${target.title || aiEntryEntityTypeLabel(entityType)}」已发生变化，请让 AI 重新提交计划（版本 ${expected ?? "?"} -> ${currentVersionNo ?? "不存在"}，操作 ${operation.seq}）`
           };
+        }
+      }
+      if (operation.op_type === "create_entry" && operation.entity_type === "chapter-outline" && operation.entity_id) {
+        const currentVersionNo = this.currentEntityVersionNo("chapter-outline", operation.entity_id);
+        if (currentVersionNo !== null) {
+          return { ok: false, reason: `执行前校验失败：「${operation.title}」的大纲已被创建，请让 AI 重新提交计划（操作 ${operation.seq}）` };
         }
       }
     }
@@ -1806,7 +2045,9 @@ export class AiWritePlanManager {
     } else if (operation.op_type === "create_task") {
       const created = this.startAnalysisTask(workId, {
         taskType: String(input.taskType),
-        ...(input.scope !== undefined && input.scope !== null ? { scope: input.scope as Record<string, unknown> } : {}),
+        scope: input.scope && typeof input.scope === "object" && !Array.isArray(input.scope)
+          ? input.scope as Record<string, unknown>
+          : { type: "book" },
         ...(input.modelId ? { modelId: String(input.modelId) } : {})
       });
       resultEntityId = String(created.id ?? "");
@@ -1836,8 +2077,9 @@ export class AiWritePlanManager {
     return this.currentEntityVersionNo(entityType, entityId);
   }
 
-  rejectPlan(planId: string, rejecter: PlanViewer): PlanDetailView {
+  rejectPlan(planId: string, workId: string, rejecter: PlanViewer): PlanDetailView {
     const row = this.expireStalePlan(this.loadPlan(planId));
+    this.assertPlanViewer(row, workId, rejecter);
     if (row.status !== "pending") throw decisionConflict(row);
     const updated = this.database.run(
       "UPDATE ai_write_plans SET status = 'rejected', decided_at = ?, executed_by_user_id = ? WHERE id = ? AND status = 'pending'",
@@ -1848,7 +2090,7 @@ export class AiWritePlanManager {
     if (updated.changes !== 1) throw decisionConflict(this.loadPlan(planId));
     this.store.audit(row.work_id, "ai.write_plan.rejected", "ai_write_plan", planId, { rejectedBy: rejecter?.userId ?? null });
     logger.info("ai_write_plan.rejected", { planId });
-    return this.getPlanDetail(planId, rejecter);
+    return this.getPlanDetail(planId, workId, rejecter);
   }
 
   /** 服务恢复后清理卡在执行中的陈旧计划：其事务必然没有提交，可以安全判定为失败。 */
@@ -1902,8 +2144,9 @@ export class AiWritePlanManager {
   }
 
   /** 为已成功审批创建撤销计划（撤销本身也需要再次确认）。 */
-  createUndoPlan(sourcePlanId: string, requester: PlanViewer): PlanDetailView {
+  createUndoPlan(sourcePlanId: string, workId: string, requester: PlanViewer): PlanDetailView {
     const source = this.loadPlan(sourcePlanId);
+    this.assertPlanViewer(source, workId, requester);
     if (source.status !== "executed") throw new AppError(409, "AI_UNDO_SOURCE_NOT_EXECUTED", "只有执行成功的审批才能撤销");
     const eligibility = this.undoEligibility(sourcePlanId);
     if (!eligibility.undoAvailable) {
@@ -1976,7 +2219,7 @@ export class AiWritePlanManager {
       requestedBy: requester?.userId ?? null,
       operations: titles.length
     });
-    return this.getPlanDetail(planId, requester);
+    return this.getPlanDetail(planId, workId, requester);
   }
 
   // --------------------------------------------------------------- 投影视图
@@ -1986,6 +2229,9 @@ export class AiWritePlanManager {
       "SELECT DISTINCT module FROM ai_write_plan_operations WHERE plan_id = ?",
       row.id
     );
+    const operator = row.executed_by_user_id
+      ? this.database.get<{ display_name: string; username: string }>("SELECT display_name, username FROM users WHERE id = ?", row.executed_by_user_id)
+      : undefined;
     return {
       id: row.id,
       workId: row.work_id,
@@ -2004,6 +2250,7 @@ export class AiWritePlanManager {
       initiatorUserId: row.initiator_user_id,
       conversationOwnerUserId: row.conversation_owner_user_id,
       decidedByUserId: row.executed_by_user_id,
+      decidedByName: operator ? String(operator.display_name || operator.username) : null,
       sourcePlanId: row.source_plan_id
     };
   }
@@ -2036,6 +2283,26 @@ export class AiWritePlanManager {
     const requiredModules = json<Array<string>>(operation.required_modules_json, []);
     const restricted = requiredModules.some((module) => !canReadWorkModule(viewerPermissions, module as keyof WorkModulePermissions));
     const fields = Array.isArray(detail.fields) ? detail.fields as Array<Record<string, unknown>> : [];
+    const auditRecords = this.database.all<{
+      action: string;
+      actor: string;
+      user_id: string | null;
+      actor_display_name: string | null;
+      actor_username: string | null;
+      created_at: string;
+    }>(
+      `SELECT log.action, log.actor, log.user_id, log.created_at,
+        user.display_name AS actor_display_name, user.username AS actor_username
+       FROM audit_logs log LEFT JOIN users user ON user.id = log.user_id
+       WHERE log.entity_type = 'ai_write_plan_operation' AND log.entity_id = ?
+       ORDER BY log.created_at`,
+      operation.id
+    ).map((record) => ({
+      action: record.action,
+      actor: String(record.actor_display_name || record.actor_username || record.actor),
+      userId: record.user_id,
+      createdAt: record.created_at
+    }));
     return {
       seq: operation.seq,
       opType: operation.op_type,
@@ -2091,7 +2358,8 @@ export class AiWritePlanManager {
       restricted,
       result: operation.result_summary
         ? { entityId: operation.result_entity_id, versionNo: operation.result_version_no, summary: operation.result_summary }
-        : null
+        : null,
+      auditRecords
     };
   }
 
@@ -2104,6 +2372,7 @@ export class AiWritePlanManager {
     recipientUserId: string | null;
     question: unknown;
     options: unknown;
+    toolCallId?: string;
   }): QuestionView {
     this.assertToolEnabled(input.workId, "ask_user_questions");
     const parsed = askAiUserQuestionInputSchema.parse({ question: input.question, options: input.options });
@@ -2111,17 +2380,15 @@ export class AiWritePlanManager {
     const timestamp = now();
     const expiresAt = isoFromNow(timestamp, this.questionTtlMs);
     this.database.transaction(() => {
-      // 同一会话只保留一个待回答问题，新的提问会使旧问题自动过期。
-      this.database.run(
-        "UPDATE ai_user_questions SET status = 'expired', decided_at = ? WHERE conversation_id = ? AND status = 'pending'",
-        timestamp,
-        input.conversationId
-      );
+      const pending = input.conversationId
+        ? this.database.get("SELECT 1 AS present FROM ai_user_questions WHERE conversation_id = ? AND status = 'pending'", input.conversationId)
+        : undefined;
+      if (pending) throw new AppError(409, "AI_QUESTION_PENDING", "当前对话已有一个待回答问题");
       this.database.run(
         `INSERT INTO ai_user_questions (
           id, work_id, conversation_id, initiator_user_id, recipient_user_id, question,
-          options_json, status, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+          options_json, status, tool_call_id, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
         questionId,
         input.workId,
         input.conversationId,
@@ -2129,6 +2396,7 @@ export class AiWritePlanManager {
         input.recipientUserId,
         parsed.question,
         JSON.stringify(parsed.options),
+        input.toolCallId ?? null,
         timestamp,
         expiresAt
       );
@@ -2137,11 +2405,11 @@ export class AiWritePlanManager {
       conversationId: input.conversationId,
       askedBy: input.initiator?.userId ?? null
     });
-    return this.getQuestion(questionId);
+    return this.getQuestion(questionId, input.workId, input.initiator);
   }
 
-  answerQuestion(questionId: string, respondent: PlanViewer, payload: { selectedOption?: number; customAnswer?: string }): QuestionView {
-    const row = this.assertAnswerable(questionId, respondent);
+  answerQuestion(questionId: string, workId: string, respondent: PlanViewer, payload: { selectedOption?: number; customAnswer?: string }): QuestionView {
+    const row = this.assertAnswerable(questionId, workId, respondent);
     const options = json<Array<string>>(row.options_json, []);
     let answerText: string;
     let selectedOption: number | null = null;
@@ -2171,11 +2439,11 @@ export class AiWritePlanManager {
       answeredBy: respondent?.userId ?? null,
       isCustomAnswer: isCustom
     });
-    return this.getQuestion(questionId);
+    return this.getQuestion(questionId, workId, respondent);
   }
 
-  rejectQuestion(questionId: string, respondent: PlanViewer): QuestionView {
-    const row = this.assertAnswerable(questionId, respondent);
+  rejectQuestion(questionId: string, workId: string, respondent: PlanViewer): QuestionView {
+    const row = this.assertAnswerable(questionId, workId, respondent);
     const updated = this.database.run(
       "UPDATE ai_user_questions SET status = 'rejected', decided_at = ? WHERE id = ? AND status = 'pending'",
       now(),
@@ -2185,12 +2453,13 @@ export class AiWritePlanManager {
     this.store.audit(row.work_id, "ai.question.rejected", "ai_user_question", questionId, {
       rejectedBy: respondent?.userId ?? null
     });
-    return this.getQuestion(questionId);
+    return this.getQuestion(questionId, workId, respondent);
   }
 
-  private assertAnswerable(questionId: string, respondent: PlanViewer): QuestionRow {
+  private assertAnswerable(questionId: string, workId: string, respondent: PlanViewer): QuestionRow {
     let row = this.database.get<QuestionRow>("SELECT * FROM ai_user_questions WHERE id = ?", questionId);
     if (!row) throw new AppError(404, "AI_QUESTION_NOT_FOUND", "问题不存在");
+    this.assertQuestionViewer(row, workId, respondent);
     if (Date.parse(row.expires_at) < Date.now() && row.status === "pending") {
       this.database.run(
         "UPDATE ai_user_questions SET status = 'expired', decided_at = ? WHERE id = ? AND status = 'pending'",
@@ -2203,36 +2472,40 @@ export class AiWritePlanManager {
       const labels: Record<string, string> = { answered: "已回答", rejected: "已拒绝", expired: "已过期" };
       throw new AppError(409, "AI_QUESTION_CLOSED", `问题已被处理：${labels[row.status] ?? row.status}`);
     }
-    if (row.recipient_user_id && respondent?.userId && row.recipient_user_id !== respondent.userId && !this.userIsAdmin(respondent.userId)) {
-      const workOwnerId = this.database.get<{ owner_user_id: string | null }>("SELECT owner_user_id FROM works WHERE id = ?", row.work_id);
-      const isOwner = String(workOwnerId?.owner_user_id ?? "") === respondent.userId;
-      if (!isOwner) throw new AppError(403, "AI_QUESTION_RECIPIENT_ONLY", "该提问仅限目标用户回答");
+    if (row.recipient_user_id && respondent?.userId && row.recipient_user_id !== respondent.userId) {
+      throw new AppError(403, "AI_QUESTION_RECIPIENT_ONLY", "该提问仅限目标用户回答");
     }
     return row;
   }
 
-  getQuestion(questionId: string): QuestionView {
+  getQuestion(questionId: string, workId: string, viewer: PlanViewer): QuestionView {
     const row = this.database.get<QuestionRow>("SELECT * FROM ai_user_questions WHERE id = ?", questionId);
     if (!row) throw new AppError(404, "AI_QUESTION_NOT_FOUND", "问题不存在");
+    this.assertQuestionViewer(row, workId, viewer);
     return this.toQuestionView(row);
   }
 
-  listQuestions(workId: string, filters: { conversationId?: string; status?: string; limit?: number } = {}): QuestionView[] {
+  listQuestions(workId: string, viewer: PlanViewer, filters: { conversationId?: string; status?: string; limit?: number } = {}): QuestionView[] {
     const limit = Math.min(Math.max(filters.limit ?? 30, 1), 200);
+    const participantClause = viewer?.userId ? " AND (initiator_user_id = ? OR recipient_user_id = ?)" : "";
+    const participantParams = viewer?.userId ? [viewer.userId, viewer.userId] : [];
     const rows = filters.conversationId
       ? this.database.all<QuestionRow>(
-        "SELECT * FROM ai_user_questions WHERE work_id = ? AND conversation_id = ? ORDER BY created_at DESC LIMIT ?",
+        `SELECT * FROM ai_user_questions WHERE work_id = ? AND conversation_id = ?${participantClause} ORDER BY created_at DESC LIMIT ?`,
         workId,
         filters.conversationId,
+        ...participantParams,
         limit
       )
       : this.database.all<QuestionRow>(
-        "SELECT * FROM ai_user_questions WHERE work_id = ? ORDER BY created_at DESC LIMIT ?",
+        `SELECT * FROM ai_user_questions WHERE work_id = ?${participantClause} ORDER BY created_at DESC LIMIT ?`,
         workId,
+        ...participantParams,
         limit
       );
     return rows
       .map((row) => (row.status === "pending" && Date.parse(row.expires_at) < Date.now() ? this.expireQuestion(row) : row))
+      .filter((row) => !filters.status || row.status === filters.status)
       .map((row) => this.toQuestionView(row));
   }
 
@@ -2247,6 +2520,45 @@ export class AiWritePlanManager {
       return this.toQuestionView(this.expireQuestion(row));
     }
     return this.toQuestionView(row);
+  }
+
+  saveQuestionContinuation(questionId: string, continuation: Record<string, unknown>): void {
+    const updated = this.database.run(
+      "UPDATE ai_user_questions SET continuation_json = ? WHERE id = ? AND status = 'pending'",
+      JSON.stringify(continuation),
+      questionId
+    );
+    if (updated.changes !== 1) throw new AppError(409, "AI_QUESTION_CLOSED", "问题已经无法挂起当前工作流");
+  }
+
+  claimQuestionContinuation(questionId: string, workId: string, viewer: PlanViewer): Record<string, unknown> | null {
+    const row = this.database.get<QuestionRow>("SELECT * FROM ai_user_questions WHERE id = ?", questionId);
+    if (!row) throw new AppError(404, "AI_QUESTION_NOT_FOUND", "问题不存在");
+    this.assertQuestionViewer(row, workId, viewer);
+    const continuation = json<Record<string, unknown>>(row.continuation_json, {});
+    if (typeof continuation.conversationId !== "string" || !continuation.conversationId) return null;
+    const claimed = this.database.run(
+      "UPDATE ai_user_questions SET resume_state = 'claimed', resumed_at = ? WHERE id = ? AND resume_state = 'pending' AND status IN ('answered', 'rejected', 'expired')",
+      now(),
+      questionId
+    );
+    if (claimed.changes !== 1) return null;
+    return {
+      ...continuation,
+      questionId,
+      status: row.status,
+      answerText: row.answer_text,
+      toolCallId: row.tool_call_id
+    };
+  }
+
+  finishQuestionContinuation(questionId: string, result: Record<string, unknown>, failed = false): void {
+    this.database.run(
+      "UPDATE ai_user_questions SET resume_state = ?, resume_result_json = ? WHERE id = ? AND resume_state = 'claimed'",
+      failed ? "failed" : "completed",
+      JSON.stringify(result),
+      questionId
+    );
   }
 
   /** 聊天流结束前调用的兜底清理：把过期待回答的问题统一落成过期态。 */
@@ -2321,7 +2633,8 @@ export class AiWritePlanManager {
       isCustomAnswer: row.is_custom_answer === 1,
       createdAt: row.created_at,
       expiresAt: row.expires_at,
-      decidedAt: row.decided_at
+      decidedAt: row.decided_at,
+      resumeState: row.resume_state
     };
   }
 }
@@ -2395,6 +2708,9 @@ function prepareUndoPayload(
 function summarizeTaskScope(taskType: string, scope: Record<string, unknown> | undefined): { summary: string; description: string } {
   if (!scope || Object.keys(scope).length === 0) {
     return { summary: "{}", description: "全书范围（默认）" };
+  }
+  if (scope.type === "book") {
+    return { summary: JSON.stringify(scope), description: "全书范围" };
   }
   const parts: string[] = [];
   if (scope.type) parts.push(`范围 ${String(scope.type)}`);

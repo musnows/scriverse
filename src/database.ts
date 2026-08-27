@@ -4553,6 +4553,10 @@ export class Database {
     ) !== undefined);
     if (!applied.has(122) || !aiWritePlanTablesPresent) {
       this.transaction(() => {
+        const conversationColumns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!conversationColumns.has("ai_write_tools_json")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN ai_write_tools_json TEXT");
+        }
         // 作品级 AI 可写工具开关：默认全部关闭，仅拥有 AI 设置权限的用户可修改。
         this.run(`
           CREATE TABLE IF NOT EXISTS work_ai_tool_settings (
@@ -4621,6 +4625,11 @@ export class Database {
             selected_option INTEGER,
             answer_text TEXT NOT NULL DEFAULT '',
             is_custom_answer INTEGER NOT NULL DEFAULT 0,
+            tool_call_id TEXT,
+            continuation_json TEXT NOT NULL DEFAULT '{}',
+            resume_state TEXT NOT NULL DEFAULT 'pending' CHECK(resume_state IN ('pending', 'claimed', 'completed', 'failed')),
+            resume_result_json TEXT NOT NULL DEFAULT '{}',
+            resumed_at TEXT,
             created_at TEXT NOT NULL,
             expires_at TEXT NOT NULL,
             decided_at TEXT

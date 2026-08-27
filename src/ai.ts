@@ -71,7 +71,7 @@ import {
   type CharacterExtractionEvidence,
   type CharacterExtractionSelection
 } from "./character-extraction.js";
-import type { AiWritePlanManager, AiWriteToolId } from "./ai-write-plans.js";
+import type { AiWritePlanManager, AiWriteToolId, AnalysisTaskInput, ResolvedAnalysisTaskInput } from "./ai-write-plans.js";
 import { AI_WRITE_TOOL_IDS } from "./ai-write-plans.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
@@ -445,6 +445,7 @@ type GenerateResult = {
   toolCalls: AgentToolCallResult[];
   processSteps: AiProcessStep[];
   contextUsage: Record<string, unknown>;
+  suspendedQuestionId?: string;
 };
 
 export type DesktopLocalAiRuntimeModelInput = {
@@ -1391,6 +1392,62 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     }
   }
 };
+
+export function writePlanToolDefinition(toggles: Record<AiWriteToolId, boolean>): Record<string, unknown> {
+  const entityTypes = [
+    ...(toggles.settings ? ["setting"] : []),
+    ...(toggles.characters ? ["character"] : []),
+    ...(toggles.races ? ["race"] : []),
+    ...(toggles.organizations ? ["organization"] : []),
+    ...(toggles.timeline ? ["timeline-track", "timeline-event"] : []),
+    ...(toggles.relationships ? ["relationship"] : []),
+    ...(toggles.outlines ? ["chapter-outline", "foreshadow"] : [])
+  ];
+  const operationTypes = [
+    ...(entityTypes.length > 0 ? ["create_entry", "update_entry"] : []),
+    ...(toggles.annotations ? ["create_annotation"] : []),
+    ...(toggles.analysis_tasks ? ["create_task"] : [])
+  ];
+  return {
+    type: "function",
+    function: {
+      name: "propose_write_plan",
+      description: `把已开启能力范围内的写操作整理成修改计划提交审批。当前可用操作：${operationTypes.join("、")}；关闭的模块不会出现在 schema 中。`,
+      parameters: {
+        type: "object",
+        properties: {
+          aiSummary: { type: "string", minLength: 1, maxLength: 2000, description: "面向作者的改动意图简述。" },
+          operations: {
+            type: "array",
+            minItems: 1,
+            maxItems: 20,
+            items: {
+              type: "object",
+              properties: {
+                opType: { type: "string", enum: operationTypes },
+                entityType: { type: "string", enum: entityTypes },
+                entityId: { type: "string" },
+                chapterId: { type: "string" },
+                kind: { type: "string", enum: ["note", "todo"] },
+                startLine: { type: "integer", minimum: 1 },
+                endLine: { type: "integer", minimum: 1 },
+                note: { type: "string" },
+                taskType: { type: "string" },
+                scope: { type: "object" },
+                modelId: { type: "string" },
+                input: { type: "object" }
+              },
+              required: ["opType"],
+              additionalProperties: false
+            }
+          }
+        },
+        required: ["aiSummary", "operations"],
+        additionalProperties: false
+      }
+    }
+  };
+}
 
 export function estimateAiTokens(value: string): number {
   let wideCharacters = 0;
@@ -4807,6 +4864,35 @@ export class AiManager {
     });
   }
 
+  resolveTaskInput(workId: string, input: AnalysisTaskInput): ResolvedAnalysisTaskInput {
+    this.store.getWork(workId);
+    const modelPurpose = this.analysisTaskModelPurpose(input.taskType);
+    const defaultRow = this.store.db.get(
+      "SELECT model_id FROM task_defaults WHERE work_id = ? AND task_type = ?",
+      workId,
+      modelPurpose
+    );
+    const modelId = input.modelId ?? (defaultRow ? stringValue(defaultRow, "model_id") : undefined);
+    if (modelId) this.resolveModel(workId, modelPurpose, modelId);
+    const scope = { ...(input.scope ?? { type: "book" }) };
+    const relationshipScope = input.taskType === "relationship-analysis" ? scope as ContextScope : null;
+    if (relationshipScope && Array.isArray(relationshipScope.relationshipSourceRefs)) {
+      this.validateRelationshipSourceRefs(workId, relationshipScope, relationshipScope.relationshipSourceRefs);
+    }
+    if (relationshipScope
+      && Array.isArray(relationshipScope.characterIds)
+      && relationshipScope.characterIds.length > 0
+      && relationshipScope.preFilterRelationshipSources !== false
+      && relationshipScope.relationshipSourceRefs === undefined) {
+      throw new AppError(400, "AI_PLAN_RELATIONSHIP_SOURCES_REQUIRED", "人物关系分析计划必须先固化 relationshipSourceRefs，或明确关闭预筛选");
+    }
+    return {
+      taskType: input.taskType,
+      scope,
+      ...(modelId ? { modelId } : {})
+    };
+  }
+
   private assertCharacterExtractionTask(taskId: string): Record<string, unknown> {
     const task = this.store.getTask(taskId);
     if (task.taskType !== "character-extraction" && task.taskType !== "character-summary") {
@@ -5445,6 +5531,21 @@ export class AiManager {
       throw error;
     }
     const processDurationMs = Math.min(86_400_000, Math.max(0, Math.round(Number(process.hrtime.bigint() - processStartedAt) / 1_000_000)));
+    if (generated.suspendedQuestionId) {
+      return {
+        id: `question:${generated.suspendedQuestionId}`,
+        callId: generated.callId,
+        provider: generated.provider,
+        model: generated.model,
+        outputTokens: generated.outputTokens,
+        processDurationMs,
+        toolCalls: generated.toolCalls,
+        processSteps: generated.processSteps,
+        contextUsage: generated.contextUsage,
+        suspendedQuestionId: generated.suspendedQuestionId,
+        conversationTitle: input.conversationId ? this.store.getAiConversationSummary(input.conversationId).title : "新对话"
+      };
+    }
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
     const suggestionId = id("suggestion");
     this.store.db.run(
@@ -5504,6 +5605,33 @@ export class AiManager {
       contextUsage: generated.contextUsage,
       ...(conversationMessage ? { conversationMessage } : {})
     };
+  }
+
+  async resumeUserQuestion(input: {
+    questionId: string;
+    workId: string;
+    conversationId: string;
+    scope: ContextScope;
+    modelId?: string;
+    status: string;
+    answerText: string;
+    toolCallId?: string;
+  }): Promise<Record<string, unknown>> {
+    const controlledResult = input.status === "answered"
+      ? { status: "answered", answer: input.answerText }
+      : { status: input.status, answer: null };
+    return this.createStreamingChat({
+      workId: input.workId,
+      conversationId: input.conversationId,
+      assistantMessageRequestId: `question-resume:${input.questionId}`,
+      instruction: [
+        "以下内容是此前 ask_user_question 工具调用的唯一真实结果。继续原工作流时只能使用该结果；answer 为 null 时必须停止依赖该选择的写操作。",
+        JSON.stringify({ toolCallId: input.toolCallId ?? null, ...controlledResult })
+      ].join("\n"),
+      scope: input.scope,
+      ...(input.modelId ? { modelId: input.modelId } : {}),
+      disableTools: input.status !== "answered"
+    }, () => undefined);
   }
 
   private async generateConversationTitle(
@@ -7137,7 +7265,7 @@ export class AiManager {
     // 它们不进 agentTools 持久化配置，也不参与角色扮演模式。
     const writePlanManager = this.aiWritePlanManager;
     if (writePlanManager && conversationId) {
-      const toggles = writePlanManager.getEnabledTools(workId);
+      const toggles = writePlanManager.getConversationTools(workId, conversationId);
       const anyWriteToggleOn = AI_WRITE_TOOL_IDS.some((toolId) => toolId !== "ask_user_questions" && toggles[toolId]);
       if (anyWriteToggleOn && (!requested || requested.has("propose_write_plan"))) {
         configuredResult.push("propose_write_plan");
@@ -7156,8 +7284,13 @@ export class AiManager {
     conversationId?: string,
     roleplayCharacterIdOverride?: string | null
   ): Record<string, unknown>[] {
-    return this.enabledAgentToolIds(workId, taskType, requestedToolIds, conversationId, roleplayCharacterIdOverride)
-      .map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
+    const toolIds = this.enabledAgentToolIds(workId, taskType, requestedToolIds, conversationId, roleplayCharacterIdOverride);
+    const writeToggles = this.aiWritePlanManager && conversationId
+      ? this.aiWritePlanManager.getConversationTools(workId, conversationId)
+      : null;
+    return toolIds.map((toolId) => toolId === "propose_write_plan" && writeToggles
+      ? writePlanToolDefinition(writeToggles)
+      : AGENT_TOOL_DEFINITIONS[toolId]);
   }
 
   private canReadWithAgentTool(permissions: WorkModulePermissions, toolId: ConfiguredAgentToolId): boolean {
@@ -7333,7 +7466,7 @@ export class AiManager {
     if (!conversationId) {
       return fail("TOOL_CONVERSATION_REQUIRED", "This tool can only be used inside a sidebar conversation bound to this work.");
     }
-    const toggles = manager.getEnabledTools(workId);
+    const toggles = manager.getConversationTools(workId, conversationId);
     if (name === "propose_write_plan" && !AI_WRITE_TOOL_IDS.some((toolId) => toolId !== "ask_user_questions" && toggles[toolId])) {
       return fail("TOOL_NOT_AVAILABLE", "写入计划工具未在作品设置中开启。");
     }
@@ -7347,10 +7480,12 @@ export class AiManager {
           return fail("TOOL_ARGUMENTS_INVALID", `Invalid arguments for ${name}: ${parsed.error.issues.map((issue) => `${issue.path.join(".") || "arguments"}: ${issue.message}`).join("; ")}`);
         }
         const actor = manager.resolveConversationActor(conversationId);
+        const requestActor = currentRequestActor();
+        const initiator = requestActor ? { userId: requestActor.userId, role: requestActor.role } : actor.viewer;
         const plan = manager.createWritePlan({
           workId,
           conversationId,
-          initiator: actor.viewer,
+          initiator,
           conversationOwnerUserId: actor.conversationOwnerUserId,
           aiSummary: parsed.data.aiSummary,
           operations: parsed.data.operations
@@ -7365,7 +7500,15 @@ export class AiManager {
           status: "completed",
           result: {
             ok: true,
-            plan: { id: plan.id, status: plan.status, statusLabel: plan.statusLabel, operationCount: plan.operationCount },
+            plan: {
+              id: plan.id,
+              status: plan.status,
+              statusLabel: plan.statusLabel,
+              operationCount: plan.operationCount,
+              aiSummary: plan.aiSummary,
+              moduleLabels: plan.moduleLabels,
+              targets: plan.operations.map((operation) => operation.title)
+            },
             recentPlans,
             message: "修改计划已提交到 AI 操作审批中心，等待作者确认或拒绝。作者确认之前不要宣称任何写入已完成；若之后上下文告知计划失效或执行失败，请重新评估并再次提交新的计划。"
           }
@@ -7376,13 +7519,16 @@ export class AiManager {
         return fail("TOOL_ARGUMENTS_INVALID", `Invalid arguments for ${name}: ${parsed.error.issues.map((issue) => `${issue.path.join(".") || "arguments"}: ${issue.message}`).join("; ")}`);
       }
       const actor = manager.resolveConversationActor(conversationId);
+      const requestActor = currentRequestActor();
+      const initiator = requestActor ? { userId: requestActor.userId, role: requestActor.role } : actor.viewer;
       const question = manager.createQuestion({
         workId,
         conversationId,
-        initiator: actor.viewer,
+        initiator,
         recipientUserId: actor.conversationOwnerUserId,
         question: parsed.data.question,
-        options: parsed.data.options
+        options: parsed.data.options,
+        toolCallId: toolCall.id
       });
       return {
         id: toolCall.id,
@@ -9215,6 +9361,7 @@ export class AiManager {
         }
       };
       let toolRound = 0;
+      let suspendedQuestionId: string | null = null;
       while (choice?.message?.tool_calls?.length) {
         const round = toolRound + 1;
         recordChoiceProcess(payload, round, true);
@@ -9289,6 +9436,22 @@ export class AiManager {
           processSteps.push({ id: id("process"), type: "tool", round, toolCall: toolExecution, createdAt: toolExecution.calledAt });
           input.onToolCall?.(toolExecution, round);
           currentRoundMessages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(toolExecution.result) });
+          const questionId = toolExecution.name === "ask_user_question" && toolExecution.status === "completed"
+            ? String((toolExecution.result.question as Record<string, unknown> | undefined)?.id ?? "")
+            : "";
+          if (questionId) {
+            this.aiWritePlanManager?.saveQuestionContinuation(questionId, {
+              workId: input.workId,
+              conversationId: input.conversationId ?? null,
+              scope: input.scope,
+              modelId: input.modelId ?? stringValue(model, "id"),
+              toolCallId: toolCall.id,
+              round,
+              createdAt: now()
+            });
+            suspendedQuestionId = questionId;
+            break;
+          }
           if (nativeImage) {
             nativeImageMessages.push({
               role: "user",
@@ -9309,24 +9472,25 @@ export class AiManager {
           await compactToolContext(currentRoundMessages, round);
         }
         toolRound += 1;
+        if (suspendedQuestionId) break;
         payload = await requestCompletion("auto");
         choice = payload.choices?.[0];
       }
-      recordChoiceProcess(payload, toolRound + 1, false);
-      const finalContent = choice?.message?.content;
-      if (!finalContent?.trim()) {
+      if (!suspendedQuestionId) recordChoiceProcess(payload, toolRound + 1, false);
+      const finalContent = suspendedQuestionId ? "" : choice?.message?.content ?? "";
+      if (!suspendedQuestionId && !finalContent.trim()) {
         const reasoningLength = choice?.message?.reasoning_content?.length ?? 0;
         const suffix = choice?.finish_reason === "length" || reasoningLength > 0
           ? `；模型已生成 ${reasoningLength} 个推理字符，请提高 max_tokens 输出预算`
           : "";
         throw new Error(`${providerProtocolLabelText(protocol)} 响应缺少可用正文，finish_reason=${choice?.finish_reason ?? "unknown"}${suffix}`);
       }
-      if (onDelta && completionDelivery.get(payload) !== "sse") {
+      if (!suspendedQuestionId && onDelta && completionDelivery.get(payload) !== "sse") {
         streamedContent += finalContent;
         onDelta(finalContent);
       }
-      const content = onDelta ? streamedContent : finalContent;
-      const outputTokens = resolveOutputTokens(payload.usage, finalContent);
+      const content = suspendedQuestionId ? "" : (onDelta ? streamedContent : finalContent);
+      const outputTokens = suspendedQuestionId ? trackedOutputTokens : resolveOutputTokens(payload.usage, finalContent);
       const cacheHitPercent = cacheUsageComplete && completionRequestCount > 0 && totalInputTokens > 0
         ? Math.round(totalCachedInputTokens / totalInputTokens * 1_000) / 10
         : undefined;
@@ -9378,7 +9542,8 @@ export class AiManager {
         context,
         toolCalls: executedToolCalls,
         processSteps,
-        contextUsage: this.completionContextUsage(effectiveInput, model, completionMessages, tools, payload.usage)
+        contextUsage: this.completionContextUsage(effectiveInput, model, completionMessages, tools, payload.usage),
+        ...(suspendedQuestionId ? { suspendedQuestionId } : {})
       };
     } catch (error) {
       const message = error instanceof Error ? redactProviderSecretsText(error.message, ...activeSecrets) : "AI 调用失败";

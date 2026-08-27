@@ -1563,7 +1563,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     database,
     store,
     auth,
-    startAnalysisTask: (workId, input) => ai.createTask(workId, input)
+    resolveAnalysisTask: (workId, input) => ai.resolveTaskInput(workId, input),
+    startAnalysisTask: (workId, input) => store.createTask(workId, input)
   });
   ai.attachWritePlanManager(aiWritePlanManager);
   const app = express();
@@ -3314,23 +3315,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       : undefined;
     const limit = Number.parseInt(typeof request.query.limit === "string" ? request.query.limit : "", 10);
     data(response, {
-      plans: aiWritePlanManager.listPlansForWork(request.params.workId, {
+      plans: aiWritePlanManager.listPlansForWork(request.params.workId, planViewer(), {
         status,
         ...(Number.isFinite(limit) ? { limit } : {})
       })
     });
   });
   app.get("/api/works/:workId/ai/write-plans/:planId", (request, response) => {
-    data(response, aiWritePlanManager.getPlanDetail(request.params.planId, planViewer()));
+    data(response, aiWritePlanManager.getPlanDetail(request.params.planId, request.params.workId, planViewer()));
   });
   app.post("/api/works/:workId/ai/write-plans/:planId/confirm", async (request, response) => {
-    data(response, await aiWritePlanManager.confirmPlan(request.params.planId, planViewer()));
+    data(response, await aiWritePlanManager.confirmPlan(request.params.planId, request.params.workId, planViewer()));
   });
   app.post("/api/works/:workId/ai/write-plans/:planId/reject", (request, response) => {
-    data(response, aiWritePlanManager.rejectPlan(request.params.planId, planViewer()));
+    data(response, aiWritePlanManager.rejectPlan(request.params.planId, request.params.workId, planViewer()));
   });
   app.post("/api/works/:workId/ai/write-plans/:planId/undo", (request, response) => {
-    data(response, aiWritePlanManager.createUndoPlan(request.params.planId, planViewer()), 201);
+    data(response, aiWritePlanManager.createUndoPlan(request.params.planId, request.params.workId, planViewer()), 201);
   });
 
   app.get("/api/works/:workId/ai/questions", (request, response) => {
@@ -3342,7 +3343,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       : undefined;
     const limit = Number.parseInt(typeof request.query.limit === "string" ? request.query.limit : "", 10);
     data(response, {
-      questions: aiWritePlanManager.listQuestions(request.params.workId, {
+      questions: aiWritePlanManager.listQuestions(request.params.workId, planViewer(), {
         ...(conversationId !== undefined ? { conversationId } : {}),
         ...(status !== undefined ? { status } : {}),
         ...(Number.isFinite(limit) ? { limit } : {})
@@ -3350,18 +3351,48 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     });
   });
   app.get("/api/works/:workId/ai/questions/:questionId", (request, response) => {
-    data(response, aiWritePlanManager.getQuestion(request.params.questionId));
+    data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, planViewer()));
   });
-  app.post("/api/works/:workId/ai/questions/:questionId/answer", (request, response) => {
+  const resumeQuestionWorkflow = async (questionId: string, workId: string, viewer: PlanViewer): Promise<void> => {
+    const continuation = aiWritePlanManager.claimQuestionContinuation(questionId, workId, viewer);
+    if (!continuation) return;
+    try {
+      const conversationId = typeof continuation.conversationId === "string" ? continuation.conversationId : "";
+      if (!conversationId) throw new AppError(409, "AI_QUESTION_CONTINUATION_MISSING", "提问缺少可恢复的对话状态");
+      const scope = parse(contextSchema, continuation.scope ?? { type: "none" }) as ContextScope;
+      const resumed = await ai.resumeUserQuestion({
+        questionId,
+        workId,
+        conversationId,
+        scope,
+        status: String(continuation.status ?? "rejected"),
+        answerText: String(continuation.answerText ?? ""),
+        ...(typeof continuation.modelId === "string" && continuation.modelId ? { modelId: continuation.modelId } : {}),
+        ...(typeof continuation.toolCallId === "string" && continuation.toolCallId ? { toolCallId: continuation.toolCallId } : {})
+      });
+      aiWritePlanManager.finishQuestionContinuation(questionId, { callId: resumed.callId ?? null, completed: true });
+    } catch (error) {
+      aiWritePlanManager.finishQuestionContinuation(questionId, { message: error instanceof Error ? error.message : "恢复失败" }, true);
+      throw error;
+    }
+  };
+  app.post("/api/works/:workId/ai/questions/:questionId/answer", async (request, response) => {
     const input = parse(answerAiUserQuestionSchema, request.body ?? {});
-    data(response, aiWritePlanManager.answerQuestion(
+    const viewer = planViewer();
+    aiWritePlanManager.answerQuestion(
       request.params.questionId,
-      planViewer(),
+      request.params.workId,
+      viewer,
       { ...(input.selectedOption !== undefined ? { selectedOption: input.selectedOption } : {}), ...(input.customAnswer !== undefined ? { customAnswer: input.customAnswer } : {}) }
-    ));
+    );
+    await resumeQuestionWorkflow(request.params.questionId, request.params.workId, viewer);
+    data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, viewer));
   });
-  app.post("/api/works/:workId/ai/questions/:questionId/reject", (request, response) => {
-    data(response, aiWritePlanManager.rejectQuestion(request.params.questionId, planViewer()));
+  app.post("/api/works/:workId/ai/questions/:questionId/reject", async (request, response) => {
+    const viewer = planViewer();
+    aiWritePlanManager.rejectQuestion(request.params.questionId, request.params.workId, viewer);
+    await resumeQuestionWorkflow(request.params.questionId, request.params.workId, viewer);
+    data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, viewer));
   });
 
   app.get("/api/works/:workId/providers", (request, response) => {
@@ -3711,6 +3742,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }
       const currentMessageId = String(begun.userMessage?.id ?? input.currentMessageId ?? "");
       if (begun.userMessage) sendEvent("user_message", { message: redactAiConversationMessage(begun.userMessage, permissions) });
+      if (aiWritePlanManager.latestPendingQuestion(conversationId)) {
+        throw new AppError(409, "AI_QUESTION_PENDING", "当前对话仍有待回答问题，请先回答或拒绝后再继续");
+      }
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: resolvedInstruction,

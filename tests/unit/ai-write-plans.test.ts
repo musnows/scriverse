@@ -6,6 +6,7 @@ import {
   intersectWorkModulePermissions,
   lineDiff,
   normalizePlanOperations,
+  planOperationRequirements,
   resolveAiWritePlanMaxOperations
 } from "../../src/ai-write-plans.js";
 import { AppError } from "../../src/errors.js";
@@ -160,6 +161,28 @@ describe("normalizePlanOperations", () => {
   });
 });
 
+describe("planOperationRequirements", () => {
+  it("角色关联字段与时间线引用要求关联模块权限", () => {
+    const [character] = normalizePlanOperations([{
+      opType: "create_entry",
+      entityType: "character",
+      input: { name: "林舟", raceId: "race-1", organizationIds: ["org-1"] }
+    }], 5);
+    expect(planOperationRequirements(character!)).toMatchObject({
+      writeModules: expect.arrayContaining(["characters", "races", "organizations"])
+    });
+
+    const [timeline] = normalizePlanOperations([{
+      opType: "create_entry",
+      entityType: "timeline-event",
+      input: { name: "相遇", chapterIds: ["chapter-1"], participantIds: ["character-1"] }
+    }], 5);
+    expect(planOperationRequirements(timeline!)).toMatchObject({
+      writeModules: expect.arrayContaining(["timeline", "prose", "characters"])
+    });
+  });
+});
+
 describe("AiWritePlanManager 工具开关与审批流水线", () => {
   let runtime: Runtime;
   let manager: AiWritePlanManager;
@@ -170,7 +193,8 @@ describe("AiWritePlanManager 工具开关与审批流水线", () => {
       database: runtime.database,
       store: runtime.store,
       auth: runtime.auth,
-      startAnalysisTask: (workId, input) => runtime.ai.createTask(workId, input as never)
+      resolveAnalysisTask: (workId, input) => runtime.ai.resolveTaskInput(workId, input),
+      startAnalysisTask: (workId, input) => runtime.store.createTask(workId, input)
     });
   });
 
@@ -247,15 +271,18 @@ describe("AiWritePlanManager 工具开关与审批流水线", () => {
     });
     expect(plan.operations[1]?.opTypeLabel).toBe("新增");
 
-    const executed = await manager.confirmPlan(plan.id, null);
+    const executed = await manager.confirmPlan(plan.id, workId, null);
     expect(executed.status).toBe("executed");
     expect(executed.operations.every((operation) => operation.result !== null)).toBe(true);
+    expect(executed.operations[0]?.auditRecords).toEqual([
+      expect.objectContaining({ action: "ai.plan_operation.update_entry", actor: expect.any(String) })
+    ]);
 
     const stored = await runtime.store.getSetting(settingId);
     expect(stored.title).toBe("新标题");
 
     // 重复确认：不产生第二次执行，也不产生第二个版本。
-    await expect(manager.confirmPlan(plan.id, null)).rejects.toMatchObject({ code: "AI_PLAN_ALREADY_DECIDED" });
+    await expect(manager.confirmPlan(plan.id, workId, null)).rejects.toMatchObject({ code: "AI_PLAN_ALREADY_DECIDED" });
     const versions = runtime.database.all<{ version_no: number }>(
       "SELECT version_no FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?",
       settingId
@@ -265,9 +292,9 @@ describe("AiWritePlanManager 工具开关与审批流水线", () => {
 
     // 撤销仍处于结果版本时可用；撤销本身也是一份待确认审批。
     expect(executed.undoAvailable).toBe(true);
-    const undoPlan = manager.createUndoPlan(plan.id, null);
+    const undoPlan = manager.createUndoPlan(plan.id, workId, null);
     expect(undoPlan.kind).toBe("undo");
-    const undone = await manager.confirmPlan(undoPlan.id, null);
+    const undone = await manager.confirmPlan(undoPlan.id, workId, null);
     expect(undone.status).toBe("executed");
     expect((await runtime.store.getSetting(settingId)).title).toBe("旧标题");
   });
@@ -287,11 +314,107 @@ describe("AiWritePlanManager 工具开关与审批流水线", () => {
     });
     // 在确认之前人为改动同一目标：版本漂移必须导致失效。
     await runtime.store.updateSetting(String(setting.id), { title: "人工改法" }, "manual", null, "人工调整");
-    await expect(manager.confirmPlan(plan.id, null)).rejects.toMatchObject({ code: "AI_PLAN_INVALIDATED" });
-    const after = manager.getPlanDetail(plan.id, null);
+    await expect(manager.confirmPlan(plan.id, workId, null)).rejects.toMatchObject({ code: "AI_PLAN_INVALIDATED" });
+    const after = manager.getPlanDetail(plan.id, workId, null);
     expect(after.status).toBe("invalidated");
     expect(after.invalidReason).toContain("已发生变化");
     expect((await runtime.store.getSetting(String(setting.id))).title).toBe("人工改法");
+  });
+
+  it("正文版本或关联对象变化会让批注计划失效", async () => {
+    const { work, chapter } = await seedChapter(runtime, "第一段。\n第二段。");
+    const workId = String(work.id);
+    enableTools(workId, ["annotations"]);
+    const plan = manager.createWritePlan({
+      workId,
+      conversationId: null,
+      initiator: null,
+      conversationOwnerUserId: null,
+      aiSummary: "在第二行添加待办",
+      operations: [{ opType: "create_annotation", chapterId: String(chapter.id), kind: "todo", startLine: 2, endLine: 2, note: "补充细节" }]
+    });
+    runtime.store.saveChapter(String(chapter.id), { content: "第一段已修改。\n第二段。" });
+    await expect(manager.confirmPlan(plan.id, workId, null)).rejects.toMatchObject({ code: "AI_PLAN_INVALIDATED" });
+    expect(runtime.database.get<{ count: number }>("SELECT COUNT(*) AS count FROM chapter_annotations")?.count).toBe(0);
+  });
+
+  it("审批与提问只允许发起人或对话归属用户查看处理", async () => {
+    const work = await runtime.store.createWork({ title: "隔离作品", author: "测试作者" });
+    const workId = String(work.id);
+    enableTools(workId, ["settings", "ask_user_questions"]);
+    const plan = manager.createWritePlan({
+      workId,
+      conversationId: "conversation-private",
+      initiator: null,
+      conversationOwnerUserId: null,
+      aiSummary: "新增私有设定",
+      operations: [{ opType: "create_entry", entityType: "setting", input: { title: "私有", category: "地点", content: "内容" } }]
+    });
+    runtime.database.run(
+      "UPDATE ai_write_plans SET initiator_user_id = 'user-a', conversation_owner_user_id = 'user-a' WHERE id = ?",
+      plan.id
+    );
+    expect(() => manager.getPlanDetail(plan.id, workId, { userId: "user-b", role: "user" })).toThrowError(/不存在/u);
+    expect(manager.listPlansForWork(workId, { userId: "user-b", role: "user" })).toEqual([]);
+
+    const question = manager.createQuestion({
+      workId,
+      conversationId: "conversation-private",
+      initiator: null,
+      recipientUserId: null,
+      question: "私有问题？",
+      options: ["甲", "乙"]
+    });
+    runtime.database.run(
+      "UPDATE ai_user_questions SET initiator_user_id = 'user-a', recipient_user_id = 'user-a' WHERE id = ?",
+      question.id
+    );
+    expect(() => manager.getQuestion(question.id, workId, { userId: "user-b", role: "user" })).toThrowError(/不存在/u);
+  });
+
+  it("空对话跟随工具开关，已有消息后冻结可写工具快照", async () => {
+    const work = await runtime.store.createWork({ title: "快照作品", author: "测试作者" });
+    const workId = String(work.id);
+    const conversation = runtime.store.createAiConversation(workId, "快照会话");
+    const conversationId = String(conversation.id);
+    expect(manager.getConversationTools(workId, conversationId).settings).toBe(false);
+    enableTools(workId, ["settings"]);
+    expect(manager.getConversationTools(workId, conversationId).settings).toBe(true);
+    runtime.store.addAiConversationMessage(conversationId, { role: "user", content: "开始对话" });
+    manager.updateToolSettings(workId, { settings: false }, null);
+    expect(manager.getConversationTools(workId, conversationId).settings).toBe(true);
+  });
+
+  it("新建详情包含系统默认字段，分析任务固化默认范围", async () => {
+    const work = await runtime.store.createWork({ title: "详情作品", author: "测试作者" });
+    const workId = String(work.id);
+    const provider = runtime.ai.createProvider({
+      name: "审批默认模型",
+      baseUrl: "https://approval-model.test/v1",
+      apiKey: "sk-approval-model-test",
+      status: "enabled"
+    });
+    runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = ?", String(provider.id));
+    const model = runtime.ai.createModel(String(provider.id), {
+      displayName: "审批默认模型",
+      modelId: "approval-default-model"
+    });
+    runtime.ai.setTaskDefault(workId, "book-analysis", String(model.id));
+    enableTools(workId, ["characters", "analysis_tasks"]);
+    const plan = manager.createWritePlan({
+      workId,
+      conversationId: null,
+      initiator: null,
+      conversationOwnerUserId: null,
+      aiSummary: "新建角色并分析",
+      operations: [
+        { opType: "create_entry", entityType: "character", input: { name: "林舟" } },
+        { opType: "create_task", taskType: "structure" }
+      ]
+    });
+    expect(plan.operations[0]?.fields.map((field) => field.key)).toEqual(expect.arrayContaining(["name", "isDead", "aliases", "organizationIds"]));
+    expect(plan.operations[1]?.task?.scopeSummary).toContain("全书");
+    expect(plan.operations[1]?.task?.modelId).toBe(String(model.id));
   });
 
   it("拒绝操作走 rejected 分支且永不触发写入", async () => {
@@ -306,7 +429,7 @@ describe("AiWritePlanManager 工具开关与审批流水线", () => {
       aiSummary: "新建角色",
       operations: [{ opType: "create_entry", entityType: "character", input: { name: "路人甲" } }]
     });
-    const rejected = manager.rejectPlan(plan.id, null);
+    const rejected = manager.rejectPlan(plan.id, workId, null);
     expect(rejected.status).toBe("rejected");
     const count = runtime.database.get<{ count: number }>("SELECT COUNT(*) AS count FROM characters WHERE work_id = ?", workId);
     expect(Number(count?.count ?? 0)).toBe(0);
@@ -351,10 +474,10 @@ describe("AiWritePlanManager 工具开关与审批流水线", () => {
     expect(question.options[0]).toMatchObject({ index: 0, label: "林舟", recommended: true });
     expect(question.status).toBe("pending");
 
-    const answered = manager.answerQuestion(question.id, null, { selectedOption: 1 });
+    const answered = manager.answerQuestion(question.id, workId, null, { selectedOption: 1 });
     expect(answered).toMatchObject({ status: "answered", selectedOption: 1, answerText: "陈砚" });
     // answerQuestion 是同步方法：重复回答必须同步抛出且不产生副作用。
-    expect(() => manager.answerQuestion(question.id, null, { customAnswer: "再答一次" }))
+    expect(() => manager.answerQuestion(question.id, workId, null, { customAnswer: "再答一次" }))
       .toThrowError(/问题已被处理/u);
 
     const second = manager.createQuestion({
@@ -367,9 +490,47 @@ describe("AiWritePlanManager 工具开关与审批流水线", () => {
     });
     // 新提问会成为会话中唯一的待回答问题。
     expect(manager.latestPendingQuestion("conv-1")?.id).toBe(second.id);
-    const custom = manager.answerQuestion(second.id, null, { customAnswer: "沈青梧" });
+    const custom = manager.answerQuestion(second.id, workId, null, { customAnswer: "沈青梧" });
     expect(custom.isCustomAnswer).toBe(true);
     expect(custom.answerText).toBe("沈青梧");
     expect(manager.latestPendingQuestion("conv-1")).toBeNull();
+  });
+
+  it("待回答问题阻止写计划且 continuation 只能认领一次", async () => {
+    const work = await runtime.store.createWork({ title: "阻塞提问", author: "测试作者" });
+    const workId = String(work.id);
+    enableTools(workId, ["settings", "ask_user_questions"]);
+    const question = manager.createQuestion({
+      workId,
+      conversationId: "conv-blocked",
+      initiator: null,
+      recipientUserId: null,
+      question: "选择方案？",
+      options: ["甲", "乙"],
+      toolCallId: "tool-question-1"
+    });
+    manager.saveQuestionContinuation(question.id, {
+      conversationId: "conv-blocked",
+      workId,
+      scope: { type: "none" },
+      modelId: "model-1"
+    });
+    expect(() => manager.createWritePlan({
+      workId,
+      conversationId: "conv-blocked",
+      initiator: null,
+      conversationOwnerUserId: null,
+      aiSummary: "不能提前写入",
+      operations: [{ opType: "create_entry", entityType: "setting", input: { title: "未确认", category: "地点", content: "内容" } }]
+    })).toThrowError(/待回答/u);
+    manager.answerQuestion(question.id, workId, null, { selectedOption: 0 });
+    expect(manager.claimQuestionContinuation(question.id, workId, null)).toMatchObject({
+      conversationId: "conv-blocked",
+      answerText: "甲",
+      toolCallId: "tool-question-1"
+    });
+    expect(manager.claimQuestionContinuation(question.id, workId, null)).toBeNull();
+    manager.finishQuestionContinuation(question.id, { completed: true });
+    expect(manager.getQuestion(question.id, workId, null).resumeState).toBe("completed");
   });
 });
