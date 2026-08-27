@@ -612,27 +612,9 @@ export class Database {
         decided_at TEXT
       );
 
-      CREATE TABLE IF NOT EXISTS roleplay_memory_scopes (
-        id TEXT PRIMARY KEY,
-        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
-        created_by_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-        roleplay_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
-        roleplay_user_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
-        roleplay_character_name TEXT NOT NULL DEFAULT '',
-        roleplay_user_character_name TEXT NOT NULL DEFAULT '',
-        parent_scope_id TEXT REFERENCES roleplay_memory_scopes(id) ON DELETE SET NULL,
-        base_revision_no INTEGER NOT NULL DEFAULT 0 CHECK(base_revision_no >= 0),
-        revision_no INTEGER NOT NULL DEFAULT 0 CHECK(revision_no >= 0),
-        title TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived')),
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
       CREATE TABLE IF NOT EXISTS ai_conversations (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
-        roleplay_memory_scope_id TEXT REFERENCES roleplay_memory_scopes(id) ON DELETE SET NULL,
         roleplay_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
         roleplay_user_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
         task_type TEXT CHECK(task_type IN ('chat', 'roleplay', 'continue', 'polish')),
@@ -658,15 +640,16 @@ export class Database {
         citations_json TEXT NOT NULL DEFAULT '[]',
         metadata_json TEXT NOT NULL DEFAULT '{}',
         request_id TEXT,
-        roleplay_memory_revision INTEGER CHECK(roleplay_memory_revision IS NULL OR roleplay_memory_revision >= 0),
         created_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS roleplay_memories (
         id TEXT PRIMARY KEY,
-        scope_id TEXT NOT NULL REFERENCES roleplay_memory_scopes(id) ON DELETE CASCADE,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
         category TEXT NOT NULL CHECK(category IN ('event', 'state', 'relationship', 'commitment', 'knowledge', 'scene')),
         content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 2000),
+        content_hash TEXT NOT NULL CHECK(length(content_hash) = 64),
         importance TEXT NOT NULL DEFAULT 'medium' CHECK(importance IN ('low', 'medium', 'high')),
         certainty TEXT NOT NULL DEFAULT 'experienced' CHECK(certainty IN ('experienced', 'observed', 'heard', 'believed')),
         origin TEXT NOT NULL DEFAULT 'roleplay' CHECK(origin = 'roleplay'),
@@ -674,8 +657,6 @@ export class Database {
         status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'archived')),
         is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0, 1)),
         version_no INTEGER NOT NULL DEFAULT 1 CHECK(version_no > 0),
-        created_revision INTEGER NOT NULL CHECK(created_revision >= 0),
-        superseded_revision INTEGER CHECK(superseded_revision IS NULL OR superseded_revision >= created_revision),
         superseded_by_memory_id TEXT REFERENCES roleplay_memories(id) ON DELETE SET NULL,
         source_type TEXT NOT NULL CHECK(source_type IN ('ai', 'manual')),
         source_assistant_message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
@@ -684,7 +665,8 @@ export class Database {
         updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        UNIQUE(scope_id, idempotency_key)
+        UNIQUE(character_id, content_hash),
+        UNIQUE(character_id, idempotency_key)
       );
 
       CREATE TABLE IF NOT EXISTS roleplay_memory_sources (
@@ -693,6 +675,8 @@ export class Database {
         conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE SET NULL,
         message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
         message_role TEXT NOT NULL CHECK(message_role IN ('user', 'assistant')),
+        source_created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        source_created_at TEXT NOT NULL,
         evidence_snapshot TEXT NOT NULL CHECK(length(evidence_snapshot) <= 2000),
         created_at TEXT NOT NULL,
         UNIQUE(memory_id, message_id)
@@ -702,14 +686,13 @@ export class Database {
         id TEXT PRIMARY KEY,
         memory_id TEXT NOT NULL REFERENCES roleplay_memories(id) ON DELETE CASCADE,
         version_no INTEGER NOT NULL CHECK(version_no > 0),
-        scope_revision INTEGER NOT NULL CHECK(scope_revision >= 0),
         category TEXT NOT NULL CHECK(category IN ('event', 'state', 'relationship', 'commitment', 'knowledge', 'scene')),
         content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 2000),
         importance TEXT NOT NULL CHECK(importance IN ('low', 'medium', 'high')),
         certainty TEXT NOT NULL CHECK(certainty IN ('experienced', 'observed', 'heard', 'believed')),
         status TEXT NOT NULL CHECK(status IN ('active', 'superseded', 'archived')),
         is_pinned INTEGER NOT NULL CHECK(is_pinned IN (0, 1)),
-        action TEXT NOT NULL CHECK(action IN ('created', 'edited', 'pinned', 'archived', 'restored', 'superseded', 'cloned')),
+        action TEXT NOT NULL CHECK(action IN ('created', 'edited', 'pinned', 'archived', 'restored', 'superseded', 'merged')),
         actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
         created_at TEXT NOT NULL,
         UNIQUE(memory_id, version_no)
@@ -896,16 +879,12 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_ai_suggestions_work ON ai_suggestions(work_id, status, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversations_work ON ai_conversations(work_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversation_messages ON ai_conversation_messages(conversation_id, created_at);
-      CREATE INDEX IF NOT EXISTS idx_roleplay_memory_scopes_owner
-        ON roleplay_memory_scopes(work_id, created_by_user_id, status, updated_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_roleplay_memory_scopes_character
-        ON roleplay_memory_scopes(work_id, roleplay_character_id, roleplay_user_character_id, updated_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_roleplay_memories_scope
-        ON roleplay_memories(scope_id, status, is_pinned DESC, importance DESC, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_memories_character
+        ON roleplay_memories(work_id, character_id, status, is_pinned DESC, importance DESC, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_roleplay_memory_sources_memory
         ON roleplay_memory_sources(memory_id, created_at, id);
-      CREATE INDEX IF NOT EXISTS idx_roleplay_memory_versions_revision
-        ON roleplay_memory_versions(memory_id, scope_revision DESC, version_no DESC);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_memory_versions_memory
+        ON roleplay_memory_versions(memory_id, version_no DESC);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_conversation_stream_requests_active
         ON ai_conversation_stream_requests(conversation_id) WHERE status = 'in_progress';
       CREATE INDEX IF NOT EXISTS idx_ai_conversation_stream_requests_lease
@@ -4632,47 +4611,21 @@ export class Database {
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
     const roleplayMemoryTablesPresent = [
-      "roleplay_memory_scopes",
       "roleplay_memories",
       "roleplay_memory_sources",
       "roleplay_memory_versions",
       "roleplay_memory_fts"
     ].every((name) => this.get("SELECT 1 AS present FROM sqlite_master WHERE name = ?", name) !== undefined);
-    const roleplayMemoryScopeColumnPresent = this.all("PRAGMA table_info(ai_conversations)")
-      .some((column) => String(column.name) === "roleplay_memory_scope_id");
-    const roleplayMemoryRevisionColumnPresent = this.all("PRAGMA table_info(ai_conversation_messages)")
-      .some((column) => String(column.name) === "roleplay_memory_revision");
-    if (!applied.has(122) || !roleplayMemoryTablesPresent || !roleplayMemoryScopeColumnPresent || !roleplayMemoryRevisionColumnPresent) {
+    const roleplayMemoryColumns = new Set(this.all("PRAGMA table_info(roleplay_memories)").map((column) => String(column.name)));
+    if (!applied.has(122) || !roleplayMemoryTablesPresent || !roleplayMemoryColumns.has("character_id") || !roleplayMemoryColumns.has("content_hash")) {
       this.transaction(() => {
-        this.run(`CREATE TABLE IF NOT EXISTS roleplay_memory_scopes (
-          id TEXT PRIMARY KEY,
-          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
-          created_by_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-          roleplay_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
-          roleplay_user_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
-          roleplay_character_name TEXT NOT NULL DEFAULT '',
-          roleplay_user_character_name TEXT NOT NULL DEFAULT '',
-          parent_scope_id TEXT REFERENCES roleplay_memory_scopes(id) ON DELETE SET NULL,
-          base_revision_no INTEGER NOT NULL DEFAULT 0 CHECK(base_revision_no >= 0),
-          revision_no INTEGER NOT NULL DEFAULT 0 CHECK(revision_no >= 0),
-          title TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived')),
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        )`);
-        const conversationColumns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
-        if (!conversationColumns.has("roleplay_memory_scope_id")) {
-          this.run("ALTER TABLE ai_conversations ADD COLUMN roleplay_memory_scope_id TEXT REFERENCES roleplay_memory_scopes(id) ON DELETE SET NULL");
-        }
-        const messageColumns = new Set(this.all("PRAGMA table_info(ai_conversation_messages)").map((row) => String(row.name)));
-        if (!messageColumns.has("roleplay_memory_revision")) {
-          this.run("ALTER TABLE ai_conversation_messages ADD COLUMN roleplay_memory_revision INTEGER CHECK(roleplay_memory_revision IS NULL OR roleplay_memory_revision >= 0)");
-        }
         this.run(`CREATE TABLE IF NOT EXISTS roleplay_memories (
           id TEXT PRIMARY KEY,
-          scope_id TEXT NOT NULL REFERENCES roleplay_memory_scopes(id) ON DELETE CASCADE,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
           category TEXT NOT NULL CHECK(category IN ('event', 'state', 'relationship', 'commitment', 'knowledge', 'scene')),
           content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 2000),
+          content_hash TEXT NOT NULL CHECK(length(content_hash) = 64),
           importance TEXT NOT NULL DEFAULT 'medium' CHECK(importance IN ('low', 'medium', 'high')),
           certainty TEXT NOT NULL DEFAULT 'experienced' CHECK(certainty IN ('experienced', 'observed', 'heard', 'believed')),
           origin TEXT NOT NULL DEFAULT 'roleplay' CHECK(origin = 'roleplay'),
@@ -4680,8 +4633,6 @@ export class Database {
           status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'archived')),
           is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0, 1)),
           version_no INTEGER NOT NULL DEFAULT 1 CHECK(version_no > 0),
-          created_revision INTEGER NOT NULL CHECK(created_revision >= 0),
-          superseded_revision INTEGER CHECK(superseded_revision IS NULL OR superseded_revision >= created_revision),
           superseded_by_memory_id TEXT REFERENCES roleplay_memories(id) ON DELETE SET NULL,
           source_type TEXT NOT NULL CHECK(source_type IN ('ai', 'manual')),
           source_assistant_message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
@@ -4690,7 +4641,8 @@ export class Database {
           updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
-          UNIQUE(scope_id, idempotency_key)
+          UNIQUE(character_id, content_hash),
+          UNIQUE(character_id, idempotency_key)
         )`);
         this.run(`CREATE TABLE IF NOT EXISTS roleplay_memory_sources (
           id TEXT PRIMARY KEY,
@@ -4698,6 +4650,8 @@ export class Database {
           conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE SET NULL,
           message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
           message_role TEXT NOT NULL CHECK(message_role IN ('user', 'assistant')),
+          source_created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          source_created_at TEXT NOT NULL,
           evidence_snapshot TEXT NOT NULL CHECK(length(evidence_snapshot) <= 2000),
           created_at TEXT NOT NULL,
           UNIQUE(memory_id, message_id)
@@ -4706,73 +4660,46 @@ export class Database {
           id TEXT PRIMARY KEY,
           memory_id TEXT NOT NULL REFERENCES roleplay_memories(id) ON DELETE CASCADE,
           version_no INTEGER NOT NULL CHECK(version_no > 0),
-          scope_revision INTEGER NOT NULL CHECK(scope_revision >= 0),
           category TEXT NOT NULL CHECK(category IN ('event', 'state', 'relationship', 'commitment', 'knowledge', 'scene')),
           content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 2000),
           importance TEXT NOT NULL CHECK(importance IN ('low', 'medium', 'high')),
           certainty TEXT NOT NULL CHECK(certainty IN ('experienced', 'observed', 'heard', 'believed')),
           status TEXT NOT NULL CHECK(status IN ('active', 'superseded', 'archived')),
           is_pinned INTEGER NOT NULL CHECK(is_pinned IN (0, 1)),
-          action TEXT NOT NULL CHECK(action IN ('created', 'edited', 'pinned', 'archived', 'restored', 'superseded', 'cloned')),
+          action TEXT NOT NULL CHECK(action IN ('created', 'edited', 'pinned', 'archived', 'restored', 'superseded', 'merged')),
           actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
           created_at TEXT NOT NULL,
           UNIQUE(memory_id, version_no)
         )`);
-        this.run("CREATE INDEX IF NOT EXISTS idx_ai_conversations_roleplay_memory_scope ON ai_conversations(roleplay_memory_scope_id)");
-        this.run("CREATE INDEX IF NOT EXISTS idx_ai_conversation_messages_roleplay_revision ON ai_conversation_messages(conversation_id, roleplay_memory_revision, created_at)");
-        this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memory_scopes_owner ON roleplay_memory_scopes(work_id, created_by_user_id, status, updated_at DESC)");
-        this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memory_scopes_character ON roleplay_memory_scopes(work_id, roleplay_character_id, roleplay_user_character_id, updated_at DESC)");
-        this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memories_scope ON roleplay_memories(scope_id, status, is_pinned DESC, importance DESC, updated_at DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memories_character ON roleplay_memories(work_id, character_id, status, is_pinned DESC, importance DESC, updated_at DESC)");
         this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memory_sources_memory ON roleplay_memory_sources(memory_id, created_at, id)");
-        this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memory_versions_revision ON roleplay_memory_versions(memory_id, scope_revision DESC, version_no DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memory_versions_memory ON roleplay_memory_versions(memory_id, version_no DESC)");
         this.raw.exec(`
           CREATE VIRTUAL TABLE IF NOT EXISTS roleplay_memory_fts USING fts5(
             memory_id UNINDEXED,
-            scope_id UNINDEXED,
+            character_id UNINDEXED,
             category UNINDEXED,
             status UNINDEXED,
             content,
             tokenize='trigram'
           );
           CREATE TRIGGER IF NOT EXISTS roleplay_memory_fts_ai AFTER INSERT ON roleplay_memories BEGIN
-            INSERT INTO roleplay_memory_fts(memory_id, scope_id, category, status, content)
-            VALUES (new.id, new.scope_id, new.category, new.status, lower(new.content));
+            INSERT INTO roleplay_memory_fts(memory_id, character_id, category, status, content)
+            VALUES (new.id, new.character_id, new.category, new.status, lower(new.content));
           END;
           CREATE TRIGGER IF NOT EXISTS roleplay_memory_fts_ad AFTER DELETE ON roleplay_memories BEGIN
             DELETE FROM roleplay_memory_fts WHERE memory_id = old.id;
           END;
-          CREATE TRIGGER IF NOT EXISTS roleplay_memory_fts_au AFTER UPDATE OF scope_id, category, status, content ON roleplay_memories BEGIN
+          CREATE TRIGGER IF NOT EXISTS roleplay_memory_fts_au AFTER UPDATE OF character_id, category, status, content ON roleplay_memories BEGIN
             DELETE FROM roleplay_memory_fts WHERE memory_id = old.id;
-            INSERT INTO roleplay_memory_fts(memory_id, scope_id, category, status, content)
-            VALUES (new.id, new.scope_id, new.category, new.status, lower(new.content));
+            INSERT INTO roleplay_memory_fts(memory_id, character_id, category, status, content)
+            VALUES (new.id, new.character_id, new.category, new.status, lower(new.content));
           END;
         `);
         this.run("DELETE FROM roleplay_memory_fts");
-        this.run(`INSERT INTO roleplay_memory_fts(memory_id, scope_id, category, status, content)
-          SELECT id, scope_id, category, status, lower(content) FROM roleplay_memories`);
+        this.run(`INSERT INTO roleplay_memory_fts(memory_id, character_id, category, status, content)
+          SELECT id, character_id, category, status, lower(content) FROM roleplay_memories`);
         const timestamp = new Date().toISOString();
-        this.run(`INSERT OR IGNORE INTO roleplay_memory_scopes (
-          id, work_id, created_by_user_id, roleplay_character_id, roleplay_user_character_id,
-          roleplay_character_name, roleplay_user_character_name, title, created_at, updated_at
-        )
-        SELECT
-          'roleplay_scope_migration_' || conversation.id,
-          conversation.work_id,
-          conversation.created_by_user_id,
-          conversation.roleplay_character_id,
-          conversation.roleplay_user_character_id,
-          COALESCE(roleplay_character.name, ''),
-          COALESCE(user_character.name, ''),
-          substr(conversation.title || ' · 记忆线', 1, 200),
-          conversation.created_at,
-          ?
-        FROM ai_conversations conversation
-        LEFT JOIN characters roleplay_character ON roleplay_character.id = conversation.roleplay_character_id
-        LEFT JOIN characters user_character ON user_character.id = conversation.roleplay_user_character_id
-        WHERE conversation.roleplay_character_id IS NOT NULL`, timestamp);
-        this.run(`UPDATE ai_conversations
-          SET roleplay_memory_scope_id = 'roleplay_scope_migration_' || id
-          WHERE roleplay_character_id IS NOT NULL AND roleplay_memory_scope_id IS NULL`);
         this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (122, ?)", timestamp);
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");

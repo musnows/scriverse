@@ -1514,9 +1514,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const assertRequestAiConversationOwner = (request: Request, conversationId: string): void => {
     if (request.authUser) store.assertAiConversationOwner(conversationId, request.authUser.userId);
   };
-  const assertRequestRoleplayMemoryOwner = (request: Request, memoryId: string): void => {
-    if (request.authUser) store.assertRoleplayMemoryOwner(memoryId, request.authUser.userId);
-  };
   const resolveConversationModelId = (workId: string, conversationId: string | undefined, requestedModelId: string | undefined): string | undefined => {
     if (!conversationId) return requestedModelId;
     const lockedModelId = store.getAiConversationLockedModelId(conversationId, workId);
@@ -3163,9 +3160,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       redactAiConversation(conversation, permissions)
     )));
   });
-  app.get("/api/works/:workId/roleplay-memory-scopes", (request, response) => {
-    data(response, store.listRoleplayMemoryScopes(request.params.workId, request.authUser?.userId));
-  });
   app.post("/api/works/:workId/ai-conversations", (request, response) => {
     const input = parse(z.object({
       title: z.string().max(200).optional(),
@@ -3241,21 +3235,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const permissions = requestPermissions(request, String(updated.workId));
     data(response, redactAiConversation(updated, permissions));
   });
-  app.post("/api/ai-conversations/:conversationId/roleplay-memory-scope", (request, response) => {
-    const input = parse(z.object({
-      sourceScopeId: identifier.nullable().optional(),
-      title: z.string().trim().min(1).max(200).optional()
-    }).strict(), request.body ?? {});
-    const updated = store.setAiConversationRoleplayMemoryScope(
-      request.params.conversationId,
-      input.sourceScopeId,
-      input.title
-    );
-    data(response, updated, 201);
-  });
-  app.get("/api/ai-conversations/:conversationId/roleplay-memories", (request, response) => {
+  app.get("/api/characters/:characterId/roleplay-memories", (request, response) => {
     const query = parse(roleplayMemoryListQuerySchema, request.query);
-    data(response, store.listRoleplayMemories(request.params.conversationId, {
+    data(response, store.listRoleplayMemories(request.params.characterId, {
       query: query.q,
       categories: query.categories,
       statuses: query.statuses,
@@ -3263,9 +3245,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       limit: query.limit
     }));
   });
-  app.post("/api/ai-conversations/:conversationId/roleplay-memories", (request, response) => {
+  app.post("/api/characters/:characterId/roleplay-memories", (request, response) => {
     const input = parse(roleplayMemoryInputSchema, request.body);
-    data(response, store.createRoleplayMemory(request.params.conversationId, input), 201);
+    data(response, store.createRoleplayMemory(request.params.characterId, input), 201);
   });
   app.post("/api/ai-conversations/:conversationId/messages", (request, response) => {
     const input = parse(z.object({
@@ -3330,17 +3312,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     });
   });
   app.patch("/api/roleplay-memories/:memoryId", (request, response) => {
-    assertRequestRoleplayMemoryOwner(request, request.params.memoryId);
     const input = parse(roleplayMemoryUpdateSchema, request.body);
     data(response, store.updateRoleplayMemory(request.params.memoryId, input));
   });
   app.delete("/api/roleplay-memories/:memoryId", (request, response) => {
-    assertRequestRoleplayMemoryOwner(request, request.params.memoryId);
     const input = parse(z.object({ expectedVersion: z.number().int().min(1) }).strict(), request.body);
     data(response, store.setRoleplayMemoryArchived(request.params.memoryId, true, input.expectedVersion));
   });
   app.post("/api/roleplay-memories/:memoryId/restore", (request, response) => {
-    assertRequestRoleplayMemoryOwner(request, request.params.memoryId);
     const input = parse(z.object({ expectedVersion: z.number().int().min(1) }).strict(), request.body);
     data(response, store.setRoleplayMemoryArchived(request.params.memoryId, false, input.expectedVersion));
   });

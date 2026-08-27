@@ -102,7 +102,7 @@ describe("数据库版本化迁移", () => {
     database.close();
   });
 
-  it("迁移 122 为历史角色扮演建立空记忆线且不迁移 compact 摘要", () => {
+  it("迁移 122 建立角色共享记忆表且不迁移 compact 摘要", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-122-"));
     roots.push(root);
     const filename = join(root, "migration-122.db");
@@ -127,12 +127,17 @@ describe("数据库版本化迁移", () => {
     current.close();
 
     const migrated = new Database(filename);
-    expect(migrated.get(
-      `SELECT scope.roleplay_character_name, scope.revision_no
-       FROM ai_conversations conversation
-       JOIN roleplay_memory_scopes scope ON scope.id = conversation.roleplay_memory_scope_id
-       WHERE conversation.id = 'conversation-roleplay-memory'`
-    )).toEqual({ roleplay_character_name: "林舟", revision_no: 0 });
+    expect(migrated.all("PRAGMA table_info(roleplay_memories)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "work_id",
+      "character_id",
+      "content_hash",
+      "origin",
+      "canonical"
+    ]));
+    expect(migrated.all("PRAGMA table_info(roleplay_memories)").map((column) => column.name)).not.toContain("scope_id");
+    expect(migrated.all("PRAGMA table_info(ai_conversations)").map((column) => column.name)).not.toContain("roleplay_memory_scope_id");
+    expect(migrated.all("PRAGMA table_info(ai_conversation_messages)").map((column) => column.name)).not.toContain("roleplay_memory_revision");
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE name = 'roleplay_memory_scopes'")).toBeUndefined();
     expect(migrated.get("SELECT COUNT(*) AS count FROM roleplay_memories")).toEqual({ count: 0 });
     expect(migrated.get("SELECT compacted_summary FROM ai_conversations WHERE id = 'conversation-roleplay-memory'")).toEqual({
       compacted_summary: JSON.stringify({ storyFacts: [{ text: "这只是上下文摘要" }] })

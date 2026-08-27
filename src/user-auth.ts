@@ -206,9 +206,7 @@ function workIdFromPath(database: Database, pathname: string): string | null {
   if (resource === "sync" && decoded[3]?.toLocaleLowerCase("en-US") === "works" && decoded[4]) return decoded[4];
   if (resource === "roleplay-memories" && decoded[3]) {
     const row = database.get<{ work_id: string }>(
-      `SELECT scope.work_id FROM roleplay_memories memory
-       JOIN roleplay_memory_scopes scope ON scope.id = memory.scope_id
-       WHERE memory.id = ?`,
+      "SELECT work_id FROM roleplay_memories WHERE id = ?",
       decoded[3]
     );
     if (row) return row.work_id;
@@ -1352,8 +1350,11 @@ function workModuleRequirements(request: Request, write: boolean, annotationAcce
   if (write && conversationRoleplayWrite) {
     return { read: ["characters"], write: ["ai-chat"] };
   }
-  if (/^\/api\/(?:works\/[^/]+\/roleplay-memory-scopes|roleplay-memories\/[^/]+)(?:\/|$)/u.test(pathname)) {
-    return write ? { write: ["ai-chat"] } : { read: ["ai-chat"] };
+  if (/^\/api\/characters\/[^/]+\/roleplay-memories(?:\/|$)/u.test(pathname)) {
+    return write ? { write: ["characters"] } : { read: ["characters"] };
+  }
+  if (/^\/api\/roleplay-memories\/[^/]+(?:\/|$)/u.test(pathname)) {
+    return { write: ["characters"] };
   }
   const conversationHistoryWrite = /^\/api\/ai-conversations\/[^/]+\/(?:fork|context\/prepare|compact)$/u.test(pathname)
     || (/^\/api\/works\/[^/]+\/chat\/stream$/u.test(pathname) && typeof requestBodyRecord(request).conversationId === "string");
