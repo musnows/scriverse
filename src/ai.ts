@@ -7315,14 +7315,14 @@ export class AiManager {
     toolCall: CompletionToolCall,
     maximumResultChars = AGENT_TOOL_RESULT_MAX_CHARS,
     roleplayCharacterId: string | null = null,
-    conversationId: string | null = null,
-    stagedRoleplayMemoryCandidates?: RoleplayMemoryCandidate[],
     allowedToolIds?: ReadonlySet<AgentToolId>,
     signal?: AbortSignal,
     onUsage?: (usage: ResolvedAiTokenUsage) => void,
     scope?: ContextScope,
     model?: ModelRow,
-    provider?: ProviderRow
+    provider?: ProviderRow,
+    conversationId: string | null = null,
+    stagedRoleplayMemoryCandidates?: RoleplayMemoryCandidate[]
   ): Promise<AgentToolCallExecution> {
     const name = toolCall.function.name;
     const calledAt = now();
@@ -9205,14 +9205,14 @@ export class AiManager {
             toolCall,
             maximumResultChars,
             generationRoleplayCharacterId,
-            input.conversationId ?? null,
-            stagedRoleplayMemoryCandidates,
             allowedToolIds,
             input.signal,
             trackUsage,
             input.scope,
             model,
-            provider
+            provider,
+            input.conversationId ?? null,
+            stagedRoleplayMemoryCandidates
           );
           const { nativeImage, ...toolExecution } = execution;
           logger.info("ai.tool_call.completed", {
