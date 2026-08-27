@@ -44,6 +44,12 @@ import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH, readableHybridSe
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes, WORK_AGENT_TOOL_IDS } from "./store.js";
 import { composeRoleplayStoredUserContent } from "./roleplay-turn.js";
+import {
+  ROLEPLAY_MEMORY_CATEGORIES,
+  ROLEPLAY_MEMORY_CERTAINTY,
+  ROLEPLAY_MEMORY_IMPORTANCE,
+  ROLEPLAY_MEMORY_STATUSES
+} from "./roleplay-memory.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
@@ -96,6 +102,32 @@ const optionalStrings = z.array(z.string()).optional();
 const jsonObject = z.record(z.string(), z.unknown());
 const chapterTypeSchema = z.enum(["正文", "设定", "作者的话", "其他"]);
 const aiConversationTaskTypeSchema = z.enum(aiConversationTaskTypes);
+const roleplayMemoryInputSchema = z.object({
+  category: z.enum(ROLEPLAY_MEMORY_CATEGORIES),
+  content: z.string().trim().min(1).max(2_000),
+  importance: z.enum(ROLEPLAY_MEMORY_IMPORTANCE).optional(),
+  certainty: z.enum(ROLEPLAY_MEMORY_CERTAINTY).optional(),
+  isPinned: z.boolean().optional()
+}).strict();
+const roleplayMemoryListQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  categories: z.preprocess(
+    (value) => typeof value === "string" ? value.split(",").filter(Boolean) : value,
+    z.array(z.enum(ROLEPLAY_MEMORY_CATEGORIES)).max(ROLEPLAY_MEMORY_CATEGORIES.length).optional()
+  ),
+  statuses: z.preprocess(
+    (value) => typeof value === "string" ? value.split(",").filter(Boolean) : value,
+    z.array(z.enum(ROLEPLAY_MEMORY_STATUSES)).max(ROLEPLAY_MEMORY_STATUSES.length).optional()
+  ),
+  cursor: z.coerce.number().int().min(0).max(100_000).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional()
+}).strict();
+const roleplayMemoryUpdateSchema = roleplayMemoryInputSchema.partial().extend({
+  expectedVersion: z.number().int().min(1)
+}).strict().refine(
+  (value) => Object.keys(value).some((key) => key !== "expectedVersion"),
+  "至少提供一个要修改的字段"
+);
 const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
 const attachmentPermissionModuleSchema = z.enum(attachmentPermissionModules);
 const maximumImportedTextLength = 20_000_000;
@@ -1481,6 +1513,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   };
   const assertRequestAiConversationOwner = (request: Request, conversationId: string): void => {
     if (request.authUser) store.assertAiConversationOwner(conversationId, request.authUser.userId);
+  };
+  const assertRequestRoleplayMemoryOwner = (request: Request, memoryId: string): void => {
+    if (request.authUser) store.assertRoleplayMemoryOwner(memoryId, request.authUser.userId);
   };
   const resolveConversationModelId = (workId: string, conversationId: string | undefined, requestedModelId: string | undefined): string | undefined => {
     if (!conversationId) return requestedModelId;
@@ -3128,6 +3163,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       redactAiConversation(conversation, permissions)
     )));
   });
+  app.get("/api/works/:workId/roleplay-memory-scopes", (request, response) => {
+    data(response, store.listRoleplayMemoryScopes(request.params.workId, request.authUser?.userId));
+  });
   app.post("/api/works/:workId/ai-conversations", (request, response) => {
     const input = parse(z.object({
       title: z.string().max(200).optional(),
@@ -3203,6 +3241,32 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const permissions = requestPermissions(request, String(updated.workId));
     data(response, redactAiConversation(updated, permissions));
   });
+  app.post("/api/ai-conversations/:conversationId/roleplay-memory-scope", (request, response) => {
+    const input = parse(z.object({
+      sourceScopeId: identifier.nullable().optional(),
+      title: z.string().trim().min(1).max(200).optional()
+    }).strict(), request.body ?? {});
+    const updated = store.setAiConversationRoleplayMemoryScope(
+      request.params.conversationId,
+      input.sourceScopeId,
+      input.title
+    );
+    data(response, updated, 201);
+  });
+  app.get("/api/ai-conversations/:conversationId/roleplay-memories", (request, response) => {
+    const query = parse(roleplayMemoryListQuerySchema, request.query);
+    data(response, store.listRoleplayMemories(request.params.conversationId, {
+      query: query.q,
+      categories: query.categories,
+      statuses: query.statuses,
+      cursor: query.cursor,
+      limit: query.limit
+    }));
+  });
+  app.post("/api/ai-conversations/:conversationId/roleplay-memories", (request, response) => {
+    const input = parse(roleplayMemoryInputSchema, request.body);
+    data(response, store.createRoleplayMemory(request.params.conversationId, input), 201);
+  });
   app.post("/api/ai-conversations/:conversationId/messages", (request, response) => {
     const input = parse(z.object({
       role: z.enum(["user", "assistant"]),
@@ -3264,6 +3328,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         scope: input.scope
       })
     });
+  });
+  app.patch("/api/roleplay-memories/:memoryId", (request, response) => {
+    assertRequestRoleplayMemoryOwner(request, request.params.memoryId);
+    const input = parse(roleplayMemoryUpdateSchema, request.body);
+    data(response, store.updateRoleplayMemory(request.params.memoryId, input));
+  });
+  app.delete("/api/roleplay-memories/:memoryId", (request, response) => {
+    assertRequestRoleplayMemoryOwner(request, request.params.memoryId);
+    const input = parse(z.object({ expectedVersion: z.number().int().min(1) }).strict(), request.body);
+    data(response, store.setRoleplayMemoryArchived(request.params.memoryId, true, input.expectedVersion));
+  });
+  app.post("/api/roleplay-memories/:memoryId/restore", (request, response) => {
+    assertRequestRoleplayMemoryOwner(request, request.params.memoryId);
+    const input = parse(z.object({ expectedVersion: z.number().int().min(1) }).strict(), request.body);
+    data(response, store.setRoleplayMemoryArchived(request.params.memoryId, false, input.expectedVersion));
   });
 
   app.get("/api/works/:workId/providers", (request, response) => {

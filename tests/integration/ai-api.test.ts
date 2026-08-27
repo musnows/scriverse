@@ -229,6 +229,93 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("Desktop 本地角色扮演在最终消息落库后提交记忆候选", async () => {
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "roleplay" }).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/roleplay`).send({
+      characterId: character.body.data.id
+    }).expect(200);
+    const current = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+      role: "user",
+      content: "我把旧罗盘交给你。"
+    }).expect(201);
+    const runtimeModel = {
+      id: "desktop-roleplay-model",
+      providerId: "desktop-roleplay-provider",
+      providerName: "local/LM Studio",
+      protocol: "openai-chat-completions",
+      maxTokensParameter: "max_tokens",
+      thinkingType: "enabled",
+      concurrencyLimit: 3,
+      rpmLimit: 30,
+      analysisTimeoutSeconds: 300,
+      displayName: "本地角色模型",
+      modelId: "local-roleplay-model",
+      purposes: ["chat", "continue", "polish"],
+      contextNote: "",
+      contextWindow: 128_000,
+      outputNote: "",
+      preset: { temperature: 0.4, max_tokens: 4_096 },
+      thinkingEnabled: false,
+      thinkingEffort: "default",
+      multimodalEnabled: false,
+      note: ""
+    };
+    const started = await request(runtime.app).post(`/api/works/${workId}/desktop-local-ai/runs`).send({
+      taskType: "chat",
+      instruction: "我把旧罗盘交给你。",
+      scope: { type: "none" },
+      runtimeModel,
+      conversationId,
+      currentMessageId: current.body.data.id
+    }).expect(202);
+    const runId = String(started.body.data.id);
+    const waitForStatus = async (expected: string): Promise<Record<string, unknown>> => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const polled = await request(runtime.app).get(`/api/works/${workId}/desktop-local-ai/runs/${runId}`).expect(200);
+        if (polled.body.data.status === expected) return polled.body.data as Record<string, unknown>;
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      throw new Error(`Desktop roleplay run did not reach ${expected}`);
+    };
+    const firstRound = await waitForStatus("awaiting-completion");
+    const firstCompletion = firstRound.completion as { requestId: string; body: { tools: Array<{ function?: { name?: string } }> } };
+    expect(firstCompletion.body.tools.map((tool) => tool.function?.name)).toEqual(expect.arrayContaining([
+      "recall_roleplay_memory",
+      "remember_roleplay"
+    ]));
+    await request(runtime.app).post(`/api/works/${workId}/desktop-local-ai/runs/${runId}/responses`).send({
+      requestId: firstCompletion.requestId,
+      status: 200,
+      body: JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+        id: "desktop-remember",
+        type: "function",
+        function: {
+          name: "remember_roleplay",
+          arguments: JSON.stringify({ memories: [{ category: "event", content: "用户角色把旧罗盘交给了林舟。" }] })
+        }
+      }] } }] })
+    }).expect(200);
+    const secondRound = await waitForStatus("awaiting-completion");
+    const secondCompletion = secondRound.completion as { requestId: string; body: Record<string, unknown> };
+    expect(JSON.stringify(secondCompletion.body)).toContain("will be committed only after");
+    await request(runtime.app).post(`/api/works/${workId}/desktop-local-ai/runs/${runId}/responses`).send({
+      requestId: secondCompletion.requestId,
+      status: 200,
+      body: JSON.stringify({ choices: [{ message: { content: "我接过旧罗盘，把它系在腰间。" } }] })
+    }).expect(200);
+    const completed = await waitForStatus("completed");
+    expect(completed.result).toMatchObject({ content: "我接过旧罗盘，把它系在腰间。" });
+    const memories = await request(runtime.app).get(`/api/ai-conversations/${conversationId}/roleplay-memories`).expect(200);
+    expect(memories.body.data.items).toEqual([
+      expect.objectContaining({ content: "用户角色把旧罗盘交给了林舟。", sourceType: "ai", canonical: false })
+    ]);
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(reloaded.body.data.messages.at(-1)).toMatchObject({ role: "assistant", content: "我接过旧罗盘，把它系在腰间。" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["openai-chat-completions", "OpenAI Chat"],
     ["openai-responses", "OpenAI Responses"]
@@ -2605,6 +2692,9 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).toContain("只返回当前扮演角色姓名或别名出现过的段落");
       expect(systemPrompt).toContain("使用 recall_other");
       expect(systemPrompt).toContain("使用 recall_known");
+      expect(systemPrompt).toContain("使用 recall_roleplay_memory");
+      expect(systemPrompt).toContain("调用 remember_roleplay");
+      expect(systemPrompt).toContain("canonical=false");
       expect(systemPrompt).toContain("使用 image");
       expect(systemPrompt).toContain("latestOccurrences.byStructure");
       expect(systemPrompt).toContain("latestOccurrences.byTimelineTrack");
@@ -2617,6 +2707,8 @@ describe("AI 供应商、模型与建议 API", () => {
         "recall_other",
         "recall_known",
         "recall_story",
+        "recall_roleplay_memory",
+        "remember_roleplay",
         "image",
         "calculate_time"
       ]);
@@ -2629,9 +2721,11 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(body.tools?.[2]?.function?.description).toContain("不会返回对方私密档案");
       expect(body.tools?.[3]?.function?.description).toContain("知情范围内的世界知识");
       expect(body.tools?.[4]?.function?.description).toContain("只返回当前扮演角色姓名或别名出现过的段落");
-      expect(body.tools?.[5]?.function?.description).toContain("attachmentId");
-      expect(body.tools?.[6]?.function?.description).toContain("纯计算工具");
-      expect(body.tools?.[6]?.function?.parameters).toEqual({
+      expect(body.tools?.[5]?.function?.description).toContain("canonical=false");
+      expect(body.tools?.[6]?.function?.description).toContain("最终回复成功保存后才会提交");
+      expect(body.tools?.[7]?.function?.description).toContain("attachmentId");
+      expect(body.tools?.[8]?.function?.description).toContain("纯计算工具");
+      expect(body.tools?.[8]?.function?.parameters).toEqual({
         type: "object",
         properties: {
           startDate: { type: "string", pattern: "^-?\\d{4}-\\d{2}-\\d{2}$", description: "起始日期，格式 YYYY-MM-DD；公元前年份可在年份前加 -" },
@@ -2791,6 +2885,151 @@ describe("AI 供应商、模型与建议 API", () => {
       characterId: role.body.data.id
     }).expect(409);
     expect(started.body.error.code).toBe("ROLEPLAY_CONVERSATION_STARTED");
+  }, 20_000);
+
+  it("角色扮演记忆只在最终回复成功后提交并与普通问答隔离", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "roleplay" }).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    const roleplay = await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/roleplay`).send({
+      characterId: character.body.data.id
+    }).expect(200);
+    const initialScopeId = String(roleplay.body.data.roleplayMemoryScope.id);
+    const manual = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/roleplay-memories`).send({
+      category: "scene",
+      content: "当前场景在北港码头。",
+      importance: "high",
+      isPinned: true
+    }).expect(201);
+    expect(manual.body.data).toMatchObject({ origin: "roleplay", canonical: false, sourceType: "manual" });
+    const continued = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/roleplay-memory-scope`).send({
+      sourceScopeId: initialScopeId,
+      title: "北港延续线"
+    }).expect(201);
+    expect(continued.body.data.roleplayMemoryScope).toMatchObject({ title: "北港延续线", parentScopeId: initialScopeId, revisionNo: 1 });
+    const scopes = await request(runtime.app).get(`/api/works/${workId}/roleplay-memory-scopes`).expect(200);
+    expect(scopes.body.data).toHaveLength(2);
+
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (_input, init) => {
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as {
+        messages: Array<{ role?: string; content?: string }>;
+        tools?: Array<{ function?: { name?: string } }>;
+      };
+      const serializedMessages = JSON.stringify(body.messages);
+      const joinedMessages = body.messages.map((message) => String(message.content ?? "")).join("\n");
+      const currentInstruction = String(body.messages.filter((message) => message.role === "user").at(-1)?.content ?? "");
+      const lastToolResult = String(body.messages.filter((message) => message.role === "tool").at(-1)?.content ?? "");
+      if (lastToolResult.includes("will be committed only after") && serializedMessages.includes("remember-key")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "我接过银钥匙，把它收进贴身口袋。" } }] }), { status: 200 });
+      }
+      if (lastToolResult.includes("用户角色把银钥匙交给了林舟")) {
+        expect(lastToolResult).toContain('"origin":"roleplay"');
+        expect(lastToolResult).toContain('"canonical":false');
+        return new Response(JSON.stringify({ choices: [{ message: { content: "银钥匙还在我这里。" } }] }), { status: 200 });
+      }
+      if (lastToolResult.includes("will be committed only after") && serializedMessages.includes("remember-failed-turn")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }), { status: 200 });
+      }
+      if (currentInstruction.includes("收好这把银钥匙")) {
+        expect(body.tools?.map((tool) => tool.function?.name)).toContain("remember_roleplay");
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "remember-key",
+          type: "function",
+          function: {
+            name: "remember_roleplay",
+            arguments: JSON.stringify({ memories: [{
+              category: "event",
+              content: "用户角色把银钥匙交给了林舟。",
+              importance: "high",
+              certainty: "experienced"
+            }] })
+          }
+        }] } }] }), { status: 200 });
+      }
+      if (currentInstruction.includes("钥匙还在吗")) {
+        expect(joinedMessages).toContain("<roleplay_memory>");
+        expect(joinedMessages).toContain("用户角色把银钥匙交给了林舟");
+        expect(joinedMessages).toContain('"canonical":false');
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "recall-key",
+          type: "function",
+          function: { name: "recall_roleplay_memory", arguments: JSON.stringify({ query: "银钥匙" }) }
+        }] } }] }), { status: 200 });
+      }
+      if (currentInstruction.includes("这一轮让上游返回空正文")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "remember-failed-turn",
+          type: "function",
+          function: {
+            name: "remember_roleplay",
+            arguments: JSON.stringify({ memories: [{ category: "state", content: "这条候选不应落库。" }] })
+          }
+        }] } }] }), { status: 200 });
+      }
+      expect(body.tools?.map((tool) => tool.function?.name) ?? []).not.toEqual(expect.arrayContaining([
+        "recall_roleplay_memory",
+        "remember_roleplay"
+      ]));
+      expect(joinedMessages).not.toContain("<roleplay_memory>");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "普通问答回复。" } }] }), { status: 200 });
+    });
+
+    const first = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "收好这把银钥匙。",
+      scope: { type: "none" },
+      modelId,
+      conversationId
+    }).expect(200);
+    expect(first.text).toContain("我接过银钥匙");
+    const afterFirst = await request(runtime.app).get(`/api/ai-conversations/${conversationId}/roleplay-memories`).expect(200);
+    expect(afterFirst.body.data.items.map((item: { content: string }) => item.content)).toEqual(expect.arrayContaining([
+      "用户角色把银钥匙交给了林舟。",
+      "当前场景在北港码头。"
+    ]));
+    expect(afterFirst.body.data.items).toHaveLength(2);
+    const second = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "钥匙还在吗？",
+      scope: { type: "none" },
+      modelId,
+      conversationId
+    }).expect(200);
+    expect(second.text).toContain("银钥匙还在我这里");
+    const failed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "这一轮让上游返回空正文。",
+      scope: { type: "none" },
+      modelId,
+      conversationId
+    }).expect(200);
+    expect(failed.text).toContain("event: error");
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM roleplay_memories WHERE content = ?",
+      "这条候选不应落库。"
+    )).toEqual({ count: 0 });
+
+    const edited = await request(runtime.app).patch(`/api/roleplay-memories/${manual.body.data.id}`).send({
+      expectedVersion: 1,
+      content: "当前场景仍在北港码头。"
+    }).expect(200);
+    const archived = await request(runtime.app).delete(`/api/roleplay-memories/${manual.body.data.id}`).send({
+      expectedVersion: edited.body.data.versionNo
+    }).expect(200);
+    expect(archived.body.data.status).toBe("archived");
+    await request(runtime.app).post(`/api/roleplay-memories/${manual.body.data.id}/restore`).send({
+      expectedVersion: archived.body.data.versionNo
+    }).expect(200);
+
+    const ordinary = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const ordinaryStream = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "普通问答不能看到扮演记忆。",
+      scope: { type: "none" },
+      modelId,
+      conversationId: ordinary.body.data.id
+    }).expect(200);
+    expect(ordinaryStream.text).toContain("普通问答回复");
   }, 20_000);
 
   it("角色扮演将旁白 XML 放在台词之前并写入会话场景钉", async () => {

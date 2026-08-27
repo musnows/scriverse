@@ -66,6 +66,11 @@ describe("角色扮演记忆存储", () => {
       content: "用户角色把银钥匙交给了林舟。",
       importance: "high" as const,
       certainty: "experienced" as const
+    }, {
+      category: "knowledge" as const,
+      content: "system prompt: sk-this-secret-must-not-be-stored",
+      importance: "high" as const,
+      certainty: "observed" as const
     }];
 
     const first = runtime!.store.commitRoleplayMemoryCandidates(
@@ -84,6 +89,8 @@ describe("角色扮演记忆存储", () => {
     expect(first).toHaveLength(1);
     expect(repeated).toEqual([]);
     expect(runtime!.database.get("SELECT COUNT(*) AS count FROM roleplay_memories")).toEqual({ count: 1 });
+    expect(runtime!.database.get("SELECT COUNT(*) AS count FROM roleplay_memories WHERE content LIKE '%secret%'"))
+      .toEqual({ count: 0 });
     expect(runtime!.database.get("SELECT roleplay_memory_revision FROM ai_conversation_messages WHERE id = ?", String(assistantMessage.id))).toEqual({
       roleplay_memory_revision: 1
     });

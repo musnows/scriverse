@@ -1353,7 +1353,7 @@ function workModuleRequirements(request: Request, write: boolean, annotationAcce
     return { read: ["characters"], write: ["ai-chat"] };
   }
   if (/^\/api\/(?:works\/[^/]+\/roleplay-memory-scopes|roleplay-memories\/[^/]+)(?:\/|$)/u.test(pathname)) {
-    return write ? { read: ["characters"], write: ["ai-chat"] } : { read: ["ai-chat"] };
+    return write ? { write: ["ai-chat"] } : { read: ["ai-chat"] };
   }
   const conversationHistoryWrite = /^\/api\/ai-conversations\/[^/]+\/(?:fork|context\/prepare|compact)$/u.test(pathname)
     || (/^\/api\/works\/[^/]+\/chat\/stream$/u.test(pathname) && typeof requestBodyRecord(request).conversationId === "string");

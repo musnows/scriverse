@@ -176,7 +176,7 @@ const mockAi = createServer(async (incoming, outgoing) => {
       return;
     }
     if (joined.includes("E2E_AFTER_COMPACT")) {
-      assert.match(joined, /较早对话的结构化长期记忆/u);
+      assert.match(joined, /较早对话的上下文压缩摘要/u);
       assert.match(joined, /遵守跃迁冷却规则/u);
       assert.doesNotMatch(joined, /旧作者要求/u);
       assert.equal(joined.match(/E2E_AFTER_COMPACT/gu)?.length, 1);

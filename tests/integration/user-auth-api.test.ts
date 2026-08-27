@@ -2875,6 +2875,90 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversation_forks WHERE source_conversation_id = ?", sourceId)).toEqual({ count: 1 });
   });
 
+  it("角色扮演记忆按对话创建者隔离并要求 AI Chat 权限与 CSRF", async () => {
+    const owner = await register(runtime, "roleplay_memory_owner");
+    const collaborator = await register(runtime, "roleplay_memory_collaborator");
+    const outsider = await register(runtime, "roleplay_memory_outsider");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "私有扮演记忆" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        userId: collaborator.user.userId,
+        permissions: {
+          prose: "none",
+          drafts: "none",
+          settings: "none",
+          characters: "read",
+          races: "none",
+          organizations: "none",
+          timeline: "none",
+          relationships: "none",
+          outlines: "none",
+          reviews: "none",
+          "ai-chat": "write",
+          "ai-analysis": "none",
+          "ai-settings": "none"
+        }
+      })
+      .expect(201);
+    const character = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "林舟" })
+      .expect(201);
+    const ownerConversation = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ taskType: "roleplay" })
+      .expect(201);
+    await owner.agent.patch(`/api/ai-conversations/${ownerConversation.body.data.id}/roleplay`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ characterId: character.body.data.id })
+      .expect(200);
+    const csrfDenied = await owner.agent.post(`/api/ai-conversations/${ownerConversation.body.data.id}/roleplay-memories`)
+      .send({ category: "event", content: "不能绕过 CSRF" })
+      .expect(403);
+    expect(csrfDenied.body.error.code).toBe("CSRF_TOKEN_INVALID");
+    const ownerMemory = await owner.agent.post(`/api/ai-conversations/${ownerConversation.body.data.id}/roleplay-memories`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ category: "event", content: "只有 Owner 自己能看到的扮演经历" })
+      .expect(201);
+
+    const crossConversation = await collaborator.agent.get(`/api/ai-conversations/${ownerConversation.body.data.id}/roleplay-memories`).expect(403);
+    expect(crossConversation.body.error.code).toBe("AI_CONVERSATION_ACCESS_DENIED");
+    const crossEdit = await collaborator.agent.patch(`/api/roleplay-memories/${ownerMemory.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersion: 1, content: "越权修改" })
+      .expect(403);
+    expect(crossEdit.body.error.code).toBe("ROLEPLAY_MEMORY_ACCESS_DENIED");
+    const collaboratorScopes = await collaborator.agent.get(`/api/works/${workId}/roleplay-memory-scopes`).expect(200);
+    expect(collaboratorScopes.body.data).toEqual([]);
+    const outsiderDenied = await outsider.agent.get(`/api/works/${workId}/roleplay-memory-scopes`).expect(403);
+    expect(outsiderDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
+
+    const collaboratorConversation = await collaborator.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ taskType: "roleplay" })
+      .expect(201);
+    await collaborator.agent.patch(`/api/ai-conversations/${collaboratorConversation.body.data.id}/roleplay`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ characterId: character.body.data.id })
+      .expect(200);
+    const collaboratorMemory = await collaborator.agent.post(`/api/ai-conversations/${collaboratorConversation.body.data.id}/roleplay-memories`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ category: "knowledge", content: "协作者自己的扮演记忆" })
+      .expect(201);
+    const ownerCannotReadPrivateConversation = await owner.agent.get(`/api/ai-conversations/${collaboratorConversation.body.data.id}/roleplay-memories`).expect(403);
+    expect(ownerCannotReadPrivateConversation.body.error.code).toBe("AI_CONVERSATION_ACCESS_DENIED");
+    const ownerCannotEditPrivateMemory = await owner.agent.delete(`/api/roleplay-memories/${collaboratorMemory.body.data.id}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ expectedVersion: 1 })
+      .expect(403);
+    expect(ownerCannotEditPrivateMemory.body.error.code).toBe("ROLEPLAY_MEMORY_ACCESS_DENIED");
+  });
+
   it("type none 的显式 AI 引用仍要求对应模块读取权限", async () => {
     const owner = await register(runtime, "ai_explicit_ref_owner");
     const collaborator = await register(runtime, "ai_explicit_ref_collaborator");
