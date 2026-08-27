@@ -1,3 +1,4 @@
+import compression from "compression";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import JSZip from "jszip";
 import multer from "multer";
@@ -3792,6 +3793,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   if (options.serveUi ?? true) {
     const publicPath = options.publicPath ?? join(process.cwd(), "src", "public");
+    // API 与 SSE 路由已经在此前注册；压缩只作用于页面和静态资源，避免缓冲流式响应。
+    app.use(compression());
     // index.html 按登录态动态下发：未登录时注入 login-route 类，首帧直接渲染登录页；
     // 已登录时保持骨架屏，由前端恢复会话后进入工作台，避免两种闪烁。
     const sendIndexHtml = (request: Request, response: Response) => {
