@@ -149,6 +149,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('title: "删除章节"');
     expect(application.text).toContain('title: "删除操作需要再次确认"');
     expect(application.text).toContain('method: "DELETE", body: { expectedVersionNo }');
+    expect(styles.text).toContain('.setting-editor-header .entity-editor-heading { display: grid; align-content: center; justify-items: center; gap: 8px; text-align: center; }');
+    expect(styles.text).toContain('.setting-editor-title-input::placeholder { color: var(--muted); opacity: 1; }');
+    expect(styles.text).toContain('font-size: 22px; font-weight: 600; line-height: 1.2; text-align: center;');
+    expect(styles.text).toContain('.setting-editor-header .entity-editor-heading { grid-column: 1 / -1; grid-row: 1; padding-inline: 48px; }');
   });
 
   it("作品切换和新建只保留在书架首页", async () => {
