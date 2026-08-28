@@ -87,7 +87,7 @@ describe("AI 角色扮演界面", () => {
     expect(page).toContain("feature=ai-roleplay-memory-v5");
     expect(page).toContain("feature=roleplay-memory-header-actions-v1");
     expect(page).toContain("feature=roleplay-memory-header-toolbar-v1");
-    expect(page).toContain("feature=roleplay-memory-action-icons-v1");
+    expect(page).toContain("feature=roleplay-memory-action-colors-v1");
     expect(application).toContain("function roleplayMemorySurfaceMarkup()");
     expect(application).toContain("function roleplayMemoryToolbarMarkup()");
     expect(application).toContain('class="character-editor-section-header-copy"');
@@ -104,7 +104,9 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("来源信息");
     expect(application).toContain('<option value="archived">已删除</option>');
     expect(application).toContain("function trashIconMarkup()");
+    expect(application).toContain("function roleplayMemoryPinIconMarkup()");
     expect(application).toContain('data-roleplay-memory-action="archive" data-memory-id="${esc(memory.id)}" aria-label="删除角色扮演记忆" title="删除">${trashIconMarkup()}</button><button class="roleplay-memory-icon-action${memory.isPinned ? " is-pinned" : ""}"');
+    expect(application).toContain('title="${pinAction}">${roleplayMemoryPinIconMarkup()}</button>');
     expect(application).toContain('data-roleplay-memory-action="edit" data-memory-id="${esc(memory.id)}" aria-label="编辑角色扮演记忆" title="编辑">${pencilIconMarkup()}</button>');
     expect(application).toContain('title: "删除角色扮演记忆"');
     expect(application).toContain('confirmLabel: "确认删除"');
@@ -117,5 +119,6 @@ describe("AI 角色扮演界面", () => {
     expect(styles).toContain(".roleplay-memory-filter-panel { display: grid;");
     expect(styles).toContain(".roleplay-memory-card { display: grid;");
     expect(styles).toContain(".roleplay-memory-card-actions .roleplay-memory-icon-action { display: inline-grid; place-items: center; width: 30px; min-width: 30px; height: 30px; min-height: 30px; padding: 0; }");
+    expect(styles).toContain(".roleplay-memory-card-actions .danger-button.roleplay-memory-icon-action { border-color: color-mix(in srgb, #d9363e 62%, var(--line)); color: #d9363e; }");
   });
 });

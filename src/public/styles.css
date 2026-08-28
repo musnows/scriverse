@@ -2934,6 +2934,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .roleplay-memory-card-actions button { min-height: 30px; padding: 5px 8px; font-size: 9px; }
 .roleplay-memory-card-actions .roleplay-memory-icon-action { display: inline-grid; place-items: center; width: 30px; min-width: 30px; height: 30px; min-height: 30px; padding: 0; }
 .roleplay-memory-icon-action svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.roleplay-memory-card-actions .danger-button.roleplay-memory-icon-action { border-color: color-mix(in srgb, #d9363e 62%, var(--line)); color: #d9363e; }
+.roleplay-memory-card-actions .danger-button.roleplay-memory-icon-action:hover, .roleplay-memory-card-actions .danger-button.roleplay-memory-icon-action:focus-visible { border-color: #d9363e; background: color-mix(in srgb, #d9363e 11%, transparent); }
 .roleplay-memory-icon-action.is-pinned { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); }
 .roleplay-memory-pagination { margin-top: 2px; }
 
