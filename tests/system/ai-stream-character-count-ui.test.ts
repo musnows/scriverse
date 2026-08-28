@@ -12,6 +12,7 @@ describe("AI 流式回复字数显示", () => {
     ]);
 
     expect(page).toContain("&feature=ai-stream-character-count-stable-v2");
+    expect(page).toContain("&feature=ai-stream-character-count-five-digit-v1");
     expect(application).toContain("function createAiStreamCharacterCount(value)");
     expect(application).toContain("function renderAiStreamingCharacterProgress(meta, visibleCharacters)");
     expect(application).toContain('count.className = "ai-stream-character-count";');
@@ -20,6 +21,6 @@ describe("AI 流式回复字数显示", () => {
     expect(application).toContain("renderAiStreamingCharacterProgress(meta, progress.visibleCharacters);");
     expect(application).not.toContain("receivedCharacters");
     expect(application).not.toContain('meta.textContent = "正在生成回复……";');
-    expect(styles).toContain(".message-meta .ai-stream-character-count { display: inline-block; min-width: 6ch; font-variant-numeric: tabular-nums; text-align: right; }");
+    expect(styles).toContain(".message-meta .ai-stream-character-count { display: inline-block; min-width: 7ch; font-variant-numeric: tabular-nums; text-align: right; }");
   });
 });
