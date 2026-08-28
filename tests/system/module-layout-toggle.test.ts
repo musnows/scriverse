@@ -82,11 +82,12 @@ expect(application.text).toContain('/display-labels.js?v=20260816-character-gend
     expect(page.text).toContain('id="character-editor-edit"');
     expect(page.text).toContain('id="knowledge-editor-edit"');
     expect(page.text).toContain('id="chapter-edit-button"');
-    expect(page.text).toContain('id="chapter-delete-button"');
+    expect(page.text).not.toContain('id="chapter-delete-button"');
     expect(page.text).toContain(">编辑</button>");
     expect(application.text).toContain("function applyChapterEditorMode()");
     expect(application.text).toContain("function enterChapterEditMode()");
-    expect(application.text).toContain('$("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);');
+    expect(application.text).toContain("function toggleChapterEditPreviewMode()");
+    expect(application.text).toContain('editButton.textContent = chapterEditorReadOnly ? "编辑" : "预览";');
     expect(application.text).toContain("let chapterEditorReadOnly = true");
     expect(application.text).toContain("async function selectChapter(chapterId, { editMode = false } = {})");
     expect(application.text).toContain("await selectChapter(chapter.id, { editMode: true })");

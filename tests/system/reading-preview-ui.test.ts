@@ -23,6 +23,7 @@ describe("沉浸式阅读预览界面", () => {
     const pageRoute = await request(runtime.app).get("/page-route.js").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=task-auto-run-ring-center-v3&feature=character-relationship-delete-v1&feature=ai-assistant-workspace-v2&feature=mobile-module-tab-position-v1&feature=volume-detail-icon-v1&feature=editor-actions-flow-v1&feature=reader-controls-subpanel-v1&feature=reader-focus-ring-v1');
+    expect(page.text).toContain('&feature=editor-preview-toggle-v2');
     expect(page.text).toContain('&feature=ai-message-actions-v1');
     expect(page.text).toContain('&feature=assistant-responsive-navigation-v2');
     expect(page.text).toContain('&feature=annotation-line-counts-v1');
@@ -31,7 +32,7 @@ describe("沉浸式阅读预览界面", () => {
     expect(page.text).toContain('id="reader-open-button" class="module-nav-secondary hidden"');
     expect(page.text).toMatch(/id="module-more-button"[\s\S]*id="reader-open-button"[\s\S]*data-module="comments"/u);
     expect(page.text).not.toMatch(/data-module="editor"[\s\S]*id="reader-open-button"[\s\S]*data-module="drafts"/u);
-    expect(page.text).toContain('id="chapter-reader-button"');
+    expect(page.text).not.toContain('id="chapter-reader-button"');
     expect(page.text).toContain('id="reader-view" class="reader-view hidden"');
     expect(page.text).toContain('role="dialog" aria-labelledby="reader-title"');
     expect(page.text).toContain('id="reader-volume" aria-label="从分卷开始阅读"');
@@ -55,7 +56,7 @@ describe("沉浸式阅读预览界面", () => {
     expect(application.text).toContain('$("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded))');
     expect(application.text).toContain('$("#reader-open-button").classList.toggle("permission-hidden", proseHidden)');
     expect(application.text).toContain('$("#reader-open-button").disabled = !canReadModule("editor") || count === 0');
-    expect(application.text).toContain('const focusCandidates = [focus, $("#chapter-reader-button"), $("#reader-open-button"), $("#home-button")]');
+    expect(application.text).toContain('const focusCandidates = [focus, $("#reader-open-button"), $("#home-button")]');
     expect(application.text).toContain("function handleReadingKeyboard(event)");
     expect(application.text).not.toContain("function handleReadingWheel(event)");
     expect(application.text).not.toContain('addEventListener("wheel", handleReadingWheel');
