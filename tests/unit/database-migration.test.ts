@@ -85,12 +85,22 @@ describe("数据库版本化迁移", () => {
       .find((column) => column.name === "owner_user_id");
     const ownerForeignKey = database.all<{ table: string; from: string; on_delete: string }>("PRAGMA foreign_key_list(works)")
       .find((foreignKey) => foreignKey.from === "owner_user_id");
+    const workColumns = database.all<{ name: string; notnull: number; dflt_value: string | null }>("PRAGMA table_info(works)");
 
     expect(ownerColumn?.notnull).toBe(1);
     expect(ownerForeignKey).toMatchObject({ table: "users", from: "owner_user_id", on_delete: "RESTRICT" });
     expect(database.get("SELECT owner_user_id FROM works WHERE id = 'work-old'")).toEqual({ owner_user_id: SYSTEM_USER_ID });
     expect(database.get("SELECT owner_user_id FROM works WHERE id = ?", PLATFORM_AI_WORK_ID)).toEqual({ owner_user_id: SYSTEM_USER_ID });
     expect(database.get("SELECT status FROM users WHERE id = ?", SYSTEM_USER_ID)).toEqual({ status: "disabled" });
+    expect(workColumns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "editor_auto_indent_enabled", notnull: 1, dflt_value: "0" }),
+      expect.objectContaining({ name: "editor_typewriter_mode_enabled", notnull: 1, dflt_value: "0" })
+    ]));
+    expect(database.get(
+      "SELECT editor_auto_indent_enabled, editor_typewriter_mode_enabled FROM works WHERE id = 'work-old'"
+    )).toEqual({ editor_auto_indent_enabled: 0, editor_typewriter_mode_enabled: 0 });
+    expect(() => database.run("UPDATE works SET editor_auto_indent_enabled = 2 WHERE id = 'work-old'")).toThrow();
+    expect(() => database.run("UPDATE works SET editor_typewriter_mode_enabled = -1 WHERE id = 'work-old'")).toThrow();
     expect(() => database.run(
       "INSERT INTO works (id, title, created_at, updated_at, owner_user_id) VALUES ('owner-null', '空 Owner', '2026-08-25', '2026-08-25', NULL)"
     )).toThrow();
