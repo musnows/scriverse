@@ -8092,8 +8092,12 @@ export class Store {
       nextVersion += 1;
       this.db.run(
         `UPDATE roleplay_memories SET is_pinned = CASE WHEN is_pinned = 1 OR ? = 1 THEN 1 ELSE 0 END,
+         status = CASE WHEN status = 'active' OR ? = 'active' THEN 'active' ELSE status END,
+         superseded_by_memory_id = CASE WHEN status = 'active' OR ? = 'active' THEN NULL ELSE superseded_by_memory_id END,
          version_no = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
         booleanValue(sourceMemory, "is_pinned") ? 1 : 0,
+        requiredString(sourceMemory, "status"),
+        requiredString(sourceMemory, "status"),
         nextVersion,
         currentRequestActor()?.userId ?? null,
         timestamp,

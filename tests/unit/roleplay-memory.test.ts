@@ -182,6 +182,37 @@ describe("角色扮演共享记忆存储", () => {
     expect(runtime!.database.get("SELECT COUNT(*) AS count FROM roleplay_memory_versions")).toEqual({ count: 4 });
   });
 
+  it("角色合并的重复记忆优先保留生效状态", () => {
+    const { workId, characterId: targetId, otherCharacterId: sourceId } = createFixture();
+    const targetMemory = runtime!.store.createRoleplayMemory(targetId, {
+      category: "event",
+      content: "应优先生效的重复记忆。"
+    });
+    runtime!.store.createRoleplayMemory(sourceId, {
+      category: "event",
+      content: "应优先生效的重复记忆。"
+    });
+    runtime!.store.setRoleplayMemoryArchived(String(targetMemory.id), true, 1);
+
+    const merged = runtime!.store.mergeCharacters({
+      reviewId: null,
+      targetCharacterId: targetId,
+      sourceCharacterId: sourceId,
+      expectedTargetVersionNo: 1,
+      expectedSourceVersionNo: 1
+    });
+
+    expect(merged.roleplayMemoryMerge).toEqual({ migrated: 0, deduplicated: 1 });
+    expect(runtime!.database.get(
+      "SELECT status, superseded_by_memory_id FROM roleplay_memories WHERE character_id = ? AND content = ?",
+      targetId,
+      "应优先生效的重复记忆。"
+    )).toEqual({ status: "active", superseded_by_memory_id: null });
+    expect(runtime!.store.getRoleplayMemoryPromptItems(workId, targetId)).toEqual([
+      expect.objectContaining({ content: "应优先生效的重复记忆。", status: "active" })
+    ]);
+  });
+
   it("角色删除时级联删除该角色的共享记忆", () => {
     const { characterId, otherCharacterId } = createFixture();
     runtime!.store.createRoleplayMemory(characterId, { category: "event", content: "随角色删除的记忆。" });
