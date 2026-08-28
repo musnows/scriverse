@@ -433,6 +433,56 @@ describe("作品、导入和章节版本 API", () => {
     ]);
   });
 
+  it("编辑正文后将评论重新锚定到对应原文行", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "评论锚点作品" }).expect(201);
+    const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "第一行\n第二行\n评论目标行\n最后一行"
+    }).expect(201);
+    const annotation = await request(runtime.app).post(`/api/chapters/${chapter.body.data.id}/annotations`).send({
+      kind: "note",
+      startLine: 3,
+      endLine: 3,
+      note: "跟随这一行"
+    }).expect(201);
+
+    await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`).send({
+      content: "新增一行\n新增二行\n第一行\n第二行\n评论目标行\n最后一行",
+      expectedVersionNo: 1
+    }).expect(200);
+    const moved = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/annotations`).expect(200);
+    expect(moved.body.data[0]).toMatchObject({
+      id: annotation.body.data.id,
+      startLine: 5,
+      endLine: 5,
+      quote: "评论目标行",
+      versionNo: 2
+    });
+    expect((await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/annotation-counts`).expect(200)).body.data)
+      .toEqual([{ line: 5, count: 1 }]);
+
+    await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`).send({
+      content: "新增一行\n新增二行\n第一行\n第二行\n修改后的目标行\n最后一行",
+      expectedVersionNo: 2
+    }).expect(200);
+    const edited = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/annotations`).expect(200);
+    expect(edited.body.data[0]).toMatchObject({ startLine: 5, endLine: 5, quote: "修改后的目标行", versionNo: 3 });
+    expect(runtime.database.all(
+      "SELECT version_no, source FROM chapter_annotation_versions WHERE annotation_id = ? ORDER BY version_no",
+      annotation.body.data.id
+    )).toEqual([
+      { version_no: 1, source: "create" },
+      { version_no: 2, source: "reanchor" },
+      { version_no: 3, source: "reanchor" }
+    ]);
+    expect(runtime.database.get(
+      "SELECT action FROM audit_logs WHERE entity_id = ? ORDER BY created_at DESC LIMIT 1",
+      annotation.body.data.id
+    )).toEqual({ action: "chapter.annotation.updated" });
+  });
+
   it("按作品与正文顺序分页列出所有章节评论", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "评论汇总作品" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);

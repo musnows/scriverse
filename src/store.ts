@@ -43,6 +43,7 @@ import {
   roleplayUserTurnTitleSource,
   type RoleplayScenePin
 } from "./roleplay-turn.js";
+import { reanchorChapterAnnotations } from "./chapter-annotation-anchor.js";
 
 type WorkInput = {
   title: string;
@@ -3241,6 +3242,7 @@ export class Store {
     const nextContent = input.content === undefined ? String(current.content) : input.content;
     const nextExcluded = input.excludedFromAnalysis ?? Boolean(current.excludedFromAnalysis);
     const nextChapterType = input.chapterType ?? String(current.chapterType) as ChapterType;
+    const hasContentChange = nextContent !== current.content;
     const hasTextChange = nextTitle !== current.title || nextContent !== current.content;
     const hasTypeChange = nextChapterType !== current.chapterType;
     const hasOtherChange = nextExcluded !== current.excludedFromAnalysis || hasTypeChange;
@@ -3265,6 +3267,14 @@ export class Store {
       );
       if (hasTextChange) this.syncChapterParagraphSearch(String(current.workId), chapterId, nextContent);
       else if (hasTypeChange) this.syncChapterParagraphSearchVersion(chapterId, versionNo);
+      if (hasContentChange) this.reanchorChapterAnnotations(
+        String(current.workId),
+        chapterId,
+        String(lockedCurrent.content),
+        nextContent,
+        source,
+        timestamp
+      );
       if (hasTextChange || hasTypeChange) {
         this.insertChapterVersionRow({
           workId: String(current.workId),
@@ -3286,6 +3296,49 @@ export class Store {
       this.audit(String(current.workId), "chapter.saved", "chapter", chapterId, { versionNo, source, chapterType: nextChapterType, changeNote });
     });
     return this.getChapter(chapterId);
+  }
+
+  private reanchorChapterAnnotations(
+    workId: string,
+    chapterId: string,
+    beforeContent: string,
+    afterContent: string,
+    source: string,
+    timestamp: string
+  ): void {
+    const annotations = this.db.all(
+      `SELECT id, start_line, end_line, quote
+       FROM chapter_annotations
+       WHERE chapter_id = ? AND deleted_at IS NULL`,
+      chapterId
+    ).map((row) => ({
+      id: requiredString(row, "id"),
+      startLine: numberValue(row, "start_line"),
+      endLine: numberValue(row, "end_line"),
+      quote: requiredString(row, "quote")
+    }));
+    for (const annotation of reanchorChapterAnnotations(beforeContent, afterContent, annotations)) {
+      if (!annotation.changed) continue;
+      this.db.run(
+        `UPDATE chapter_annotations
+         SET start_line = ?, end_line = ?, quote = ?, version_no = version_no + 1
+         WHERE id = ?`,
+        annotation.startLine,
+        annotation.endLine,
+        annotation.quote,
+        annotation.id
+      );
+      const updated = this.getChapterAnnotation(annotation.id);
+      this.recordChapterAnnotationVersion(updated, "reanchor", timestamp);
+      this.audit(workId, "chapter.annotation.updated", "chapter-annotation", annotation.id, {
+        chapterId,
+        startLine: annotation.startLine,
+        endLine: annotation.endLine,
+        versionNo: updated.versionNo,
+        reason: "reanchor",
+        source
+      });
+    }
   }
 
   replaceWorkText(

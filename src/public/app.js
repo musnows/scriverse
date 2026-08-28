@@ -5715,6 +5715,11 @@ async function persistChapter({ automatic = false } = {}) {
     lastSavedChapterSnapshot = draft;
     renderTree();
     updateChapterStats();
+    try {
+      await loadChapterAnnotationCounts(saved.chapter.id);
+    } catch (error) {
+      toast("正文评论位置已更新，但评论数量刷新失败，请稍后重试", "error");
+    }
     const currentDraft = chapterDraftSnapshot();
     if (sameChapterSnapshot(currentDraft, draft)) {
       setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
