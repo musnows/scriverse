@@ -87,7 +87,7 @@ describe("AI 角色扮演界面", () => {
     expect(page).toContain("feature=ai-roleplay-memory-v5");
     expect(page).toContain("feature=roleplay-memory-header-actions-v1");
     expect(page).toContain("feature=roleplay-memory-header-toolbar-v1");
-    expect(page).toContain("feature=roleplay-memory-action-colors-v1");
+    expect(page).toContain("feature=roleplay-memory-pin-border-v1");
     expect(application).toContain("function roleplayMemorySurfaceMarkup()");
     expect(application).toContain("function roleplayMemoryToolbarMarkup()");
     expect(application).toContain('class="character-editor-section-header-copy"');
@@ -120,5 +120,6 @@ describe("AI 角色扮演界面", () => {
     expect(styles).toContain(".roleplay-memory-card { display: grid;");
     expect(styles).toContain(".roleplay-memory-card-actions .roleplay-memory-icon-action { display: inline-grid; place-items: center; width: 30px; min-width: 30px; height: 30px; min-height: 30px; padding: 0; }");
     expect(styles).toContain(".roleplay-memory-card-actions .danger-button.roleplay-memory-icon-action { border-color: color-mix(in srgb, #d9363e 62%, var(--line)); color: #d9363e; }");
+    expect(styles).toContain(".roleplay-memory-icon-action.is-pinned { border-width: 1px; border-style: solid;");
   });
 });
