@@ -2816,7 +2816,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-body .markdown-image img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
 .message-body .markdown-image small { color: var(--muted); font-size: 9px; line-height: 1.45; text-align: center; }
 .message-meta { margin-top: 8px; color: var(--muted); font-size: 9px; }
-.message-meta .ai-stream-character-count { display: inline-block; min-width: 6ch; font-variant-numeric: tabular-nums; text-align: right; }
+.message-meta .ai-stream-character-count { display: inline-block; min-width: 7ch; font-variant-numeric: tabular-nums; text-align: right; }
 .message-meta .ai-stream-connection-seconds { display: inline-block; min-width: 3ch; font-variant-numeric: tabular-nums; text-align: right; }
 .ai-process-details { margin: 0 0 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--surface-soft) 82%, transparent); }
 .ai-process-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 8px 10px; color: var(--muted); cursor: pointer; font-size: 10px; list-style: none; }
