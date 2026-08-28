@@ -2875,6 +2875,113 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversation_forks WHERE source_conversation_id = ?", sourceId)).toEqual({ count: 1 });
   });
 
+  it("角色扮演记忆按角色共享、手工写入要求角色权限且跨用户来源脱敏", async () => {
+    const owner = await register(runtime, "roleplay_memory_owner");
+    const collaborator = await register(runtime, "roleplay_memory_collaborator");
+    const outsider = await register(runtime, "roleplay_memory_outsider");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "共享扮演记忆" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        userId: collaborator.user.userId,
+        permissions: {
+          prose: "none",
+          drafts: "none",
+          settings: "none",
+          characters: "read",
+          races: "none",
+          organizations: "none",
+          timeline: "none",
+          relationships: "none",
+          outlines: "none",
+          reviews: "none",
+          "ai-chat": "write",
+          "ai-analysis": "none",
+          "ai-settings": "none"
+        }
+      })
+      .expect(201);
+    const character = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "林舟" })
+      .expect(201);
+    const ownerConversation = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ taskType: "roleplay" })
+      .expect(201);
+    await owner.agent.patch(`/api/ai-conversations/${ownerConversation.body.data.id}/roleplay`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ characterId: character.body.data.id })
+      .expect(200);
+    const csrfDenied = await owner.agent.post(`/api/characters/${character.body.data.id}/roleplay-memories`)
+      .send({ category: "event", content: "不能绕过 CSRF" })
+      .expect(403);
+    expect(csrfDenied.body.error.code).toBe("CSRF_TOKEN_INVALID");
+    const ownerMemory = await owner.agent.post(`/api/characters/${character.body.data.id}/roleplay-memories`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ category: "event", content: "作品内所有角色读者共享的扮演经历" })
+      .expect(201);
+
+    const shared = await collaborator.agent.get(`/api/characters/${character.body.data.id}/roleplay-memories`).expect(200);
+    expect(shared.body.data.items).toEqual([
+      expect.objectContaining({ content: "作品内所有角色读者共享的扮演经历", characterId: character.body.data.id })
+    ]);
+    const manualCreateDenied = await collaborator.agent.post(`/api/characters/${character.body.data.id}/roleplay-memories`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ category: "event", content: "只读角色用户不能手工添加" })
+      .expect(403);
+    expect(manualCreateDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const crossEdit = await collaborator.agent.patch(`/api/roleplay-memories/${ownerMemory.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersion: 1, content: "越权修改" })
+      .expect(403);
+    expect(crossEdit.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const outsiderDenied = await outsider.agent.get(`/api/characters/${character.body.data.id}/roleplay-memories`).expect(403);
+    expect(outsiderDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
+
+    const ownerUserMessage = await owner.agent.post(`/api/ai-conversations/${ownerConversation.body.data.id}/messages`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ role: "user", content: "OWNER_PRIVATE_ROLEPLAY_SOURCE" })
+      .expect(201);
+    const ownerAssistantMessage = await owner.agent.post(`/api/ai-conversations/${ownerConversation.body.data.id}/messages`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ role: "assistant", content: "OWNER_PRIVATE_ASSISTANT_SOURCE" })
+      .expect(201);
+    runWithRequestActor({ ...owner.user, authentication: "session" }, () => runtime.store.commitRoleplayMemoryCandidates(
+      String(ownerConversation.body.data.id),
+      String(ownerAssistantMessage.body.data.id),
+      String(ownerUserMessage.body.data.id),
+      [{ category: "knowledge", content: "林舟记住了一段跨用户共享知识。", importance: "medium", certainty: "experienced" }]
+    ));
+    const collaboratorView = await collaborator.agent.get(`/api/characters/${character.body.data.id}/roleplay-memories`).expect(200);
+    expect(JSON.stringify(collaboratorView.body)).not.toContain("OWNER_PRIVATE_ROLEPLAY_SOURCE");
+    expect(collaboratorView.body.data.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        content: "林舟记住了一段跨用户共享知识。",
+        sources: expect.arrayContaining([expect.objectContaining({ restricted: true, canOpen: false, evidence: null })])
+      })
+    ]));
+    const ownerView = await owner.agent.get(`/api/characters/${character.body.data.id}/roleplay-memories`).expect(200);
+    expect(JSON.stringify(ownerView.body)).toContain("OWNER_PRIVATE_ROLEPLAY_SOURCE");
+    runtime.database.run("UPDATE users SET role = 'admin' WHERE id = ?", collaborator.user.userId);
+    const sourceId = collaboratorView.body.data.items
+      .find((item: { content: string }) => item.content === "林舟记住了一段跨用户共享知识。")
+      .sources[0].id;
+    const adminSourceConversation = await collaborator.agent.get(`/api/ai-conversations/${ownerConversation.body.data.id}`)
+      .query({ messageId: ownerUserMessage.body.data.id, roleplayMemorySourceId: sourceId })
+      .expect(200);
+    expect(JSON.stringify(adminSourceConversation.body)).toContain("OWNER_PRIVATE_ROLEPLAY_SOURCE");
+    const adminMutationDenied = await collaborator.agent.patch(`/api/ai-conversations/${ownerConversation.body.data.id}/favorite`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ isFavorite: true })
+      .expect(403);
+    expect(adminMutationDenied.body.error.code).toBe("AI_CONVERSATION_ACCESS_DENIED");
+  });
+
   it("type none 的显式 AI 引用仍要求对应模块读取权限", async () => {
     const owner = await register(runtime, "ai_explicit_ref_owner");
     const collaborator = await register(runtime, "ai_explicit_ref_collaborator");

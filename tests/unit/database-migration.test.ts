@@ -79,7 +79,7 @@ function insertSystemOwnedWork(database: Database, workId: string, title: string
 }
 
 describe("数据库版本化迁移", () => {
-  it("迁移 123 为重复正文和评论回填稳定且不同的行身份", () => {
+  it("迁移 124 为重复正文和评论回填稳定且不同的行身份", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-stable-line-ids-"));
     roots.push(root);
     const filename = join(root, "stable-line-ids.db");
@@ -100,7 +100,7 @@ describe("数据库版本化迁移", () => {
     });
     current.raw.exec("ALTER TABLE chapter_annotations DROP COLUMN anchor_line_ids_json");
     current.raw.exec("ALTER TABLE chapters DROP COLUMN line_ids_json");
-    current.run("DELETE FROM schema_migrations WHERE version = 123");
+    current.run("DELETE FROM schema_migrations WHERE version = 124");
     current.close();
 
     const migrated = new Database(filename);
@@ -115,13 +115,13 @@ describe("数据库版本化迁移", () => {
     expect(lineIds).toHaveLength(2);
     expect(new Set(lineIds).size).toBe(2);
     expect(anchorLineIds).toEqual([lineIds[1]]);
-    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 123")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 124")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
   });
 
-  it("迁移 122 为历史正文评论回填逐行哈希并支持幂等重启", () => {
+  it("迁移 123 为历史正文评论回填逐行哈希并支持幂等重启", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-annotation-line-hashes-"));
     roots.push(root);
     const filename = join(root, "annotation-line-hashes.db");
@@ -141,7 +141,7 @@ describe("数据库版本化迁移", () => {
       note: "历史评论"
     });
     current.raw.exec("ALTER TABLE chapter_annotations DROP COLUMN line_hashes_json");
-    current.run("DELETE FROM schema_migrations WHERE version = 122");
+    current.run("DELETE FROM schema_migrations WHERE version = 123");
     current.close();
 
     const migrated = new Database(filename);
@@ -152,7 +152,7 @@ describe("数据库版本化迁移", () => {
       "SELECT line_hashes_json FROM chapter_annotations WHERE id = ?",
       String(annotation.id)
     )?.line_hashes_json))).toEqual(chapterAnnotationLineHashes("历史评论行"));
-    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 122")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 123")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
@@ -187,6 +187,51 @@ describe("数据库版本化迁移", () => {
     expect(database.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(database.all("PRAGMA foreign_key_check")).toEqual([]);
     database.close();
+  });
+
+  it("迁移 122 建立角色共享记忆表且不迁移 compact 摘要", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-122-"));
+    roots.push(root);
+    const filename = join(root, "migration-122.db");
+    const current = new Database(filename);
+    insertSystemOwnedWork(current, "work-roleplay-memory", "角色扮演迁移", "2025-01-01");
+    current.run(
+      `INSERT INTO characters (id, work_id, name, created_at, updated_at)
+       VALUES ('character-roleplay-memory', 'work-roleplay-memory', '林舟', '2025-01-01', '2025-01-01')`
+    );
+    current.run(
+      `INSERT INTO ai_conversations (
+        id, work_id, roleplay_character_id, task_type, title, compacted_summary,
+        compacted_message_count, created_at, updated_at, created_by_user_id
+      ) VALUES (?, ?, ?, 'roleplay', '旧扮演', ?, 4, '2025-01-01', '2025-01-01', ?)`,
+      "conversation-roleplay-memory",
+      "work-roleplay-memory",
+      "character-roleplay-memory",
+      JSON.stringify({ storyFacts: [{ text: "这只是上下文摘要" }] }),
+      SYSTEM_USER_ID
+    );
+    current.run("DELETE FROM schema_migrations WHERE version = 122");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.all("PRAGMA table_info(roleplay_memories)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "work_id",
+      "character_id",
+      "content_hash",
+      "origin",
+      "canonical"
+    ]));
+    expect(migrated.all("PRAGMA table_info(roleplay_memories)").map((column) => column.name)).not.toContain("scope_id");
+    expect(migrated.all("PRAGMA table_info(ai_conversations)").map((column) => column.name)).not.toContain("roleplay_memory_scope_id");
+    expect(migrated.all("PRAGMA table_info(ai_conversation_messages)").map((column) => column.name)).not.toContain("roleplay_memory_revision");
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE name = 'roleplay_memory_scopes'")).toBeUndefined();
+    expect(migrated.get("SELECT COUNT(*) AS count FROM roleplay_memories")).toEqual({ count: 0 });
+    expect(migrated.get("SELECT compacted_summary FROM ai_conversations WHERE id = 'conversation-roleplay-memory'")).toEqual({
+      compacted_summary: JSON.stringify({ storyFacts: [{ text: "这只是上下文摘要" }] })
+    });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
   });
 
   it("无损回填角色主名与别名并支持幂等重启", () => {

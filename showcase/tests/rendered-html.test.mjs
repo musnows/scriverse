@@ -37,6 +37,16 @@ test("服务端渲染叙界介绍页", async () => {
   assert.match(html, /aria-label="查看模型排行榜"/);
   assert.match(html, /class="[^"]*header-leaderboard[^"]*"/);
   assert.match(html, /href="https:\/\/github\.com\/musnows\/Scriverse"/);
+  assert.match(html, /href="https:\/\/github\.com\/musnows\/scriverse-desktop"/);
+  assert.match(html, /href="https:\/\/github\.com\/musnows\/scriverse-app"/);
+  assert.match(html, /当前正式版[\s\S]{0,24}v0\.1\.9/);
+  assert.match(html, /scriverse-desktop-darwin-arm64-0\.1\.9\.dmg/);
+  assert.match(html, /scriverse-desktop-darwin-x64-0\.1\.9\.dmg/);
+  assert.match(html, /scriverse-desktop-win32-x64-0\.1\.9-Setup\.exe/);
+  assert.match(html, /scriverse-desktop-win32-arm64-0\.1\.9-Setup\.exe/);
+  assert.match(html, /scriverse-desktop_0\.1\.9_amd64\.deb/);
+  assert.match(html, /scriverse-desktop_0\.1\.9_arm64\.deb/);
+  assert.match(html, /<img[^>]+src="\/favicon\.svg"[^>]*alt=""/);
   assert.match(html, /aria-label="在 GitHub 查看源代码"/);
   assert.match(html, /class="[^"]*header-icon-link[^"]*"/);
   assert.match(html, /data-scroll-target="workspace"[^>]*>进入叙界世界/);

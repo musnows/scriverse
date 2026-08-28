@@ -131,7 +131,7 @@ describe("AI 对话上下文压缩", () => {
     }).expect(200);
     expect(streamed.text).toContain("已结合压缩摘要和最近对话回答。");
     const modelContext = actualMessages.map((message) => message.content).join("\n");
-    expect(modelContext).toContain("较早对话的结构化长期记忆");
+    expect(modelContext).toContain("较早对话的上下文压缩摘要");
     expect(modelContext).toContain("必须遵守跃迁冷却规则");
     expect(modelContext).toContain(recentUser);
     expect(modelContext).toContain(recentAssistant);
