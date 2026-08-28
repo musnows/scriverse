@@ -71,6 +71,8 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain('editButton.textContent = chapterEditorReadOnly ? "编辑" : "预览";');
     expect(application.text).toContain('function toggleChapterEditPreviewMode()');
     expect(application.text).toContain('$("#chapter-edit-button").addEventListener("click", toggleChapterEditPreviewMode)');
+    expect(application.text).toContain('const toolbar = $("#editor-view .editor-toolbar");');
+    expect(application.text).toContain('const safeTop = Math.ceil(Math.max(reminderBottom, toolbarBottom));');
     expect(styles.text).toContain('#chapter-path { grid-area: path;');
     expect(styles.text).toContain('.file-button, .add-button { display: grid; place-items: center;');
     expect(page.text).toContain('id="new-volume-button" class="add-button"');

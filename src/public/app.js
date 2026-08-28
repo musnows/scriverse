@@ -1581,6 +1581,7 @@ function applyChapterEditorMode() {
   $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter || !canReadModule("comments"));
   syncChapterSearchControls();
   if (viewOnly) cancelChapterAutoSave();
+  syncMobileAiPanelSafeTop();
 }
 
 function enterChapterEditMode() {
@@ -7892,9 +7893,14 @@ function currentChapterForeshadowReminder() {
 
 function syncMobileAiPanelSafeTop() {
   const container = $("#chapter-foreshadow-reminder");
-  const safeTop = container.classList.contains("hidden")
+  const toolbar = $("#editor-view .editor-toolbar");
+  const reminderBottom = container.classList.contains("hidden")
     ? 0
-    : Math.ceil(container.getBoundingClientRect().bottom);
+    : container.getBoundingClientRect().bottom;
+  const toolbarBottom = $("#editor-view").classList.contains("hidden")
+    ? 0
+    : toolbar.getBoundingClientRect().bottom;
+  const safeTop = Math.ceil(Math.max(reminderBottom, toolbarBottom));
   $("#app").style.setProperty("--mobile-ai-panel-safe-top", `${safeTop}px`);
 }
 
