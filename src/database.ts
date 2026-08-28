@@ -13,9 +13,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
 export const SYSTEM_USER_ID = "__scriverse_system_user__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0；版本 111 扩展模型思考强度为 auto；版本 112 为 CLI API Key 增加可复制的加密密文；版本 113 增加角色收藏状态与列表索引；版本 114 增加组织、设定档案与想法收藏状态及列表索引；版本 115 增加 AI 对话会话级场景钉；版本 116 增加可持久化且可撤销的 Desktop Bearer 会话；版本 117 增加作品离线授权、同步变更游标与幂等变更结果；版本 118 增加供应商分析请求超时配置；版本 119 记录分析任务是否由 API Key 创建；版本 120 将书籍资料收藏按用户隔离并增加书籍级共享置顶；版本 121 强制作品 Owner 非空并建立用户外键约束。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0；版本 111 扩展模型思考强度为 auto；版本 112 为 CLI API Key 增加可复制的加密密文；版本 113 增加角色收藏状态与列表索引；版本 114 增加组织、设定档案与想法收藏状态及列表索引；版本 115 增加 AI 对话会话级场景钉；版本 116 增加可持久化且可撤销的 Desktop Bearer 会话；版本 117 增加作品离线授权、同步变更游标与幂等变更结果；版本 118 增加供应商分析请求超时配置；版本 119 记录分析任务是否由 API Key 创建；版本 120 将书籍资料收藏按用户隔离并增加书籍级共享置顶；版本 121 强制作品 Owner 非空并建立用户外键约束；版本 122 增加按角色归属的共享角色扮演记忆、来源、版本与全文索引。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 121;
+export const DATABASE_SCHEMA_VERSION = 122;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -643,6 +643,61 @@ export class Database {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS roleplay_memories (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        category TEXT NOT NULL CHECK(category IN ('event', 'state', 'relationship', 'commitment', 'knowledge', 'scene')),
+        content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 2000),
+        content_hash TEXT NOT NULL CHECK(length(content_hash) = 64),
+        importance TEXT NOT NULL DEFAULT 'medium' CHECK(importance IN ('low', 'medium', 'high')),
+        certainty TEXT NOT NULL DEFAULT 'experienced' CHECK(certainty IN ('experienced', 'observed', 'heard', 'believed')),
+        origin TEXT NOT NULL DEFAULT 'roleplay' CHECK(origin = 'roleplay'),
+        canonical INTEGER NOT NULL DEFAULT 0 CHECK(canonical = 0),
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'archived')),
+        is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0, 1)),
+        version_no INTEGER NOT NULL DEFAULT 1 CHECK(version_no > 0),
+        superseded_by_memory_id TEXT REFERENCES roleplay_memories(id) ON DELETE SET NULL,
+        source_type TEXT NOT NULL CHECK(source_type IN ('ai', 'manual')),
+        source_assistant_message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
+        idempotency_key TEXT,
+        created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(character_id, content_hash),
+        UNIQUE(character_id, idempotency_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_memory_sources (
+        id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL REFERENCES roleplay_memories(id) ON DELETE CASCADE,
+        conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE SET NULL,
+        message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
+        message_role TEXT NOT NULL CHECK(message_role IN ('user', 'assistant')),
+        source_created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        source_created_at TEXT NOT NULL,
+        evidence_snapshot TEXT NOT NULL CHECK(length(evidence_snapshot) <= 2000),
+        created_at TEXT NOT NULL,
+        UNIQUE(memory_id, message_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_memory_versions (
+        id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL REFERENCES roleplay_memories(id) ON DELETE CASCADE,
+        version_no INTEGER NOT NULL CHECK(version_no > 0),
+        category TEXT NOT NULL CHECK(category IN ('event', 'state', 'relationship', 'commitment', 'knowledge', 'scene')),
+        content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 2000),
+        importance TEXT NOT NULL CHECK(importance IN ('low', 'medium', 'high')),
+        certainty TEXT NOT NULL CHECK(certainty IN ('experienced', 'observed', 'heard', 'believed')),
+        status TEXT NOT NULL CHECK(status IN ('active', 'superseded', 'archived')),
+        is_pinned INTEGER NOT NULL CHECK(is_pinned IN (0, 1)),
+        action TEXT NOT NULL CHECK(action IN ('created', 'edited', 'pinned', 'archived', 'restored', 'superseded', 'merged')),
+        actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(memory_id, version_no)
+      );
+
       CREATE TABLE IF NOT EXISTS ai_conversation_stream_requests (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
@@ -824,6 +879,12 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_ai_suggestions_work ON ai_suggestions(work_id, status, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversations_work ON ai_conversations(work_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversation_messages ON ai_conversation_messages(conversation_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_memories_character
+        ON roleplay_memories(work_id, character_id, status, is_pinned DESC, importance DESC, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_memory_sources_memory
+        ON roleplay_memory_sources(memory_id, created_at, id);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_memory_versions_memory
+        ON roleplay_memory_versions(memory_id, version_no DESC);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_conversation_stream_requests_active
         ON ai_conversation_stream_requests(conversation_id) WHERE status = 'in_progress';
       CREATE INDEX IF NOT EXISTS idx_ai_conversation_stream_requests_lease
@@ -4542,6 +4603,105 @@ export class Database {
       } finally {
         this.raw.exec("PRAGMA foreign_keys = ON");
       }
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const roleplayMemoryTablesPresent = [
+      "roleplay_memories",
+      "roleplay_memory_sources",
+      "roleplay_memory_versions",
+      "roleplay_memory_fts"
+    ].every((name) => this.get("SELECT 1 AS present FROM sqlite_master WHERE name = ?", name) !== undefined);
+    const roleplayMemoryColumns = new Set(this.all("PRAGMA table_info(roleplay_memories)").map((column) => String(column.name)));
+    if (!applied.has(122) || !roleplayMemoryTablesPresent || !roleplayMemoryColumns.has("character_id") || !roleplayMemoryColumns.has("content_hash")) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS roleplay_memories (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+          category TEXT NOT NULL CHECK(category IN ('event', 'state', 'relationship', 'commitment', 'knowledge', 'scene')),
+          content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 2000),
+          content_hash TEXT NOT NULL CHECK(length(content_hash) = 64),
+          importance TEXT NOT NULL DEFAULT 'medium' CHECK(importance IN ('low', 'medium', 'high')),
+          certainty TEXT NOT NULL DEFAULT 'experienced' CHECK(certainty IN ('experienced', 'observed', 'heard', 'believed')),
+          origin TEXT NOT NULL DEFAULT 'roleplay' CHECK(origin = 'roleplay'),
+          canonical INTEGER NOT NULL DEFAULT 0 CHECK(canonical = 0),
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'archived')),
+          is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0, 1)),
+          version_no INTEGER NOT NULL DEFAULT 1 CHECK(version_no > 0),
+          superseded_by_memory_id TEXT REFERENCES roleplay_memories(id) ON DELETE SET NULL,
+          source_type TEXT NOT NULL CHECK(source_type IN ('ai', 'manual')),
+          source_assistant_message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
+          idempotency_key TEXT,
+          created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(character_id, content_hash),
+          UNIQUE(character_id, idempotency_key)
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS roleplay_memory_sources (
+          id TEXT PRIMARY KEY,
+          memory_id TEXT NOT NULL REFERENCES roleplay_memories(id) ON DELETE CASCADE,
+          conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE SET NULL,
+          message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
+          message_role TEXT NOT NULL CHECK(message_role IN ('user', 'assistant')),
+          source_created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          source_created_at TEXT NOT NULL,
+          evidence_snapshot TEXT NOT NULL CHECK(length(evidence_snapshot) <= 2000),
+          created_at TEXT NOT NULL,
+          UNIQUE(memory_id, message_id)
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS roleplay_memory_versions (
+          id TEXT PRIMARY KEY,
+          memory_id TEXT NOT NULL REFERENCES roleplay_memories(id) ON DELETE CASCADE,
+          version_no INTEGER NOT NULL CHECK(version_no > 0),
+          category TEXT NOT NULL CHECK(category IN ('event', 'state', 'relationship', 'commitment', 'knowledge', 'scene')),
+          content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 2000),
+          importance TEXT NOT NULL CHECK(importance IN ('low', 'medium', 'high')),
+          certainty TEXT NOT NULL CHECK(certainty IN ('experienced', 'observed', 'heard', 'believed')),
+          status TEXT NOT NULL CHECK(status IN ('active', 'superseded', 'archived')),
+          is_pinned INTEGER NOT NULL CHECK(is_pinned IN (0, 1)),
+          action TEXT NOT NULL CHECK(action IN ('created', 'edited', 'pinned', 'archived', 'restored', 'superseded', 'merged')),
+          actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(memory_id, version_no)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memories_character ON roleplay_memories(work_id, character_id, status, is_pinned DESC, importance DESC, updated_at DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memory_sources_memory ON roleplay_memory_sources(memory_id, created_at, id)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memory_versions_memory ON roleplay_memory_versions(memory_id, version_no DESC)");
+        this.raw.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS roleplay_memory_fts USING fts5(
+            memory_id UNINDEXED,
+            character_id UNINDEXED,
+            category UNINDEXED,
+            status UNINDEXED,
+            content,
+            tokenize='trigram'
+          );
+          CREATE TRIGGER IF NOT EXISTS roleplay_memory_fts_ai AFTER INSERT ON roleplay_memories BEGIN
+            INSERT INTO roleplay_memory_fts(memory_id, character_id, category, status, content)
+            VALUES (new.id, new.character_id, new.category, new.status, lower(new.content));
+          END;
+          CREATE TRIGGER IF NOT EXISTS roleplay_memory_fts_ad AFTER DELETE ON roleplay_memories BEGIN
+            DELETE FROM roleplay_memory_fts WHERE memory_id = old.id;
+          END;
+          CREATE TRIGGER IF NOT EXISTS roleplay_memory_fts_au AFTER UPDATE OF character_id, category, status, content ON roleplay_memories BEGIN
+            DELETE FROM roleplay_memory_fts WHERE memory_id = old.id;
+            INSERT INTO roleplay_memory_fts(memory_id, character_id, category, status, content)
+            VALUES (new.id, new.character_id, new.category, new.status, lower(new.content));
+          END;
+        `);
+        this.run("DELETE FROM roleplay_memory_fts");
+        this.run(`INSERT INTO roleplay_memory_fts(memory_id, character_id, category, status, content)
+          SELECT id, character_id, category, status, lower(content) FROM roleplay_memories`);
+        const timestamp = new Date().toISOString();
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (122, ?)", timestamp);
+      });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
         throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
