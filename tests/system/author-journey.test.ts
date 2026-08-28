@@ -143,12 +143,16 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("overflow-wrap: anywhere; line-height: 1.45; white-space: normal");
     expect(page.text).toContain('id="ai-citations"');
     expect(page.text).toContain('id="line-citation-menu"');
-    expect(page.text).toContain('<button id="chapter-delete-button" class="danger-button" type="button">删除章节</button>');
+    expect(page.text).not.toContain('id="chapter-delete-button"');
     expect(page.text).toContain('data-delete-chapter');
     expect(application.text).toContain("async function deleteChapter(chapterId)");
     expect(application.text).toContain('title: "删除章节"');
     expect(application.text).toContain('title: "删除操作需要再次确认"');
     expect(application.text).toContain('method: "DELETE", body: { expectedVersionNo }');
+    expect(styles.text).toContain('.setting-editor-header .entity-editor-heading { display: grid; align-content: center; justify-items: center; gap: 8px; text-align: center; }');
+    expect(styles.text).toContain('.setting-editor-title-input::placeholder { color: var(--muted); opacity: 1; }');
+    expect(styles.text).toContain('font-size: 22px; font-weight: 600; line-height: 1.2; text-align: center;');
+    expect(styles.text).toContain('.setting-editor-header .entity-editor-heading { grid-column: 1 / -1; grid-row: 1; padding-inline: 48px; }');
   });
 
   it("作品切换和新建只保留在书架首页", async () => {
@@ -649,6 +653,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(application.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(application.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
+    expect(application.text).toContain('}, "edit-mode"],');
+    expect(application.text).not.toContain('}, "edit-mode", "fullscreen"]');
     expect(application.text).toContain('createVditorUploadHandler');
     expect(application.text).toContain('createVditorUploadPlaceholder');
     expect(page.text).toContain('id="character-section-editor-view"');

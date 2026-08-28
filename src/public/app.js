@@ -1566,17 +1566,22 @@ let moduleContentInteractionsBound = false;
 function applyChapterEditorMode() {
   const permissionBlocked = Boolean(state.work) && !canEditProse();
   const viewOnly = permissionBlocked || chapterEditorReadOnly;
+  const editButton = $("#chapter-edit-button");
   $("#editor-view").classList.toggle("is-read-only", viewOnly);
   $("#chapter-title").readOnly = viewOnly;
   $("#chapter-content").readOnly = viewOnly;
   $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
-  $("#chapter-edit-button").classList.toggle("hidden", permissionBlocked || !chapterEditorReadOnly || !state.chapter);
-  $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);
+  editButton.classList.toggle("hidden", permissionBlocked || !state.chapter);
+  editButton.classList.toggle("primary-button", chapterEditorReadOnly);
+  editButton.classList.toggle("ghost-button", !chapterEditorReadOnly);
+  editButton.textContent = chapterEditorReadOnly ? "编辑" : "预览";
+  editButton.setAttribute("aria-pressed", String(!chapterEditorReadOnly));
+  editButton.setAttribute("aria-label", chapterEditorReadOnly ? "切换到编辑模式" : "切换到预览模式");
   $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter || !canReadModule("comments"));
-  $("#chapter-reader-button").classList.toggle("hidden", !state.chapter || !canReadModule("editor"));
   syncChapterSearchControls();
   if (viewOnly) cancelChapterAutoSave();
+  syncMobileAiPanelSafeTop();
 }
 
 function enterChapterEditMode() {
@@ -1587,6 +1592,19 @@ function enterChapterEditMode() {
   if (!sameChapterSnapshot(draft, lastSavedChapterSnapshot)) scheduleChapterAutoSave(120);
   else setSaveState("已保存");
   $("#chapter-content").focus();
+}
+
+function toggleChapterEditPreviewMode() {
+  if (!state.chapter || !canEditProse()) return;
+  if (chapterEditorReadOnly) {
+    enterChapterEditMode();
+    return;
+  }
+  chapterEditorReadOnly = true;
+  cancelChapterAutoSave();
+  applyChapterEditorMode();
+  setSaveState(state.dirty ? "预览中 · 有未保存修改" : "预览中", state.dirty);
+  $("#chapter-edit-button").focus();
 }
 
 function showEntityEditorPage(type, { readOnly = false } = {}) {
@@ -7875,9 +7893,14 @@ function currentChapterForeshadowReminder() {
 
 function syncMobileAiPanelSafeTop() {
   const container = $("#chapter-foreshadow-reminder");
-  const safeTop = container.classList.contains("hidden")
+  const toolbar = $("#editor-view .editor-toolbar");
+  const reminderBottom = container.classList.contains("hidden")
     ? 0
-    : Math.ceil(container.getBoundingClientRect().bottom);
+    : container.getBoundingClientRect().bottom;
+  const toolbarBottom = $("#editor-view").classList.contains("hidden")
+    ? 0
+    : toolbar.getBoundingClientRect().bottom;
+  const safeTop = Math.ceil(Math.max(reminderBottom, toolbarBottom));
   $("#app").style.setProperty("--mobile-ai-panel-safe-top", `${safeTop}px`);
 }
 
@@ -8554,7 +8577,7 @@ function closeReadingPreview() {
   replacePageRoute(returnRoute);
   const focus = readingPreviousFocus;
   readingPreviousFocus = null;
-  const focusCandidates = [focus, $("#chapter-reader-button"), $("#reader-open-button"), $("#home-button")];
+  const focusCandidates = [focus, $("#reader-open-button"), $("#home-button")];
   for (const candidate of focusCandidates) {
     if (!(candidate instanceof HTMLElement) || !candidate.isConnected || candidate.matches(":disabled")) continue;
     const rect = candidate.getBoundingClientRect();
@@ -14182,7 +14205,7 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
       className: "vditor-line-number-button",
       icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h3M4 9h3M4 13h3M4 17h3M10 5h10M10 9h10M10 13h10M10 17h10" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"/></svg>',
       click: () => toggleVditorLineNumbers(editor)
-    }, "edit-mode", "fullscreen"],
+    }, "edit-mode"],
     upload: {
       accept: "image/*",
       max: 10 * 1024 * 1024,
@@ -18534,10 +18557,7 @@ $("#chapter-foreshadow-reminder").addEventListener("keydown", (event) => {
   renderChapterForeshadowReminder();
   $("#chapter-foreshadow-reminder-details-button").focus();
 });
-$("#chapter-delete-button").addEventListener("click", () => {
-  if (state.chapter) void deleteChapter(state.chapter.id);
-});
-$("#chapter-edit-button").addEventListener("click", enterChapterEditMode);
+$("#chapter-edit-button").addEventListener("click", toggleChapterEditPreviewMode);
 $("#tidy-blank-lines-button").addEventListener("click", tidyChapterBlankLines);
 $("#new-volume-button").addEventListener("click", () => openVolumeDialog());
 $("#chapter-batch-button").addEventListener("click", openChapterBatchDialog);
@@ -19470,9 +19490,6 @@ $("#manuscript-export-menu").addEventListener("click", (event) => {
 });
 $("#reader-open-button").addEventListener("click", () => {
   void openReadingPreview({ restorePosition: true });
-});
-$("#chapter-reader-button").addEventListener("click", () => {
-  void openReadingPreview({ chapterId: state.chapter?.id ?? null, restorePosition: true });
 });
 $("#reader-close").addEventListener("click", closeReadingPreview);
 $("#reader-previous").addEventListener("click", () => void navigateReadingChapter(-1));
