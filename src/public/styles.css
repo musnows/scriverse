@@ -2874,8 +2874,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-interactive-warn { margin: 0; padding: 6px 8px; border-radius: 4px; background: color-mix(in srgb, #c07b31 12%, var(--surface)); color: color-mix(in srgb, #c07b31 70%, black); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 .ai-question-option-preview { display: grid; gap: 3px; margin: 0; padding-left: 18px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .ai-question-option-preview li.is-recommended { color: var(--accent-dark); }
-.ai-interactive-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.ai-interactive-actions button { border: 1px solid var(--line); border-radius: 3px; background: var(--surface); color: var(--muted); font-size: 10px; padding: 5px 9px; }
+.ai-interactive-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.ai-interactive-actions button { border: 1px solid var(--line); border-radius: 3px; background: var(--surface); color: var(--muted); }
+.ai-interactive-actions :is(button.ghost-button, button.primary-button) { min-width: 0; min-height: 24px; padding: 3px 7px; font-size: calc(9px * var(--ai-font-scale)); line-height: 1.35; }
 .ai-interactive-actions button:hover, .ai-interactive-actions button:focus-visible { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--ink); }
 .ai-interactive-actions .ai-card-primary { border-color: var(--accent); background: var(--accent); color: #fff; }
 .ai-interactive-actions .ai-card-primary:hover, .ai-interactive-actions .ai-card-primary:focus-visible { border-color: var(--accent-dark); background: var(--accent-dark); color: #fff; }
