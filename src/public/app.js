@@ -3300,10 +3300,11 @@ function renderRoleplayMemoryList() {
     host.innerHTML = roleplayMemoryItems.map((memory) => {
       const sources = Array.isArray(memory.sources) ? memory.sources : [];
       const editable = !roleplayMemoryReadOnly();
+      const pinAction = memory.isPinned ? "取消置顶" : "置顶";
       const actions = editable
         ? memory.status === "archived"
           ? `<button type="button" data-roleplay-memory-action="restore" data-memory-id="${esc(memory.id)}">恢复</button>`
-          : `<button type="button" data-roleplay-memory-action="pin" data-memory-id="${esc(memory.id)}">${memory.isPinned ? "取消置顶" : "置顶"}</button><button type="button" data-roleplay-memory-action="edit" data-memory-id="${esc(memory.id)}">编辑</button><button class="danger-button" type="button" data-roleplay-memory-action="archive" data-memory-id="${esc(memory.id)}">删除</button>`
+          : `<button class="danger-button roleplay-memory-icon-action" type="button" data-roleplay-memory-action="archive" data-memory-id="${esc(memory.id)}" aria-label="删除角色扮演记忆" title="删除">${trashIconMarkup()}</button><button class="roleplay-memory-icon-action${memory.isPinned ? " is-pinned" : ""}" type="button" data-roleplay-memory-action="pin" data-memory-id="${esc(memory.id)}" aria-label="${pinAction}角色扮演记忆" aria-pressed="${memory.isPinned === true}" title="${pinAction}">${pushPinIconMarkup()}</button><button class="roleplay-memory-icon-action" type="button" data-roleplay-memory-action="edit" data-memory-id="${esc(memory.id)}" aria-label="编辑角色扮演记忆" title="编辑">${pencilIconMarkup()}</button>`
         : "";
       return `<article class="roleplay-memory-card${memory.status === "archived" ? " is-archived" : ""}" data-roleplay-memory-id="${esc(memory.id)}">
         <header class="roleplay-memory-card-header"><div class="roleplay-memory-card-badges"><span class="roleplay-memory-badge">${esc(roleplayMemoryCategoryLabels[memory.category] ?? memory.category)}</span><span class="roleplay-memory-badge">${esc(roleplayMemoryImportanceLabels[memory.importance] ?? memory.importance)}</span><span class="roleplay-memory-badge">${esc(roleplayMemoryCertaintyLabels[memory.certainty] ?? memory.certainty)}</span><span class="roleplay-memory-badge">${esc(roleplayMemoryStatusLabels[memory.status] ?? memory.status)}</span><span class="roleplay-memory-badge is-noncanonical">非正史</span>${memory.isPinned ? '<span class="roleplay-memory-badge is-pinned">已置顶</span>' : ""}</div><time datetime="${esc(memory.updatedAt)}">${esc(formatDateTime(memory.updatedAt))}</time></header>
@@ -9078,6 +9079,10 @@ function bindEntityHistoryButtons(refresh) {
 
 function pencilIconMarkup() {
   return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"></path><path d="m16.5 3.5 1.4-1.4a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z"></path></svg>';
+}
+
+function trashIconMarkup() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16"></path><path d="M9 7V4h6v3M6.5 7l.8 13h9.4l.8-13M10 11v5M14 11v5"></path></svg>';
 }
 
 function characterFavoriteIconMarkup() {
