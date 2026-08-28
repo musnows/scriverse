@@ -1138,6 +1138,11 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .work-danger-field .danger-button { flex: 0 0 auto; white-space: nowrap; }
 .work-access-options { display: flex; flex-wrap: wrap; gap: 5px; }
 .work-access-options span { padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink); font-size: 10px; line-height: 1.35; }
+.work-editor-preference-options { display: grid; flex: 0 1 320px; gap: 7px; }
+.work-editor-preference-option { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); cursor: pointer; }
+.work-editor-preference-option input { flex: 0 0 auto; margin: 2px 0 0; }
+.work-editor-preference-option span { display: grid; gap: 2px; min-width: 0; }
+.work-editor-preference-option b { color: var(--ink); font-size: 11px; }
 .account-dialog { width: min(640px, 92vw); overflow: hidden; }
 .account-settings-body { display: grid; gap: 16px; max-height: calc(88vh - 86px); overflow-y: auto; padding: 20px 24px 24px; }
 .account-settings-section { padding: 18px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
@@ -1495,6 +1500,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-line-number.is-line-selected { background: rgba(139,61,44,.16); color: var(--accent-dark); font-weight: 700; }
 .chapter-line-number.is-line-selected::after { content: ""; position: absolute; top: 0; left: 100%; width: 100vw; height: 100%; background: rgba(139,61,44,.085); box-shadow: inset 3px 0 rgba(139,61,44,.28); pointer-events: none; }
 .chapter-content { position: relative; z-index: 1; grid-column: 2; grid-row: 1; resize: none; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 32px 36px 72px; border: 0; background: transparent; border-radius: 0; font-size: var(--editor-font-size); line-height: var(--editor-line-height); letter-spacing: .01em; overflow-wrap: break-word; }
+.app-shell.editor-typewriter-mode .chapter-content { padding-bottom: max(72px, 45dvh); }
 .chapter-content:focus { box-shadow: none; }
 .chapter-whitespace-overlay { position: relative; z-index: 2; grid-column: 2; grid-row: 1; width: 100%; height: 100%; overflow: hidden; opacity: 0; pointer-events: none; }
 .chapter-whitespace-overlay.is-visible { opacity: 1; }
@@ -3017,6 +3023,51 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-attachment-button:disabled, .ai-scene-button:disabled { cursor: wait; opacity: .56; }
 .ai-scene-button.hidden { display: none; }
 .ai-image-button-icon, .ai-scene-button-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+
+.character-roleplay-memory-surface { display: grid; grid-column: 1 / -1; gap: 14px; min-width: 0; }
+.roleplay-memory-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.roleplay-memory-toolbar button { min-height: 34px; }
+.roleplay-memory-filter-panel { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(120px, .45fr) minmax(120px, .45fr) auto; align-items: end; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+.roleplay-memory-filter-panel.hidden { display: none; }
+.roleplay-memory-filter-panel label { display: grid; gap: 4px; color: var(--muted); font-size: 9px; }
+.roleplay-memory-filter-panel input, .roleplay-memory-filter-panel select, .roleplay-memory-filter-panel button { min-width: 0; min-height: 34px; padding: 6px 9px; font-size: 10px; }
+.roleplay-memory-list { display: grid; gap: 9px; }
+.roleplay-memory-empty { display: grid; place-items: center; min-height: 160px; margin: 0; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); font-size: 11px; text-align: center; }
+.roleplay-memory-card { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.roleplay-memory-card.is-archived { opacity: .72; }
+.roleplay-memory-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.roleplay-memory-card-badges { display: flex; flex-wrap: wrap; gap: 5px; }
+.roleplay-memory-badge { display: inline-flex; align-items: center; min-height: 21px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); font-size: 8px; }
+.roleplay-memory-badge.is-noncanonical { border-color: color-mix(in srgb, #bf6a35 48%, var(--line)); color: #a34f20; }
+.roleplay-memory-badge.is-pinned { border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); color: var(--accent-dark); }
+.roleplay-memory-card time { flex: 0 0 auto; color: var(--muted); font-size: 8px; }
+.roleplay-memory-content { margin: 0; color: var(--ink); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.roleplay-memory-card-meta { margin: 0; color: var(--muted); font-size: 9px; }
+.roleplay-memory-sources { border-top: 1px solid var(--line); padding-top: 7px; }
+.roleplay-memory-sources summary { color: var(--muted); font-size: 9px; cursor: pointer; }
+.roleplay-memory-source-list { display: grid; gap: 6px; margin-top: 7px; }
+.roleplay-memory-source { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 7px; padding: 7px; border-radius: 4px; background: var(--paper); }
+.roleplay-memory-source p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
+.roleplay-memory-source button { min-height: 29px; padding: 4px 7px; font-size: 9px; }
+.roleplay-memory-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.roleplay-memory-card-actions button { min-height: 30px; padding: 5px 8px; font-size: 9px; }
+.roleplay-memory-card-actions .roleplay-memory-icon-action { display: inline-grid; place-items: center; width: 30px; min-width: 30px; height: 30px; min-height: 30px; padding: 0; }
+.roleplay-memory-icon-action svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.roleplay-memory-card-actions .danger-button.roleplay-memory-icon-action { border-color: color-mix(in srgb, #d9363e 62%, var(--line)); color: #d9363e; }
+.roleplay-memory-card-actions .danger-button.roleplay-memory-icon-action:hover, .roleplay-memory-card-actions .danger-button.roleplay-memory-icon-action:focus-visible { border-color: #d9363e; background: color-mix(in srgb, #d9363e 11%, transparent); }
+.roleplay-memory-icon-action.is-pinned { border-width: 1px; border-style: solid; border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); }
+.roleplay-memory-pagination { margin-top: 2px; }
+
+@media (max-width: 640px) {
+  .roleplay-memory-filter-panel { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .roleplay-memory-filter-panel label:first-child { grid-column: 1 / -1; }
+  .roleplay-memory-filter-panel button { width: 100%; }
+  .roleplay-memory-card-header { display: grid; }
+  .roleplay-memory-source { grid-template-columns: minmax(0, 1fr); }
+  .roleplay-memory-source button { justify-self: start; }
+  .roleplay-memory-card-actions button { min-height: 34px; }
+  .roleplay-memory-card-actions .roleplay-memory-icon-action { width: 34px; min-width: 34px; height: 34px; min-height: 34px; }
+}
 .ai-mention-menu { position: absolute; z-index: 20; left: 0; right: 0; bottom: calc(100% + 6px); max-height: 230px; overflow-y: auto; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 12px 34px rgba(49,42,32,.18); }
 .ai-mention-option { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; text-align: left; }
 .ai-mention-option:hover, .ai-mention-option:focus-visible, .ai-mention-option.is-active { background: var(--paper-deep); }
@@ -3627,6 +3678,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 #character-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 #knowledge-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .entity-editor-header, .character-editor-header { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr) minmax(160px, 1fr); align-items: center; gap: 24px; min-height: 78px; padding: 14px clamp(18px, 3vw, 44px); border-bottom: 1px solid var(--line); background: var(--panel); }
+.character-editor-header { grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr) auto; }
 .entity-editor-heading { min-width: 0; text-align: center; }
 .entity-editor-heading h1 { overflow: hidden; margin: 2px 0 0; font-size: 24px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .entity-editor-readonly-badge { display: inline-block; width: fit-content; margin: 0 auto; padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--muted) 55%, var(--line)); border-radius: 999px; color: var(--muted); font-size: 10px; line-height: 1.2; }
@@ -3709,6 +3761,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .knowledge-editor-header-note { color: var(--muted); font-size: 10px; text-align: right; }
 .character-version-badge { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper-deep); color: var(--accent-dark); font: 10px/1 var(--font-latin), monospace; }
 .character-editor-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.character-editor-header-actions > .primary-button, .character-editor-header-actions > .ghost-button { flex: 0 0 auto; white-space: nowrap; }
 .character-editor-header-actions .ghost-button { min-height: 34px; }
 .character-editor-header-actions .ghost-button:disabled { cursor: not-allowed; opacity: .46; }
 .character-editor-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; }
@@ -3723,6 +3776,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-editor-section > header { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .character-editor-section > header h3 { margin: 2px 0 0; font-size: 21px; }
 .character-editor-section > header p { max-width: 430px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; text-align: right; }
+.character-editor-section.has-header-actions > header { align-items: center; }
+.character-editor-section.has-header-actions > header > .character-editor-section-header-copy { display: grid; gap: 4px; min-width: 0; }
+.character-editor-section.has-header-actions > header > .character-editor-section-header-copy > p { max-width: 620px; text-align: left; }
+.character-editor-section.has-header-actions > header .roleplay-memory-toolbar { flex: 0 0 auto; }
 .character-editor-section-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 17px 20px; }
 .character-editor-section-fields > label, .character-editor-section-fields > .form-field { display: grid; align-content: start; gap: 7px; color: var(--muted); font-size: 11px; }
 .character-editor-section-fields > label:has(textarea), .character-editor-section-fields > .form-field:has(textarea), .character-editor-section-fields > .structured-list-field, .character-editor-section-fields > .chip-field, .character-editor-section-fields > .markdown-editor-field, .character-editor-field-help { grid-column: 1 / -1; }
@@ -3985,6 +4042,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .character-editor-section-fields > label, .character-editor-section-fields > .form-field, .character-editor-field-help { grid-column: 1; }
   .character-editor-section > header { align-items: flex-start; flex-direction: column; gap: 7px; }
   .character-editor-section > header p { text-align: left; }
+  .character-editor-section.has-header-actions > header { align-items: flex-end; flex-direction: row; }
+  .character-editor-section.has-header-actions > header > .character-editor-section-header-copy { min-width: 0; }
   .character-markdown-editor { overflow: hidden; }
   .character-markdown-editor > .vditor-editor-host { min-height: 42dvh; }
   .character-markdown-editor-meta { grid-template-columns: minmax(0, 1fr); }
@@ -4209,6 +4268,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .editor-view .editor-actions > button { min-width: 0; min-height: 34px; padding-inline: 6px; font-size: 11px; }
   .chapter-title { font-size: 21px; }
   .chapter-content { padding: 22px 16px 64px 12px; font-size: max(16px, var(--editor-font-size)); }
+  .app-shell.editor-typewriter-mode .chapter-content { padding-bottom: max(64px, 45dvh); }
   .chapter-line-numbers { width: 32px; font-size: 11px; }
   .chapter-editor-frame { grid-template-columns: 32px minmax(0, 1fr); }
   .chapter-line-measure { left: 32px; }
@@ -4296,6 +4356,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .access-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .access-row select, .access-row button, .work-access-field .ghost-button { width: 100%; }
   .work-access-field { align-items: stretch; flex-direction: column; }
+  .work-editor-preference-options { flex-basis: auto; width: 100%; }
   .work-access-field .danger-button { width: 100%; }
 
   .recycle-bin-card { grid-template-columns: minmax(0, 1fr); gap: 7px; }

@@ -232,8 +232,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('<button id="setting-editor-delete" class="danger-button hidden" type="button">删除设定</button>');
     expect(page.text).toContain('id="character-merge-button"');
     expect(page.text).toContain('id="character-delete-button"');
-    expect(page.text.match(/data-character-editor-tab=/gu)).toHaveLength(5);
+    expect(page.text.match(/data-character-editor-tab=/gu)).toHaveLength(6);
     expect(page.text).toContain('data-character-editor-tab="relationships"');
+    expect(page.text).toContain('data-character-editor-tab="roleplay-memory"');
     expect(page.text).toContain("简介、人设摘要、身份与动机");
     expect(page.text).toContain("保存新版本");
     expect(application.text).toContain("function renderCharacterEditorFields(item)");
@@ -925,7 +926,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('const stateName = sending ? "stop" : switching ? "switching" : "send";');
     expect(application.text).toContain('button.disabled = switching;');
     expect(application.text).toContain('button.classList.toggle("is-stop", sending);');
-    expect(application.text).toContain('content: $("#chapter-content").value');
+    expect(application.text).toContain('const content = $("#chapter-content").value;');
+    expect(application.text).toContain('...(lineIds.length <= MAX_CHAPTER_LINE_IDS ? { lineIds } : {})');
     expect(application.text).not.toContain("collapseChapterInputBlankLines");
     expect(application.text).not.toContain("collapseExcessBlankLines");
     expect(application.text).toContain("function tidyChapterBlankLines()");
