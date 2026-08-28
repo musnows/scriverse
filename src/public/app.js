@@ -14135,9 +14135,13 @@ async function openSettingEditor(item = null, { readOnly = false } = {}) {
   (readOnly ? $("#setting-editor-back") : $("#setting-editor-name")).focus();
 }
 
-function characterEditorSection(key, title, description, content) {
-  return `<section class="character-editor-section${key === "basic" ? "" : " hidden"}" data-character-editor-panel="${esc(key)}" role="tabpanel">
-    <header><div><span class="eyebrow">${esc(title)}</span><h3>${esc(title)}</h3></div><p>${esc(description)}</p></header>
+function characterEditorSection(key, title, description, content, headerActions = "") {
+  const hasHeaderActions = Boolean(headerActions);
+  const header = hasHeaderActions
+    ? `<header><div class="character-editor-section-header-copy"><span class="eyebrow">${esc(title)}</span><h3>${esc(title)}</h3><p>${esc(description)}</p></div>${headerActions}</header>`
+    : `<header><div><span class="eyebrow">${esc(title)}</span><h3>${esc(title)}</h3></div><p>${esc(description)}</p></header>`;
+  return `<section class="character-editor-section${key === "basic" ? "" : " hidden"}${hasHeaderActions ? " has-header-actions" : ""}" data-character-editor-panel="${esc(key)}" role="tabpanel">
+    ${header}
     <div class="character-editor-section-fields">${content}</div>
   </section>`;
 }
@@ -15092,12 +15096,15 @@ function renderCharacterAvatar(item) {
   }
 }
 
+function roleplayMemoryToolbarMarkup() {
+  return `<div class="roleplay-memory-toolbar">
+    <button id="roleplay-memory-filter-toggle" class="module-filter-toggle" type="button" aria-label="筛选角色扮演记忆" aria-controls="roleplay-memory-filter-panel" aria-expanded="false" title="筛选角色扮演记忆"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>
+    <button id="roleplay-memory-add" class="primary-button" type="button">手工添加</button>
+  </div>`;
+}
+
 function roleplayMemorySurfaceMarkup() {
   return `<div id="character-roleplay-memory-surface" class="character-roleplay-memory-surface">
-    <div class="roleplay-memory-toolbar">
-      <button id="roleplay-memory-filter-toggle" class="module-filter-toggle" type="button" aria-label="筛选角色扮演记忆" aria-controls="roleplay-memory-filter-panel" aria-expanded="false" title="筛选角色扮演记忆"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>
-      <button id="roleplay-memory-add" class="primary-button" type="button">手工添加</button>
-    </div>
     <section id="roleplay-memory-filter-panel" class="roleplay-memory-filter-panel hidden" aria-label="角色扮演记忆筛选">
       <label for="roleplay-memory-search">搜索<input id="roleplay-memory-search" type="search" maxlength="200" placeholder="搜索事件、承诺、场景或角色状态"></label>
       <label for="roleplay-memory-category">类别<select id="roleplay-memory-category"><option value="">全部类别</option><option value="event">事件</option><option value="state">状态</option><option value="relationship">关系</option><option value="commitment">承诺</option><option value="knowledge">知识</option><option value="scene">场景</option></select></label>
@@ -15165,7 +15172,8 @@ function renderCharacterEditorFields(item) {
     characterEditorSection("roleplay-memory", "角色扮演记忆", "该角色在作品内唯一、所有有权用户共享的非正史角色扮演记忆库。",
       item?.id
         ? roleplayMemorySurfaceMarkup()
-        : '<div class="character-editor-empty-field"><b>角色扮演记忆</b><span>保存角色卡后即可管理该角色的共享记忆库。</span></div>')
+        : '<div class="character-editor-empty-field"><b>角色扮演记忆</b><span>保存角色卡后即可管理该角色的共享记忆库。</span></div>',
+      item?.id ? roleplayMemoryToolbarMarkup() : "")
   ].join("");
   const name = $("#character-editor-fields [name='name']");
   if (name) name.required = true;

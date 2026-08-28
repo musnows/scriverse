@@ -85,11 +85,15 @@ describe("AI 角色扮演界面", () => {
     expect(page).toContain("feature=ai-roleplay-memory-v3");
     expect(page).toContain("feature=ai-roleplay-memory-v4");
     expect(page).toContain("feature=ai-roleplay-memory-v5");
+    expect(page).toContain("feature=roleplay-memory-header-actions-v1");
+    expect(page).toContain("feature=roleplay-memory-header-toolbar-v1");
     expect(application).toContain("function roleplayMemorySurfaceMarkup()");
+    expect(application).toContain("function roleplayMemoryToolbarMarkup()");
+    expect(application).toContain('class="character-editor-section-header-copy"');
     expect(application).toContain('id="character-roleplay-memory-surface" class="character-roleplay-memory-surface"');
     expect(application).toContain('id="roleplay-memory-filter-toggle" class="module-filter-toggle" type="button" aria-label="筛选角色扮演记忆"');
     expect(application).toContain('title="筛选角色扮演记忆"><svg viewBox="0 0 24 24"');
-    expect(application).toContain('</svg></button>\n      <button id="roleplay-memory-add" class="primary-button" type="button">手工添加</button>');
+    expect(application).toContain('</svg></button>\n    <button id="roleplay-memory-add" class="primary-button" type="button">手工添加</button>');
     expect(application).toContain("function bindRoleplayMemorySurface(character)");
     expect(application).toContain("function openRoleplayMemoryEditor(memory = null)");
     expect(application).toContain("/api/characters/${encodeURIComponent(characterId)}/roleplay-memories?");
@@ -105,6 +109,8 @@ describe("AI 角色扮演界面", () => {
     expect(styles).toContain(".character-roleplay-memory-surface { display: grid; grid-column: 1 / -1; gap: 14px; min-width: 0; }");
     expect(styles).not.toContain(".roleplay-memory-scope-panel");
     expect(styles).toContain(".roleplay-memory-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }");
+    expect(styles).toContain(".character-editor-section.has-header-actions > header > .character-editor-section-header-copy { display: grid; gap: 4px; min-width: 0; }");
+    expect(styles).toContain(".character-editor-section.has-header-actions > header .roleplay-memory-toolbar { flex: 0 0 auto; }");
     expect(styles).toContain(".roleplay-memory-filter-panel { display: grid;");
     expect(styles).toContain(".roleplay-memory-card { display: grid;");
   });

@@ -3651,6 +3651,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-editor-section > header { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .character-editor-section > header h3 { margin: 2px 0 0; font-size: 21px; }
 .character-editor-section > header p { max-width: 430px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; text-align: right; }
+.character-editor-section.has-header-actions > header { align-items: center; }
+.character-editor-section.has-header-actions > header > .character-editor-section-header-copy { display: grid; gap: 4px; min-width: 0; }
+.character-editor-section.has-header-actions > header > .character-editor-section-header-copy > p { max-width: 620px; text-align: left; }
+.character-editor-section.has-header-actions > header .roleplay-memory-toolbar { flex: 0 0 auto; }
 .character-editor-section-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 17px 20px; }
 .character-editor-section-fields > label, .character-editor-section-fields > .form-field { display: grid; align-content: start; gap: 7px; color: var(--muted); font-size: 11px; }
 .character-editor-section-fields > label:has(textarea), .character-editor-section-fields > .form-field:has(textarea), .character-editor-section-fields > .structured-list-field, .character-editor-section-fields > .chip-field, .character-editor-section-fields > .markdown-editor-field, .character-editor-field-help { grid-column: 1 / -1; }
@@ -3913,6 +3917,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .character-editor-section-fields > label, .character-editor-section-fields > .form-field, .character-editor-field-help { grid-column: 1; }
   .character-editor-section > header { align-items: flex-start; flex-direction: column; gap: 7px; }
   .character-editor-section > header p { text-align: left; }
+  .character-editor-section.has-header-actions > header { align-items: flex-end; flex-direction: row; }
+  .character-editor-section.has-header-actions > header > .character-editor-section-header-copy { min-width: 0; }
   .character-markdown-editor { overflow: hidden; }
   .character-markdown-editor > .vditor-editor-host { min-height: 42dvh; }
   .character-markdown-editor-meta { grid-template-columns: minmax(0, 1fr); }
