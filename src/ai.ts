@@ -6125,7 +6125,7 @@ export class AiManager {
     const skillsTokens = 0;
     const inputTokens = messageTokens + functionTokens + skillsTokens;
     const remainingTokens = Math.max(0, contextWindow - inputTokens);
-    // 超窗时把可交互上下文压到剩余份额，保证五段分布之和始终等于 contextWindow。
+    // 超窗时把可交互上下文压到剩余份额，保证六段分布之和始终等于 contextWindow。
     const contextInteractionTokens = Math.max(0, contextWindow - systemPromptTokens - functionTokens - skillsTokens - remainingTokens);
     const threshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
     const conversationUsagePercent = Number(budget.conversationUsagePercent) || 0;
@@ -6142,6 +6142,7 @@ export class AiManager {
       conversationBudgetTokens: Number(budget.conversationBudgetTokens),
       conversationUsagePercent,
       maxOutputTokens: configuredOutputTokens,
+      outputTokens: 0,
       maxOutputUsagePercent,
       maxOutputThresholdReached: maxOutputUsagePercent >= threshold,
       outputReserveTokens: Number(budget.outputReserveTokens),
@@ -6153,6 +6154,7 @@ export class AiManager {
         functionTokens,
         skillsTokens,
         contextTokens: contextInteractionTokens,
+        outputTokens: 0,
         leftTokens: remainingTokens
       },
       compactThreshold: threshold,
@@ -6417,7 +6419,8 @@ export class AiManager {
     model: ModelRow,
     messages: CompletionMessage[],
     tools: Record<string, unknown>[],
-    reportedUsage?: unknown
+    reportedUsage?: unknown,
+    generatedOutputTokens = 0
   ): Record<string, unknown> {
     const baseUsage = this.contextUsageForModel(input, model);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
@@ -6430,10 +6433,12 @@ export class AiManager {
     const inputTokens = serializedMessageTokens + functionTokens + skillsTokens;
     const remainingTokens = Math.max(0, contextWindow - inputTokens);
     const contextTokens = Math.max(0, contextWindow - systemPromptTokens - functionTokens - skillsTokens - remainingTokens);
+    const outputTokens = Math.max(0, Math.round(Number(generatedOutputTokens) || 0));
     const estimatedUsage = {
       ...baseUsage,
       contextWindow,
       inputTokens,
+      outputTokens,
       remainingTokens,
       contextFallbackReached: remainingTokens <= MIN_CONTEXT_REMAINING_TOKENS,
       usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
@@ -6442,7 +6447,8 @@ export class AiManager {
         functionTokens,
         skillsTokens,
         contextTokens,
-        leftTokens: remainingTokens
+        outputTokens,
+        leftTokens: Math.max(0, remainingTokens - outputTokens)
       }
     };
     const reportedInputTokens = resolveReportedInputTokens(reportedUsage);
@@ -6458,6 +6464,7 @@ export class AiManager {
     return {
       ...estimatedUsage,
       inputTokens: reportedInputTokens,
+      outputTokens,
       remainingTokens: reportedRemainingTokens,
       contextFallbackReached: reportedRemainingTokens <= MIN_CONTEXT_REMAINING_TOKENS,
       usagePercent: Math.min(100, Math.round(reportedInputTokens / contextWindow * 100)),
@@ -6467,7 +6474,8 @@ export class AiManager {
         functionTokens: reportedFunctionTokens,
         skillsTokens: reportedSkillsTokens,
         contextTokens: reportedDistributionRemaining,
-        leftTokens: reportedRemainingTokens
+        outputTokens,
+        leftTokens: Math.max(0, reportedRemainingTokens - outputTokens)
       }
     };
   }
@@ -9542,7 +9550,7 @@ export class AiManager {
         context,
         toolCalls: executedToolCalls,
         processSteps,
-        contextUsage: this.completionContextUsage(effectiveInput, model, completionMessages, tools, payload.usage),
+        contextUsage: this.completionContextUsage(effectiveInput, model, completionMessages, tools, payload.usage, outputTokens),
         ...(suspendedQuestionId ? { suspendedQuestionId } : {})
       };
     } catch (error) {

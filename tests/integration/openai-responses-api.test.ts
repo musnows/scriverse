@@ -440,15 +440,19 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
     const complete = JSON.parse(completeData ?? "{}") as {
       contextUsage?: {
         inputTokens?: number;
+        outputTokens?: number;
         usagePercent?: number;
         contextUsageSource?: string;
+        tokenDistribution?: { outputTokens?: number };
       };
     };
     expect(imageRequestSeen).toBe(true);
     expect(complete.contextUsage).toMatchObject({
       inputTokens: 4_321,
+      outputTokens: 7,
       usagePercent: 13,
-      contextUsageSource: "reported"
+      contextUsageSource: "reported",
+      tokenDistribution: { outputTokens: 7 }
     });
   });
 
