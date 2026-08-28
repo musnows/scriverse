@@ -1138,6 +1138,11 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .work-danger-field .danger-button { flex: 0 0 auto; white-space: nowrap; }
 .work-access-options { display: flex; flex-wrap: wrap; gap: 5px; }
 .work-access-options span { padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink); font-size: 10px; line-height: 1.35; }
+.work-editor-preference-options { display: grid; flex: 0 1 320px; gap: 7px; }
+.work-editor-preference-option { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); cursor: pointer; }
+.work-editor-preference-option input { flex: 0 0 auto; margin: 2px 0 0; }
+.work-editor-preference-option span { display: grid; gap: 2px; min-width: 0; }
+.work-editor-preference-option b { color: var(--ink); font-size: 11px; }
 .account-dialog { width: min(640px, 92vw); overflow: hidden; }
 .account-settings-body { display: grid; gap: 16px; max-height: calc(88vh - 86px); overflow-y: auto; padding: 20px 24px 24px; }
 .account-settings-section { padding: 18px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
@@ -1495,6 +1500,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-line-number.is-line-selected { background: rgba(139,61,44,.16); color: var(--accent-dark); font-weight: 700; }
 .chapter-line-number.is-line-selected::after { content: ""; position: absolute; top: 0; left: 100%; width: 100vw; height: 100%; background: rgba(139,61,44,.085); box-shadow: inset 3px 0 rgba(139,61,44,.28); pointer-events: none; }
 .chapter-content { position: relative; z-index: 1; grid-column: 2; grid-row: 1; resize: none; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 32px 36px 72px; border: 0; background: transparent; border-radius: 0; font-size: var(--editor-font-size); line-height: var(--editor-line-height); letter-spacing: .01em; overflow-wrap: break-word; }
+.app-shell.editor-typewriter-mode .chapter-content { padding-bottom: max(72px, 45dvh); }
 .chapter-content:focus { box-shadow: none; }
 .chapter-whitespace-overlay { position: relative; z-index: 2; grid-column: 2; grid-row: 1; width: 100%; height: 100%; overflow: hidden; opacity: 0; pointer-events: none; }
 .chapter-whitespace-overlay.is-visible { opacity: 1; }
@@ -4149,6 +4155,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .editor-view .editor-actions > button { min-width: 0; min-height: 34px; padding-inline: 6px; font-size: 11px; }
   .chapter-title { font-size: 21px; }
   .chapter-content { padding: 22px 16px 64px 12px; font-size: max(16px, var(--editor-font-size)); }
+  .app-shell.editor-typewriter-mode .chapter-content { padding-bottom: max(64px, 45dvh); }
   .chapter-line-numbers { width: 32px; font-size: 11px; }
   .chapter-editor-frame { grid-template-columns: 32px minmax(0, 1fr); }
   .chapter-line-measure { left: 32px; }
@@ -4236,6 +4243,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .access-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .access-row select, .access-row button, .work-access-field .ghost-button { width: 100%; }
   .work-access-field { align-items: stretch; flex-direction: column; }
+  .work-editor-preference-options { flex-basis: auto; width: 100%; }
   .work-access-field .danger-button { width: 100%; }
 
   .recycle-bin-card { grid-template-columns: minmax(0, 1fr); gap: 7px; }

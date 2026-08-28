@@ -147,7 +147,7 @@ try {
   assert.match(application, /renderPlatformAiConfig/u);
   assert.match(application, /renderBookAiSettings/u);
   assert.doesNotMatch(application, /ai-context-usage/u);
-  assert.match(application, /setAiContextMeter\(payload\.contextUsage\)/u);
+  assert.match(application, /setAiChatTabContextUsage\(tab, payload\.contextUsage\)/u);
   assert.match(application, /step="any"/u);
   assert.match(application, /streamChat/u);
   assert.match(application, /renderMarkdown/u);
@@ -210,8 +210,8 @@ try {
   const originalVersion = secondChapter.versionNo;
   const typedChapter = await api<Entity>("PATCH", `/chapters/${secondChapter.id}`, { chapterType: "设定" });
   assert.equal(typedChapter.chapterType, "设定");
-  assert.equal(typedChapter.versionNo, originalVersion);
-  checked("chapter-types", "all chapter metadata supports type marking without creating a false content version");
+  assert.equal(typedChapter.versionNo, originalVersion + 1);
+  checked("chapter-types", "chapter type marking creates a recoverable version and invalidates stale analysis context");
 
   const coverForm = new FormData();
   coverForm.append("file", new Blob([Buffer.from(

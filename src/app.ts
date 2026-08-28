@@ -281,7 +281,9 @@ const workSchema = z.object({
   description: z.string().max(10_000).optional(),
   language: z.string().max(30).optional(),
   coverUrl: z.string().url().nullable().optional(),
-  tags: optionalStrings
+  tags: optionalStrings,
+  editorAutoIndentEnabled: z.boolean().optional(),
+  editorTypewriterModeEnabled: z.boolean().optional()
 });
 const workOfflineAccessSchema = z.object({ enabled: z.boolean() }).strict();
 

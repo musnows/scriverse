@@ -21,7 +21,7 @@ describe("工作台模块图预加载", () => {
     const preloadHrefs = [...page.text.matchAll(/<link rel="modulepreload" href="([^"]+)" fetchpriority="low">/gu)]
       .map((match) => match[1]);
 
-    expect(preloadHrefs).toHaveLength(59);
+    expect(preloadHrefs).toHaveLength(60);
     expect(preloadHrefs[0]).toContain("/app.js?v=");
     expect(preloadHrefs).toContain("/reading-preview.js?v=20260813-reader-theme-v2");
     expect(preloadHrefs).toContain("/avatar-crop.js?v=20260725-avatar-crop");
