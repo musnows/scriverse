@@ -70,6 +70,8 @@ type WorkInput = {
   language?: string;
   coverUrl?: string | null;
   tags?: string[];
+  editorAutoIndentEnabled?: boolean;
+  editorTypewriterModeEnabled?: boolean;
 };
 
 type WorkListBatch = {
@@ -1206,6 +1208,8 @@ export class Store {
       language: entity.language,
       coverUrl: entity.coverUrl,
       tags: entity.tags,
+      editorAutoIndentEnabled: entity.editorAutoIndentEnabled,
+      editorTypewriterModeEnabled: entity.editorTypewriterModeEnabled,
       ownerUserId: entity.ownerUserId
     };
     if (type === "volume") return {
@@ -1532,8 +1536,9 @@ export class Store {
         const ownerUserId = this.resolveWorkOwnerUserId(typeof snapshot.ownerUserId === "string" ? snapshot.ownerUserId : null, true);
         const timestamp = now();
         this.db.run(
-          `INSERT INTO works (id, title, author, description, language, cover_url, tags_json, version_no, created_at, updated_at, owner_user_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+          `INSERT INTO works (id, title, author, description, language, cover_url, tags_json,
+           editor_auto_indent_enabled, editor_typewriter_mode_enabled, version_no, created_at, updated_at, owner_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
           entityId,
           String(snapshot.title ?? "未命名作品"),
           String(snapshot.author ?? ""),
@@ -1541,6 +1546,8 @@ export class Store {
           String(snapshot.language ?? "zh-CN"),
           snapshot.coverUrl as string | null ?? null,
           JSON.stringify(Array.isArray(snapshot.tags) ? snapshot.tags : []),
+          snapshot.editorAutoIndentEnabled === true ? 1 : 0,
+          snapshot.editorTypewriterModeEnabled === true ? 1 : 0,
           timestamp,
           timestamp,
           ownerUserId
@@ -1628,8 +1635,9 @@ export class Store {
     const resolvedOwnerUserId = this.resolveWorkOwnerUserId(ownerUserId);
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO works (id, title, author, description, language, cover_url, tags_json, created_at, updated_at, owner_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO works (id, title, author, description, language, cover_url, tags_json,
+         editor_auto_indent_enabled, editor_typewriter_mode_enabled, created_at, updated_at, owner_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         workId,
         input.title,
         input.author ?? "",
@@ -1637,6 +1645,8 @@ export class Store {
         input.language ?? "zh-CN",
         input.coverUrl ?? null,
         JSON.stringify(input.tags ?? []),
+        input.editorAutoIndentEnabled === true ? 1 : 0,
+        input.editorTypewriterModeEnabled === true ? 1 : 0,
         timestamp,
         timestamp,
         resolvedOwnerUserId
@@ -2096,7 +2106,8 @@ export class Store {
       this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
       const timestamp = now();
       this.db.run(
-        `UPDATE works SET title = ?, author = ?, description = ?, language = ?, cover_url = ?, tags_json = ?, version_no = version_no + 1, updated_at = ?
+        `UPDATE works SET title = ?, author = ?, description = ?, language = ?, cover_url = ?, tags_json = ?,
+         editor_auto_indent_enabled = ?, editor_typewriter_mode_enabled = ?, version_no = version_no + 1, updated_at = ?
          WHERE id = ?`,
         input.title ?? String(current.title),
         input.author ?? String(current.author),
@@ -2104,6 +2115,8 @@ export class Store {
         input.language ?? String(current.language),
         input.coverUrl === undefined ? (current.coverUrl as string | null) : input.coverUrl,
         JSON.stringify(input.tags ?? current.tags),
+        input.editorAutoIndentEnabled === undefined ? (current.editorAutoIndentEnabled ? 1 : 0) : input.editorAutoIndentEnabled ? 1 : 0,
+        input.editorTypewriterModeEnabled === undefined ? (current.editorTypewriterModeEnabled ? 1 : 0) : input.editorTypewriterModeEnabled ? 1 : 0,
         timestamp,
         workId
       );
@@ -4606,6 +4619,8 @@ export class Store {
         : optionalString(row, "cover_url"),
       tags: json(requiredString(row, "tags_json"), []),
       offlineAccessEnabled: numberValue(row, "offline_access_enabled") === 1,
+      editorAutoIndentEnabled: numberValue(row, "editor_auto_indent_enabled") === 1,
+      editorTypewriterModeEnabled: numberValue(row, "editor_typewriter_mode_enabled") === 1,
       versionNo: numberValue(row, "version_no") || this.currentEntityVersionNo("work", workId),
       ownerUserId,
       accessRole,

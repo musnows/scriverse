@@ -15,6 +15,7 @@ import { createAiChatTabManager, normalizeAiChatTabLimit } from "/ai-chat-tabs.j
 import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260816-ai-chat-tabs-v1";
 import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
+import { CHAPTER_PARAGRAPH_INDENT, calculateChapterCaretScroll, chapterLineIndexAtOffset, insertIndentedParagraph } from "/chapter-editor-behavior.js?v=20260828-centered-scroll-v1";
 import {
   FORESHADOW_REMINDER_SNOOZE_STORAGE_KEY,
   foreshadowReminderRequestTargetsState,
@@ -446,6 +447,10 @@ function canGlobalReplaceAny(work = state.work) {
   return Boolean(work) && (canGlobalReplaceScope("prose", work) || canGlobalReplaceScope("settings", work));
 }
 
+function applyChapterEditorPreferences() {
+  $("#app").classList.toggle("editor-typewriter-mode", Boolean(state.work?.editorTypewriterModeEnabled));
+}
+
 function applyWorkAccessMode() {
   const viewOnly = Boolean(state.work) && !canEditWork();
   const proseReadOnly = Boolean(state.work) && !canEditProse();
@@ -458,6 +463,7 @@ function applyWorkAccessMode() {
   $("#app").classList.toggle("prose-hidden-mode", proseHidden);
   $("#app").classList.toggle("ai-hidden-mode", aiHidden);
   document.body.classList.toggle("work-viewer-mode", moduleReadOnly);
+  applyChapterEditorPreferences();
   for (const item of WORK_PERMISSION_MODULES) {
     if (!item.uiModule) continue;
     const button = $(`#module-nav [data-module="${item.uiModule}"]`);
@@ -1465,6 +1471,7 @@ let chapterLineNumberFrame = null;
 let chapterLineNumberTimer = null;
 let chapterLineLayout = null;
 let chapterLineVirtualWindow = null;
+let chapterCaretScrollFrame = null;
 let chapterLineSelection = null;
 let chapterLineDrag = null;
 let chapterWhitespaceVisible = true;
@@ -1960,6 +1967,37 @@ function scheduleChapterLineNumbers(delay = 0) {
     chapterLineNumberTimer = null;
     requestChapterLineNumberFrame();
   }, wait);
+}
+
+function scheduleChapterCaretScroll() {
+  if (!state.work?.editorTypewriterModeEnabled || chapterCaretScrollFrame !== null) return;
+  chapterCaretScrollFrame = requestAnimationFrame(() => {
+    chapterCaretScrollFrame = null;
+    const input = $("#chapter-content");
+    const measure = $("#chapter-line-measure");
+    if (!state.work?.editorTypewriterModeEnabled || document.activeElement !== input || input.readOnly || input.clientWidth === 0 || input.clientHeight === 0) return;
+    const style = getComputedStyle(input);
+    const paddingTop = parseFloat(style.paddingTop) || 0;
+    const paddingBottom = parseFloat(style.paddingBottom) || 0;
+    const contentWidth = Math.max(1, input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+    const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.55;
+    const layout = prepareChapterLineLayout(input, measure, style, contentWidth);
+    const scrollContentHeight = input.scrollHeight - paddingTop - paddingBottom;
+    const targetHeight = input.scrollHeight > input.clientHeight + 1 ? scrollContentHeight : null;
+    const { getLineBounds } = createChapterLineBoundsGetter(layout, measure, lineHeight, targetHeight);
+    const lineIndex = Math.min(layout.lines.length - 1, chapterLineIndexAtOffset(input.value, input.selectionEnd));
+    const caretBottom = getLineBounds(lineIndex).bottom + paddingTop;
+    const nextScrollTop = calculateChapterCaretScroll({
+      caretBottom,
+      scrollTop: input.scrollTop,
+      clientHeight: input.clientHeight,
+      scrollHeight: input.scrollHeight
+    });
+    if (nextScrollTop === input.scrollTop) return;
+    input.scrollTop = nextScrollTop;
+    syncChapterLineNumberScroll();
+    scheduleChapterLineNumbers();
+  });
 }
 
 function lineIndexAtPointer(clientY) {
@@ -13883,18 +13921,36 @@ function openWorkSettingsDialog(work) {
     <div><strong id="whitespace-settings-title">正文空白符</strong><small>在编辑器正文中显示或隐藏空格、全角空格和 Tab 的可视标记。</small></div>
     <button id="toggle-whitespace-settings" class="ghost-button" data-toggle-whitespace type="button" aria-pressed="${chapterWhitespaceVisible}" title="用点标记半角空格，用方框标记全角空格，用箭头标记 Tab">${chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符"}</button>
   </section>` : "";
+  const editorPreferencesField = `<section class="work-access-field work-editor-preferences-field" aria-labelledby="work-editor-preferences-title">
+    <div><strong id="work-editor-preferences-title">正文编辑辅助</strong><small>仅对当前作品生效。新建作品默认关闭，不影响其他作品或系统设置。</small></div>
+    <div class="work-editor-preference-options" role="group" aria-labelledby="work-editor-preferences-title">
+      <label class="work-editor-preference-option"><input name="editorAutoIndentEnabled" type="checkbox" ${work.editorAutoIndentEnabled ? "checked" : ""}><span><b>自动空两字</b><small>按 Enter 新建段落时自动插入两个全角空格。</small></span></label>
+      <label class="work-editor-preference-option"><input name="editorTypewriterModeEnabled" type="checkbox" ${work.editorTypewriterModeEnabled ? "checked" : ""}><span><b>打字机模式</b><small>输入位置超过页面六成后，将当前行保持在页面中部。</small></span></label>
+    </div>
+  </section>`;
   openDialog("作品信息",
-    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField + exportField + recycleBinField + deleteField,
+    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + editorPreferencesField + whitespaceField + accessField + importHistoryField + exportField + recycleBinField + deleteField,
     async (form) => {
-      await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
+      await api(`/api/works/${work.id}`, { method: "PATCH", body: {
+        title: form.get("title"),
+        author: form.get("author"),
+        description: form.get("description"),
+        editorAutoIndentEnabled: form.has("editorAutoIndentEnabled"),
+        editorTypewriterModeEnabled: form.has("editorTypewriterModeEnabled")
+      } });
       state.works = (await apiPage("/api/works")).items;
       const updated = state.works.find((item) => item.id === work.id);
       if (updated) Object.assign(work, updated);
       if (state.work?.id === work.id) {
-        state.work.title = String(form.get("title") ?? state.work.title);
-        state.work.author = String(form.get("author") ?? state.work.author);
-        state.work.description = String(form.get("description") ?? state.work.description);
-        if (updated?.coverUrl !== undefined) state.work.coverUrl = updated.coverUrl;
+        if (updated) Object.assign(state.work, updated);
+        else {
+          state.work.title = String(form.get("title") ?? state.work.title);
+          state.work.author = String(form.get("author") ?? state.work.author);
+          state.work.description = String(form.get("description") ?? state.work.description);
+          state.work.editorAutoIndentEnabled = form.has("editorAutoIndentEnabled");
+          state.work.editorTypewriterModeEnabled = form.has("editorTypewriterModeEnabled");
+        }
+        applyChapterEditorPreferences();
         updateDocumentTitle(state.work);
         $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
       }
@@ -19049,6 +19105,32 @@ $("#chapter-content").addEventListener("beforeinput", (event) => {
     inputType: event.inputType
   };
 });
+$("#chapter-content").addEventListener("keydown", (event) => {
+  const input = event.currentTarget;
+  if (
+    event.key !== "Enter"
+    || !state.work?.editorAutoIndentEnabled
+    || event.isComposing
+    || event.altKey
+    || event.ctrlKey
+    || event.metaKey
+    || !state.chapter
+    || input.readOnly
+  ) return;
+  event.preventDefault();
+  syncChapterDraftLineIds(input.value);
+  chapterBeforeInputState = {
+    chapterId: state.chapter.id,
+    content: input.value,
+    selectionStart: input.selectionStart,
+    selectionEnd: input.selectionEnd,
+    inputType: "insertLineBreak"
+  };
+  const next = insertIndentedParagraph(input.value, input.selectionStart, input.selectionEnd);
+  input.setRangeText(`\n${CHAPTER_PARAGRAPH_INDENT}`, input.selectionStart, input.selectionEnd, "end");
+  input.setSelectionRange(next.selectionStart, next.selectionEnd);
+  input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertLineBreak" }));
+});
 $("#chapter-content").addEventListener("input", (event) => {
   const input = event.currentTarget;
   const beforeInput = chapterBeforeInputState;
@@ -19063,6 +19145,7 @@ $("#chapter-content").addEventListener("input", (event) => {
   scheduleChapterAutoSave();
   clearChapterLineSelection();
   scheduleChapterLineNumbers(chapterLineInputRenderDelay);
+  scheduleChapterCaretScroll();
   setAiContextMeter(null);
 });
 $("#chapter-content").addEventListener("select", () => setAiContextMeter(null));
