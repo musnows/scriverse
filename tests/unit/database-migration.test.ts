@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { DATABASE_SCHEMA_VERSION, Database, PLATFORM_AI_WORK_ID, SYSTEM_USER_ID } from "../../src/database.js";
 import { Store } from "../../src/store.js";
+import { chapterAnnotationLineHashes } from "../../src/chapter-annotation-anchor.js";
 
 const roots: string[] = [];
 
@@ -78,6 +79,92 @@ function insertSystemOwnedWork(database: Database, workId: string, title: string
 }
 
 describe("数据库版本化迁移", () => {
+  it("迁移 124 为重复正文和评论回填稳定且不同的行身份", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-stable-line-ids-"));
+    roots.push(root);
+    const filename = join(root, "stable-line-ids.db");
+    const current = new Database(filename);
+    const store = new Store(current);
+    const work = store.createWork({ title: "稳定行身份迁移作品" });
+    const volume = store.createVolume(String(work.id), { title: "第一卷" });
+    const chapter = store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "第一章",
+      content: "相同正文\n相同正文"
+    });
+    const annotation = store.createChapterAnnotation(String(chapter.id), {
+      kind: "note",
+      startLine: 2,
+      endLine: 2,
+      note: "绑定第二行"
+    });
+    current.raw.exec("ALTER TABLE chapter_annotations DROP COLUMN anchor_line_ids_json");
+    current.raw.exec("ALTER TABLE chapters DROP COLUMN line_ids_json");
+    current.run("DELETE FROM schema_migrations WHERE version = 124");
+    current.close();
+
+    const migrated = new Database(filename);
+    const lineIds = JSON.parse(String(migrated.get(
+      "SELECT line_ids_json FROM chapters WHERE id = ?",
+      String(chapter.id)
+    )?.line_ids_json)) as string[];
+    const anchorLineIds = JSON.parse(String(migrated.get(
+      "SELECT anchor_line_ids_json FROM chapter_annotations WHERE id = ?",
+      String(annotation.id)
+    )?.anchor_line_ids_json)) as string[];
+    expect(lineIds).toHaveLength(2);
+    expect(new Set(lineIds).size).toBe(2);
+    expect(anchorLineIds).toEqual([lineIds[1]]);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 124")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 123 为历史正文评论回填逐行哈希并支持幂等重启", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-annotation-line-hashes-"));
+    roots.push(root);
+    const filename = join(root, "annotation-line-hashes.db");
+    const current = new Database(filename);
+    const store = new Store(current);
+    const work = store.createWork({ title: "评论行哈希迁移作品" });
+    const volume = store.createVolume(String(work.id), { title: "第一卷" });
+    const chapter = store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "第一章",
+      content: "第一行\n历史评论行\n最后一行"
+    });
+    const annotation = store.createChapterAnnotation(String(chapter.id), {
+      kind: "note",
+      startLine: 2,
+      endLine: 2,
+      note: "历史评论"
+    });
+    current.raw.exec("ALTER TABLE chapter_annotations DROP COLUMN line_hashes_json");
+    current.run("DELETE FROM schema_migrations WHERE version = 123");
+    current.close();
+
+    const migrated = new Database(filename);
+    const lineHashesColumn = migrated.all<{ name: string; notnull: number }>("PRAGMA table_info(chapter_annotations)")
+      .find((column) => column.name === "line_hashes_json");
+    expect(lineHashesColumn?.notnull).toBe(1);
+    expect(JSON.parse(String(migrated.get(
+      "SELECT line_hashes_json FROM chapter_annotations WHERE id = ?",
+      String(annotation.id)
+    )?.line_hashes_json))).toEqual(chapterAnnotationLineHashes("历史评论行"));
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 123")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+
+    const restarted = new Database(filename);
+    expect(JSON.parse(String(restarted.get(
+      "SELECT line_hashes_json FROM chapter_annotations WHERE id = ?",
+      String(annotation.id)
+    )?.line_hashes_json))).toEqual(chapterAnnotationLineHashes("历史评论行"));
+    restarted.close();
+  });
+
   it("迁移 121 回填作品 Owner 并强制用户外键非空", () => {
     const filename = createLegacyDatabase();
     const database = new Database(filename);

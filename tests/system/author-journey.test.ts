@@ -924,7 +924,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('const stateName = sending ? "stop" : switching ? "switching" : "send";');
     expect(application.text).toContain('button.disabled = switching;');
     expect(application.text).toContain('button.classList.toggle("is-stop", sending);');
-    expect(application.text).toContain('content: $("#chapter-content").value');
+    expect(application.text).toContain('const content = $("#chapter-content").value;');
+    expect(application.text).toContain('...(lineIds.length <= MAX_CHAPTER_LINE_IDS ? { lineIds } : {})');
     expect(application.text).not.toContain("collapseChapterInputBlankLines");
     expect(application.text).not.toContain("collapseExcessBlankLines");
     expect(application.text).toContain("function tidyChapterBlankLines()");

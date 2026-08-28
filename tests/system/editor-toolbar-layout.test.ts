@@ -34,6 +34,8 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('id="add-line-annotation" type="button" role="menuitem">添加评论</button>');
     expect(page.text).toContain('id="add-line-todo"');
     expect(page.text).toContain('&feature=annotation-precise-locate-v1');
+    expect(page.text).toContain('&feature=annotation-line-anchor-v1');
+    expect(page.text).toContain('&feature=stable-line-ids-v1');
     expect(page.text).toMatch(/styles\.css\?[^"\n]*feature=markdown-word-count-five-digit-v2/u);
     expect(page.text).toMatch(/styles\.css\?[^"\n]*feature=annotation-marker-offset-v1/u);
     expect(application.text).toContain("async function createSelectedLineAnnotation(");
@@ -43,6 +45,9 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain("function revealChapterLines(startLine, endLine)");
     expect(application.text).toContain("revealChapterLines(annotation.startLine, annotation.endLine);");
     expect(application.text).toContain("/annotation-counts");
+    expect(application.text).toContain("await loadChapterAnnotationCounts(saved.chapter.id);");
+    expect(application.text).toContain("reconcileChapterLineIdDraft(");
+    expect(application.text).toContain("lineIds: draft.lineIds");
     expect(application.text).toContain("lineAnnotationCount");
     expect(application.text).toContain("?line=${encodeURIComponent(line)}");
     expect(application.text).toContain("async function renderWorkChapterComments(");

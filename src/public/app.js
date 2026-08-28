@@ -41,6 +41,7 @@ import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-p
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
 import { AI_CHAT_IMAGE_ATTACHMENT_MAX_COUNT, aiChatImageAttachmentIds, isAiChatImageFile, normalizeAiChatImageAttachments } from "/ai-image-attachments.js?v=20260820-ai-chat-image-attachments-v2";
 import { findTextMatches, replaceTextMatches } from "/chapter-search.js?v=20260818-chapter-search-replace-v1";
+import { MAX_CHAPTER_LINE_IDS, normalizeChapterLineIdDraft, reconcileChapterLineIdDraft } from "/chapter-line-id-tracker.js?v=20260828-stable-line-ids-v1";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260816-character-gender-v1";
@@ -1478,6 +1479,8 @@ let chapterAutoSaveTimer = null;
 let chapterSaveInFlight = null;
 let chapterSaveGuardInFlight = null;
 let lastSavedChapterSnapshot = null;
+let chapterDraftLineIdState = null;
+let chapterBeforeInputState = null;
 let chapterSearchMatchIndex = -1;
 let chapterSelectionRequestId = 0;
 let chapterForeshadowReminderRequestId = 0;
@@ -5942,12 +5945,44 @@ function setSaveState(text, dirty = false) {
   });
 }
 
+function resetChapterDraftLineIds(chapter = state.chapter) {
+  chapterBeforeInputState = null;
+  chapterDraftLineIdState = chapter ? {
+    chapterId: chapter.id,
+    content: String(chapter.content ?? ""),
+    lineIds: normalizeChapterLineIdDraft(chapter.content, chapter.lineIds)
+  } : null;
+}
+
+function syncChapterDraftLineIds(content, hint = null) {
+  if (!state.chapter) return [];
+  if (!chapterDraftLineIdState || chapterDraftLineIdState.chapterId !== state.chapter.id) {
+    resetChapterDraftLineIds(state.chapter);
+  }
+  if (chapterDraftLineIdState.content !== content) {
+    chapterDraftLineIdState = {
+      chapterId: state.chapter.id,
+      content,
+      lineIds: reconcileChapterLineIdDraft(
+        chapterDraftLineIdState.content,
+        content,
+        chapterDraftLineIdState.lineIds,
+        hint
+      )
+    };
+  }
+  return chapterDraftLineIdState.lineIds;
+}
+
 function chapterDraftSnapshot() {
   if (!state.chapter) return null;
+  const content = $("#chapter-content").value;
+  const lineIds = syncChapterDraftLineIds(content);
   return {
     chapterId: state.chapter.id,
     title: $("#chapter-title").value.trim(),
-    content: $("#chapter-content").value
+    content,
+    ...(lineIds.length <= MAX_CHAPTER_LINE_IDS ? { lineIds } : {})
   };
 }
 
@@ -6022,7 +6057,7 @@ async function persistChapter({ automatic = false } = {}) {
   const request = (async () => {
     const chapter = await api(`/api/chapters/${draft.chapterId}`, {
       method: "PATCH",
-      body: { title: draft.title, content: draft.content, source: automatic ? "auto" : "manual" }
+      body: { title: draft.title, content: draft.content, lineIds: draft.lineIds, source: automatic ? "auto" : "manual" }
     });
     const work = await api(`/api/works/${workId}`);
     return { chapter, work };
@@ -6033,9 +6068,15 @@ async function persistChapter({ automatic = false } = {}) {
     if (state.work?.id !== workId || state.chapter?.id !== draft.chapterId) return saved.chapter;
     state.chapter = saved.chapter;
     state.work = saved.work;
+    resetChapterDraftLineIds(state.chapter);
     lastSavedChapterSnapshot = draft;
     renderTree();
     updateChapterStats();
+    try {
+      await loadChapterAnnotationCounts(saved.chapter.id);
+    } catch (error) {
+      toast("正文评论位置已更新，但评论数量刷新失败，请稍后重试", "error");
+    }
     const currentDraft = chapterDraftSnapshot();
     if (sameChapterSnapshot(currentDraft, draft)) {
       setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
@@ -7325,6 +7366,7 @@ async function refreshWorkAfterGlobalReplace(route, result) {
     const chapter = await api(`/api/chapters/${encodeURIComponent(refreshPlan.selectedChapterId)}`);
     if (state.work?.id !== workId || refreshGeneration !== workScopedUiGeneration) return;
     state.chapter = chapter;
+    resetChapterDraftLineIds(state.chapter);
     mergeChapterDirectoryEntry(chapter);
     lastSavedChapterSnapshot = { chapterId: chapter.id, title: chapter.title, content: chapter.content };
     await loadVolumeChapters(chapter.volumeId);
@@ -8425,6 +8467,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   $("#chapter-path").title = chapterPath;
   $("#chapter-title").value = state.chapter.title;
   $("#chapter-content").value = state.chapter.content;
+  resetChapterDraftLineIds(state.chapter);
   chapterAnnotationCounts = new Map();
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
@@ -17485,6 +17528,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null, option
       try {
         const result = await api(`/api/suggestions/${suggestion.id}/accept`, { method: "POST", body: {} });
         state.chapter = result.chapter;
+        resetChapterDraftLineIds(state.chapter);
         lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
         $("#chapter-content").value = state.chapter.content;
         scheduleChapterLineNumbers();
@@ -17578,6 +17622,7 @@ async function showVersions() {
     }
     try {
       state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
+      resetChapterDraftLineIds(state.chapter);
       lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
       $("#chapter-title").value = state.chapter.title;
       $("#chapter-content").value = state.chapter.content;
@@ -19048,6 +19093,18 @@ $("#appearance-form").addEventListener("submit", (event) => {
   toast(persisted ? "显示设置已保存" : "显示设置已应用，但当前浏览器无法保存偏好", persisted ? "info" : "error");
 });
 $("#chapter-title").addEventListener("input", () => scheduleChapterAutoSave());
+$("#chapter-content").addEventListener("beforeinput", (event) => {
+  if (!state.chapter) return;
+  const input = event.currentTarget;
+  syncChapterDraftLineIds(input.value);
+  chapterBeforeInputState = {
+    chapterId: state.chapter.id,
+    content: input.value,
+    selectionStart: input.selectionStart,
+    selectionEnd: input.selectionEnd,
+    inputType: event.inputType
+  };
+});
 $("#chapter-content").addEventListener("keydown", (event) => {
   const input = event.currentTarget;
   if (
@@ -19057,15 +19114,33 @@ $("#chapter-content").addEventListener("keydown", (event) => {
     || event.altKey
     || event.ctrlKey
     || event.metaKey
+    || !state.chapter
     || input.readOnly
   ) return;
   event.preventDefault();
+  syncChapterDraftLineIds(input.value);
+  chapterBeforeInputState = {
+    chapterId: state.chapter.id,
+    content: input.value,
+    selectionStart: input.selectionStart,
+    selectionEnd: input.selectionEnd,
+    inputType: "insertLineBreak"
+  };
   const next = insertIndentedParagraph(input.value, input.selectionStart, input.selectionEnd);
   input.setRangeText(`\n${CHAPTER_PARAGRAPH_INDENT}`, input.selectionStart, input.selectionEnd, "end");
   input.setSelectionRange(next.selectionStart, next.selectionEnd);
   input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertLineBreak" }));
 });
-$("#chapter-content").addEventListener("input", () => {
+$("#chapter-content").addEventListener("input", (event) => {
+  const input = event.currentTarget;
+  const beforeInput = chapterBeforeInputState;
+  const hint = beforeInput
+    && beforeInput.chapterId === state.chapter?.id
+    && chapterDraftLineIdState?.content === beforeInput.content
+      ? beforeInput
+      : null;
+  syncChapterDraftLineIds(input.value, hint);
+  chapterBeforeInputState = null;
   updateChapterStats();
   scheduleChapterAutoSave();
   clearChapterLineSelection();
