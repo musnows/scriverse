@@ -653,6 +653,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(application.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(application.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
+    expect(application.text).toContain('}, "edit-mode"],');
+    expect(application.text).not.toContain('}, "edit-mode", "fullscreen"]');
     expect(application.text).toContain('createVditorUploadHandler');
     expect(application.text).toContain('createVditorUploadPlaceholder');
     expect(page.text).toContain('id="character-section-editor-view"');

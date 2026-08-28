@@ -14205,7 +14205,7 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
       className: "vditor-line-number-button",
       icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h3M4 9h3M4 13h3M4 17h3M10 5h10M10 9h10M10 13h10M10 17h10" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"/></svg>',
       click: () => toggleVditorLineNumbers(editor)
-    }, "edit-mode", "fullscreen"],
+    }, "edit-mode"],
     upload: {
       accept: "image/*",
       max: 10 * 1024 * 1024,
