@@ -3181,7 +3181,9 @@ function renderAiUserQuestionOptions(question) {
   host.append(customLabel);
   customInput.value = question.customAnswer ?? (question.selectedOption == null && question.isCustomAnswer ? (question.answerText ?? "") : "");
   customInput.disabled = !isPending;
-  $("#ai-question-submit").disabled = !isPending;
+  // 提交按钮由选择状态驱动：待回答且已选择（或输入）时才可提交。
+  if (isPending) syncAiQuestionSubmitState();
+  else $("#ai-question-submit").disabled = true;
   $("#ai-question-skip").disabled = !isPending;
   $("#ai-question-expiry").textContent = isPending
     ? `有效期至 ${aiFormatDateTime(question.expiresAt)}；过期未回答将自动失效，AI 不允许在未获得回答时自行假定答案。`

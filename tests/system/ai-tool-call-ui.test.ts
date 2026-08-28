@@ -87,6 +87,7 @@ describe("AI 工具调用记录界面", () => {
     expect(page).toContain('class="card-actions ai-question-actions"');
     expect(page).toContain("自定义回答 / 补充信息");
     expect(application).toContain("customInput.disabled = !isPending;");
+    expect(application).toContain("if (isPending) syncAiQuestionSubmitState();");
     expect(application).toContain('...(supplementalAnswer ? { customAnswer: supplementalAnswer } : {})');
     expect(styles).toContain(".ai-interactive-actions :is(button.ghost-button, button.primary-button) { min-width: 0; min-height: 24px; padding: 3px 7px; font-size: calc(9px * var(--ai-font-scale)); line-height: 1.35; }");
     expect(styles).toContain(".card-actions:is(.ai-plan-actions, .ai-question-actions) { flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 0; padding: 14px 24px 20px; }");
