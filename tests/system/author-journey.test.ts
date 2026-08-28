@@ -635,7 +635,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('class="prompt-composer"');
     expect(page.text).toContain('class="ai-send-button"');
     expect(page.text).toContain('id="ai-context-meter"');
-    expect(application.text).toContain('description.textContent = item.key === "skills"\n        ? "待加入"\n        : item.key === "input" ? "用户和 agent 的交互" : "模型输出预留";');
+    expect(application.text).toContain('description.textContent = item.key === "skills"\n        ? "待加入"\n        : item.key === "input" ? "用户和 agent 的交互" : "本次最大输出";');
     expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
     expect(application.text).toContain("多人协作，自动保存已关闭");
     expect(application.text).toContain("if (automatic) {");

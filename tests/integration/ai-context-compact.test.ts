@@ -80,11 +80,14 @@ describe("AI 对话上下文压缩", () => {
       functionTokens: expect.any(Number),
       skillsTokens: 0,
       contextTokens: expect.any(Number),
+      outputTokens: expect.any(Number),
       leftTokens: expect.any(Number)
     }));
     expect(usage.tokenDistribution.systemPromptTokens + usage.tokenDistribution.functionTokens
       + usage.tokenDistribution.skillsTokens + usage.tokenDistribution.contextTokens
+      + usage.tokenDistribution.outputTokens
       + usage.tokenDistribution.leftTokens).toBe(usage.contextWindow);
+    expect(usage.tokenDistribution.outputTokens).toBe(Math.min(usage.maxOutputTokens, usage.remainingTokens));
     expect(fetchMock).not.toHaveBeenCalled();
 
     const ignored = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send({

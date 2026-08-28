@@ -5956,6 +5956,7 @@ export class AiManager {
     const threshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
     const conversationUsagePercent = Number(budget.conversationUsagePercent) || 0;
     const configuredOutputTokens = Number(budget.configuredOutputTokens) || DEFAULT_MAX_TOKENS;
+    const effectiveOutputTokens = Math.max(0, Math.min(configuredOutputTokens, remainingTokens));
     const maxOutputUsagePercent = Math.min(100, Math.round(configuredOutputTokens / contextWindow * 100));
     const compactableMessageCount = Math.max(0, (conversation?.messages.length ?? 0) - 2);
     const contextFallbackReached = remainingTokens <= MIN_CONTEXT_REMAINING_TOKENS;
@@ -5968,6 +5969,7 @@ export class AiManager {
       conversationBudgetTokens: Number(budget.conversationBudgetTokens),
       conversationUsagePercent,
       maxOutputTokens: configuredOutputTokens,
+      effectiveOutputTokens,
       maxOutputUsagePercent,
       maxOutputThresholdReached: maxOutputUsagePercent >= threshold,
       outputReserveTokens: Number(budget.outputReserveTokens),
@@ -5979,7 +5981,8 @@ export class AiManager {
         functionTokens,
         skillsTokens,
         contextTokens: contextInteractionTokens,
-        leftTokens: remainingTokens
+        outputTokens: effectiveOutputTokens,
+        leftTokens: Math.max(0, remainingTokens - effectiveOutputTokens)
       },
       compactThreshold: threshold,
       compactableMessageCount,
@@ -6256,10 +6259,13 @@ export class AiManager {
     const inputTokens = serializedMessageTokens + functionTokens + skillsTokens;
     const remainingTokens = Math.max(0, contextWindow - inputTokens);
     const contextTokens = Math.max(0, contextWindow - systemPromptTokens - functionTokens - skillsTokens - remainingTokens);
+    const configuredOutputTokens = Number(baseUsage.maxOutputTokens) || DEFAULT_MAX_TOKENS;
+    const effectiveOutputTokens = Math.max(0, Math.min(configuredOutputTokens, remainingTokens));
     const estimatedUsage = {
       ...baseUsage,
       contextWindow,
       inputTokens,
+      effectiveOutputTokens,
       remainingTokens,
       contextFallbackReached: remainingTokens <= MIN_CONTEXT_REMAINING_TOKENS,
       usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
@@ -6268,7 +6274,8 @@ export class AiManager {
         functionTokens,
         skillsTokens,
         contextTokens,
-        leftTokens: remainingTokens
+        outputTokens: effectiveOutputTokens,
+        leftTokens: Math.max(0, remainingTokens - effectiveOutputTokens)
       }
     };
     const reportedInputTokens = resolveReportedInputTokens(reportedUsage);
@@ -6281,9 +6288,11 @@ export class AiManager {
     const reportedSkillsTokens = Math.min(skillsTokens, reportedDistributionRemaining);
     reportedDistributionRemaining -= reportedSkillsTokens;
     const reportedRemainingTokens = Math.max(0, contextWindow - reportedInputTokens);
+    const reportedEffectiveOutputTokens = Math.max(0, Math.min(configuredOutputTokens, reportedRemainingTokens));
     return {
       ...estimatedUsage,
       inputTokens: reportedInputTokens,
+      effectiveOutputTokens: reportedEffectiveOutputTokens,
       remainingTokens: reportedRemainingTokens,
       contextFallbackReached: reportedRemainingTokens <= MIN_CONTEXT_REMAINING_TOKENS,
       usagePercent: Math.min(100, Math.round(reportedInputTokens / contextWindow * 100)),
@@ -6293,7 +6302,8 @@ export class AiManager {
         functionTokens: reportedFunctionTokens,
         skillsTokens: reportedSkillsTokens,
         contextTokens: reportedDistributionRemaining,
-        leftTokens: reportedRemainingTokens
+        outputTokens: reportedEffectiveOutputTokens,
+        leftTokens: Math.max(0, reportedRemainingTokens - reportedEffectiveOutputTokens)
       }
     };
   }
