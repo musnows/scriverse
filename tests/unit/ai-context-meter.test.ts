@@ -12,15 +12,16 @@ describe("AI 上下文用量提示", () => {
     expect(formatAiContextUsagePercent(19_999, 200_000)).toBe("10%");
   });
 
-  it("分别显示作品、对话和输出预留预算", () => {
+  it("分别显示作品、对话和当前调用实际输出", () => {
     expect(formatAiContextUsageTooltip({
       inputTokens: 12_345,
       contextWindow: 128_000,
       contextTokens: 6_000,
       conversationTokens: 2_500,
       conversationBudgetTokens: 30_000,
-      outputReserveTokens: 32_000
-    })).toBe("总输入 12,345 / 128,000 tok · 作品上下文 6,000 tok · 对话历史 2,500 / 30,000 tok · 输出预留 32,000 tok");
+      maxOutputTokens: 32_000,
+      outputTokens: 18_000
+    })).toBe("总输入 12,345 / 128,000 tok · 作品上下文 6,000 tok · 对话历史 2,500 / 30,000 tok · 当前调用实际输出 18,000 tok");
   });
 
   it("下一轮用量返回前保留上一轮结果", () => {
@@ -92,12 +93,14 @@ describe("AI 上下文用量提示", () => {
   it("按上下文窗口归一化六类 Token 分布并拆分 input 与 output", () => {
     expect(normalizeAiContextTokenDistribution({
       contextWindow: 1_000,
-      outputReserveTokens: 200,
+      maxOutputTokens: 500,
+      outputTokens: 200,
       tokenDistribution: {
         systemPromptTokens: 120,
         functionTokens: 80,
         skillsTokens: 0,
-        contextTokens: 300
+        contextTokens: 300,
+        outputTokens: 200
       }
     })).toEqual({
       contextWindow: 1_000,
@@ -113,10 +116,11 @@ describe("AI 上下文用量提示", () => {
     });
   });
 
-  it("输出预留不会挤出上下文窗口", () => {
+  it("实际输出不会挤出上下文窗口", () => {
     expect(normalizeAiContextTokenDistribution({
       contextWindow: 1_000,
-      outputReserveTokens: 500,
+      maxOutputTokens: 500,
+      outputTokens: 500,
       tokenDistribution: {
         systemPromptTokens: 120,
         functionTokens: 80,
@@ -124,5 +128,25 @@ describe("AI 上下文用量提示", () => {
         contextTokens: 700
       }
     }).items.at(-2)).toEqual({ key: "output", label: "output", tokens: 100, percent: 10 });
+  });
+
+  it("请求前不把最大输出额度当成实际输出", () => {
+    expect(normalizeAiContextTokenDistribution({
+      contextWindow: 1_000,
+      maxOutputTokens: 800,
+      outputReserveTokens: 500,
+      tokenDistribution: {
+        systemPromptTokens: 120,
+        functionTokens: 80,
+        skillsTokens: 0,
+        contextTokens: 300
+      }
+    })).toEqual(expect.objectContaining({
+      occupiedTokens: 500,
+      items: expect.arrayContaining([
+        { key: "output", label: "output", tokens: 0, percent: 0 },
+        { key: "left", label: "left", tokens: 500, percent: 50 }
+      ])
+    }));
   });
 });

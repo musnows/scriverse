@@ -5,8 +5,8 @@ export function formatAiContextUsageTooltip(usage) {
   const contextTokens = Math.max(0, Math.round(Number(usage.contextTokens) || 0)).toLocaleString("zh-CN");
   const conversationTokens = Math.max(0, Math.round(Number(usage.conversationTokens) || 0)).toLocaleString("zh-CN");
   const conversationBudget = Math.max(0, Math.round(Number(usage.conversationBudgetTokens) || 0)).toLocaleString("zh-CN");
-  const outputReserve = Math.max(0, Math.round(Number(usage.outputReserveTokens) || 0)).toLocaleString("zh-CN");
-  return `总输入 ${inputTokens} / ${contextWindow} tok · 作品上下文 ${contextTokens} tok · 对话历史 ${conversationTokens} / ${conversationBudget} tok · 输出预留 ${outputReserve} tok`;
+  const outputTokens = Math.max(0, Math.round(Number(usage.outputTokens) || 0)).toLocaleString("zh-CN");
+  return `总输入 ${inputTokens} / ${contextWindow} tok · 作品上下文 ${contextTokens} tok · 对话历史 ${conversationTokens} / ${conversationBudget} tok · 当前调用实际输出 ${outputTokens} tok`;
 }
 
 function tokenCount(value) {
@@ -62,7 +62,7 @@ export function normalizeAiContextTokenDistribution(usage) {
     ? tokenCount(distribution.contextTokens)
     : tokenCount(usage?.inputTokens);
   const outputTokens = Math.min(
-    tokenCount(distribution.outputTokens ?? usage?.outputReserveTokens),
+    tokenCount(distribution.outputTokens ?? usage?.outputTokens),
     Math.max(0, contextWindow - systemPromptTokens - functionTokens - skillsTokens - inputTokens)
   );
   const occupiedTokens = systemPromptTokens + functionTokens + skillsTokens + inputTokens + outputTokens;
