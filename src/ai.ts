@@ -72,7 +72,7 @@ import {
   type CharacterExtractionSelection
 } from "./character-extraction.js";
 import type { AiWritePlanManager, AiWriteToolId, AnalysisTaskInput, ResolvedAnalysisTaskInput } from "./ai-write-plans.js";
-import { AI_WRITE_TOOL_IDS } from "./ai-write-plans.js";
+import { AI_WRITE_TOOL_IDS, aiWritePlanOperationToolSchemas } from "./ai-write-plans.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import {
@@ -1270,6 +1270,10 @@ function storyOrderingGuide(timelineAvailable: boolean): Record<string, unknown>
   };
 }
 
+const ALL_AI_WRITE_TOOL_TOGGLES = Object.fromEntries(
+  AI_WRITE_TOOL_IDS.map((toolId) => [toolId, true])
+) as Record<AiWriteToolId, boolean>;
+
 const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
   story_index: {
     type: "function",
@@ -1375,14 +1379,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
       parameters: { type: "object", properties: { startDate: { type: "string", pattern: "^-?\\d{4}-\\d{2}-\\d{2}$", description: "起始日期，格式 YYYY-MM-DD；公元前年份可在年份前加 -" }, endDate: { type: "string", pattern: "^-?\\d{4}-\\d{2}-\\d{2}$", description: "结束日期，格式 YYYY-MM-DD；公元前年份可在年份前加 -" } }, required: ["startDate", "endDate"], additionalProperties: false }
     }
   },
-  propose_write_plan: {
-    type: "function",
-    function: {
-      name: "propose_write_plan",
-      description: "把要做的写操作整理成一份修改计划提交给作者审批；你没有直接写库的能力，计划被作者在审批中心确认后才会由系统执行，执行结果会在下一轮对话上下文中告知你。可提交的操作只有四类：create_entry / update_entry（世界设定、角色、种族、组织、时间线轨道与事件、人物关系、章节大纲、伏笔）、create_annotation（在指定章节行区间添加评论或待办）、create_task（触发既有的分析任务类型）。禁止删除操作，禁止修改章节正文本身，每个 update_entry 必须提供目标 entityId（章节大纲用 chapterId 定位），人物关系的编辑不能改动端点人物。每个操作都要用 input 携带符合该实体字段白名单的内容，并在 aiSummary 用一两句话向作者说明这次改动的意图。",
-      parameters: { type: "object", properties: { aiSummary: { type: "string", minLength: 1, maxLength: 2000, description: "面向作者的改动意图简述。" }, operations: { type: "array", minItems: 1, maxItems: 20, items: { type: "object", properties: { opType: { type: "string", enum: ["create_entry", "update_entry", "create_annotation", "create_task"] }, entityType: { type: "string", enum: ["setting", "character", "race", "organization", "timeline-track", "timeline-event", "relationship", "chapter-outline", "foreshadow"] }, entityId: { type: "string" }, chapterId: { type: "string" }, kind: { type: "string", enum: ["note", "todo"] }, startLine: { type: "integer", minimum: 1 }, endLine: { type: "integer", minimum: 1 }, note: { type: "string" }, taskType: { type: "string" }, scope: { type: "object" }, modelId: { type: "string" }, input: { type: "object" } }, required: ["opType"], additionalProperties: false } } }, required: ["aiSummary", "operations"], additionalProperties: false }
-    }
-  },
+  propose_write_plan: writePlanToolDefinition(ALL_AI_WRITE_TOOL_TOGGLES),
   ask_user_question: {
     type: "function",
     function: {
@@ -1403,6 +1400,7 @@ export function writePlanToolDefinition(toggles: Record<AiWriteToolId, boolean>)
     ...(toggles.relationships ? ["relationship"] : []),
     ...(toggles.outlines ? ["chapter-outline", "foreshadow"] : [])
   ];
+  const operationSchemas = aiWritePlanOperationToolSchemas(toggles);
   const operationTypes = [
     ...(entityTypes.length > 0 ? ["create_entry", "update_entry"] : []),
     ...(toggles.annotations ? ["create_annotation"] : []),
@@ -1412,7 +1410,7 @@ export function writePlanToolDefinition(toggles: Record<AiWriteToolId, boolean>)
     type: "function",
     function: {
       name: "propose_write_plan",
-      description: `把已开启能力范围内的写操作整理成修改计划提交审批。当前可用操作：${operationTypes.join("、")}；关闭的模块不会出现在 schema 中。`,
+      description: `把已开启能力范围内的写操作整理成修改计划提交审批。当前可用操作：${operationTypes.join("、")}；关闭的模块不会出现在 schema 中。每个操作必须严格匹配 oneOf 中对应的唯一分支，不得附带该分支未声明的字段；create_entry 的对象 ID 由系统生成。`,
       parameters: {
         type: "object",
         properties: {
@@ -1421,25 +1419,7 @@ export function writePlanToolDefinition(toggles: Record<AiWriteToolId, boolean>)
             type: "array",
             minItems: 1,
             maxItems: 20,
-            items: {
-              type: "object",
-              properties: {
-                opType: { type: "string", enum: operationTypes },
-                entityType: { type: "string", enum: entityTypes },
-                entityId: { type: "string" },
-                chapterId: { type: "string" },
-                kind: { type: "string", enum: ["note", "todo"] },
-                startLine: { type: "integer", minimum: 1 },
-                endLine: { type: "integer", minimum: 1 },
-                note: { type: "string" },
-                taskType: { type: "string" },
-                scope: { type: "object" },
-                modelId: { type: "string" },
-                input: { type: "object" }
-              },
-              required: ["opType"],
-              additionalProperties: false
-            }
+            items: { oneOf: operationSchemas }
           }
         },
         required: ["aiSummary", "operations"],
@@ -6784,7 +6764,7 @@ export class AiManager {
     const interactiveWriteGuidance = enabledToolIds.includes("propose_write_plan")
       ? [
           "你没有直接修改作品数据的权限。需要新建或编辑世界设定、角色、种族、组织、时间线轨道与事件、人物关系、章节大纲或伏笔时，必须把改动整理为 create_entry / update_entry 操作并用 propose_write_plan 提交完整计划；同一个计划还可以混入 create_annotation（给指定章节行区间添加评论或待办）和 create_task（触发既有的分析任务类型）。",
-          "每个 update_entry 的目标 entityId 必须来自真实查询到的对象，章节大纲用 chapterId 定位；禁止提交删除操作，禁止试图修改章节正文本身，人物关系的编辑不能改动端点人物。",
+          "每个操作只能包含工具 schema 对应 oneOf 分支声明的字段。create_entry 禁止携带 entityId 或 scope，对象 ID 由系统在作者确认后生成；input 必须使用该实体 schema 声明的准确字段。每个 update_entry 的目标 entityId 必须来自真实查询到的对象，章节大纲用 chapterId 定位；禁止提交删除操作，禁止试图修改章节正文本身，人物关系的编辑不能改动端点人物。",
           "计划提交后由系统按当前数据库生成逐字段 diff 并送入审批中心等待作者确认；你只需告知作者计划已在审批中心等待确认，不得宣称写入已完成。"
         ]
       : [];

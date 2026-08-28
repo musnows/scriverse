@@ -48,7 +48,7 @@ describe("AI 可写交互工具（propose_write_plan / ask_user_question）", ()
   }
 
   it("写计划 schema 只暴露当前开启的模块与操作类型", () => {
-    const definition = JSON.stringify(writePlanToolDefinition({
+    const tool = writePlanToolDefinition({
       settings: true,
       characters: false,
       races: false,
@@ -59,11 +59,41 @@ describe("AI 可写交互工具（propose_write_plan / ask_user_question）", ()
       annotations: true,
       analysis_tasks: false,
       ask_user_questions: false
-    }));
+    });
+    const definition = JSON.stringify(tool);
     expect(definition).toContain('"setting"');
     expect(definition).toContain('"create_annotation"');
     expect(definition).not.toContain('"character"');
     expect(definition).not.toContain('"create_task"');
+
+    const parameters = (tool.function as { parameters: Record<string, unknown> }).parameters;
+    const properties = parameters.properties as Record<string, unknown>;
+    const operations = properties.operations as { items: { oneOf: Array<Record<string, unknown>> } };
+    const variants = operations.items.oneOf;
+    const createSetting = variants.find((variant) => {
+      const variantProperties = variant.properties as Record<string, { enum?: string[] }>;
+      return variantProperties.opType?.enum?.[0] === "create_entry"
+        && variantProperties.entityType?.enum?.[0] === "setting";
+    });
+    const updateSetting = variants.find((variant) => {
+      const variantProperties = variant.properties as Record<string, { enum?: string[] }>;
+      return variantProperties.opType?.enum?.[0] === "update_entry"
+        && variantProperties.entityType?.enum?.[0] === "setting";
+    });
+    expect(createSetting).toBeDefined();
+    expect(updateSetting).toBeDefined();
+    expect(createSetting?.properties).not.toHaveProperty("entityId");
+    expect(createSetting?.properties).not.toHaveProperty("scope");
+    expect((createSetting?.properties as Record<string, unknown>).input).toMatchObject({
+      required: ["title", "category", "content"],
+      properties: {
+        title: { type: "string" },
+        category: { type: "string" },
+        content: { type: "string" }
+      },
+      additionalProperties: false
+    });
+    expect(updateSetting?.required).toContain("entityId");
   });
 
   async function callTool(name: string, args: unknown, conversationId?: string) {
@@ -117,6 +147,29 @@ describe("AI 可写交互工具（propose_write_plan / ask_user_question）", ()
     expect(question.status).toBe("completed");
     expect((question.result.question as { status: string }).status).toBe("pending");
     expect(manager.latestPendingQuestion(conversationId)?.question).toBe("分析用哪个视角？");
+  });
+
+  it("一次计划可以提交多个由系统生成 ID 的新建设定", async () => {
+    const conversation = await runtime.store.createAiConversation(workId, "批量新建设定");
+    const conversationId = String(conversation.id);
+    manager.updateToolSettings(workId, { settings: true }, null);
+
+    const submitted = await callTool(
+      "propose_write_plan",
+      {
+        aiSummary: "新增观测者协议及三个关联设定",
+        operations: ["观测者干扰协议", "熵增屏蔽层", "量子坍缩信标", "文明悖论"].map((title) => ({
+          opType: "create_entry",
+          entityType: "setting",
+          input: { title, category: "技术与哲学", content: `${title}的正文。` }
+        }))
+      },
+      conversationId
+    );
+
+    expect(submitted.status).toBe("completed");
+    expect(submitted.result.ok).toBe(true);
+    expect(submitted.result.plan).toMatchObject({ status: "pending", operationCount: 4 });
   });
 
   it("参数不合法的操作返回失败结果而不是抛出异常", async () => {

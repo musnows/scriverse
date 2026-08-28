@@ -282,6 +282,99 @@ const entryEntityUpdateSchemas = {
   foreshadow: foreshadowInputSchema.partial().refine(hasAtLeastOneField, { message: "至少需要提供一个修改字段" })
 } as const;
 
+function toolInputJsonSchema(schema: z.ZodType): Record<string, unknown> {
+  const { $schema: _dialect, ...jsonSchema } = z.toJSONSchema(schema, {
+    target: "draft-07",
+    unrepresentable: "any",
+    io: "input"
+  }) as Record<string, unknown>;
+  return jsonSchema;
+}
+
+/**
+ * 为模型生成与服务端严格校验一致的操作 schema。
+ *
+ * 每个操作类型和实体类型都使用独立分支，避免通用对象把 entityId、scope 等
+ * 仅属于其他操作的字段错误地暴露给 create_entry。
+ */
+export function aiWritePlanOperationToolSchemas(
+  toggles: Readonly<Record<AiWriteToolId, boolean>>
+): Record<string, unknown>[] {
+  const entityTypes: AiEntryEntityType[] = [
+    ...(toggles.settings ? ["setting" as const] : []),
+    ...(toggles.characters ? ["character" as const] : []),
+    ...(toggles.races ? ["race" as const] : []),
+    ...(toggles.organizations ? ["organization" as const] : []),
+    ...(toggles.timeline ? ["timeline-track" as const, "timeline-event" as const] : []),
+    ...(toggles.relationships ? ["relationship" as const] : []),
+    ...(toggles.outlines ? ["chapter-outline" as const, "foreshadow" as const] : [])
+  ];
+  const identifierJsonSchema = { type: "string", minLength: 1, maxLength: 200 };
+  const operations: Record<string, unknown>[] = entityTypes.flatMap((entityType) => {
+    const targetProperty = entityType === "chapter-outline"
+      ? { chapterId: identifierJsonSchema }
+      : { entityId: identifierJsonSchema };
+    const targetName = entityType === "chapter-outline" ? "chapterId" : "entityId";
+    return [
+      {
+        type: "object",
+        description: `新建 ${entityType}；系统会生成对象 ID，不得传 entityId。`,
+        properties: {
+          opType: { type: "string", enum: ["create_entry"] },
+          entityType: { type: "string", enum: [entityType] },
+          ...(entityType === "chapter-outline" ? { chapterId: identifierJsonSchema } : {}),
+          input: toolInputJsonSchema(entryEntitySchemas[entityType])
+        },
+        required: ["opType", "entityType", ...(entityType === "chapter-outline" ? ["chapterId"] : []), "input"],
+        additionalProperties: false
+      },
+      {
+        type: "object",
+        description: `编辑已有 ${entityType}；${targetName} 必须来自读取工具返回的真实对象。`,
+        properties: {
+          opType: { type: "string", enum: ["update_entry"] },
+          entityType: { type: "string", enum: [entityType] },
+          ...targetProperty,
+          input: toolInputJsonSchema(entryEntityUpdateSchemas[entityType])
+        },
+        required: ["opType", "entityType", targetName, "input"],
+        additionalProperties: false
+      }
+    ];
+  });
+  if (toggles.annotations) {
+    operations.push({
+      type: "object",
+      description: "在已有章节的行区间创建评论或待办。",
+      properties: {
+        opType: { type: "string", enum: ["create_annotation"] },
+        chapterId: identifierJsonSchema,
+        kind: { type: "string", enum: ["note", "todo"] },
+        startLine: { type: "integer", minimum: 1 },
+        endLine: { type: "integer", minimum: 1 },
+        note: { type: "string", minLength: 1, maxLength: 2000 }
+      },
+      required: ["opType", "chapterId", "kind", "startLine", "endLine", "note"],
+      additionalProperties: false
+    });
+  }
+  if (toggles.analysis_tasks) {
+    operations.push({
+      type: "object",
+      description: "使用当前已固化模型和范围创建分析任务。",
+      properties: {
+        opType: { type: "string", enum: ["create_task"] },
+        taskType: { type: "string", enum: [...AI_ANALYSIS_TASK_TYPES, "relationship-analysis"] },
+        scope: { type: "object" },
+        modelId: identifierJsonSchema
+      },
+      required: ["opType", "taskType"],
+      additionalProperties: false
+    });
+  }
+  return operations;
+}
+
 function hasAtLeastOneField(value: Record<string, unknown>): boolean {
   return Object.keys(value).length > 0;
 }
