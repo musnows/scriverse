@@ -1560,7 +1560,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .entity-detail-pin-button:hover, .entity-detail-pin-button:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: none; }
 .entity-detail-pin-button.is-pinned { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); }
 .entity-detail-pin-button:disabled { cursor: not-allowed; opacity: .5; }
-.entity-detail-pin-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
+.entity-detail-pin-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; transform: translateY(.5px); }
 .entity-detail-pin-button.is-pinned svg { fill: currentColor; }
 .record-card h3 { font-size: 16px; margin: 5px 0 10px; font-weight: 600; }
 .record-card p { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 0; white-space: pre-wrap; }
