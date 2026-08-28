@@ -42,6 +42,7 @@ import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH, readableHybridSearchTypes } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
+import { MAX_CHAPTER_LINE_IDS } from "./chapter-annotation-anchor.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes, WORK_AGENT_TOOL_IDS } from "./store.js";
 import { composeRoleplayStoredUserContent } from "./roleplay-turn.js";
 import { paginated, parsePagination } from "./pagination.js";
@@ -2110,7 +2111,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/chapters/:chapterId", (request, response) => data(response, store.getChapter(request.params.chapterId)));
   app.patch("/api/chapters/:chapterId", (request, response) => {
-    const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional(), changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), lineIds: z.array(z.union([identifier, z.null()])).max(MAX_CHAPTER_LINE_IDS).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional(), changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const { source, changeNote, expectedVersionNo, ...chapterInput } = input;
     const chapter = store.saveChapter(request.params.chapterId, chapterInput, source ?? "manual", null, changeNote, expectedVersionNo);
     publishEditorChange(String(chapter.workId), String(chapter.id));

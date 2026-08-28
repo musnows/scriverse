@@ -492,7 +492,7 @@ describe("作品、导入和章节版本 API", () => {
     expect(JSON.parse(String(runtime.database.get(
       "SELECT detail_json FROM audit_logs WHERE entity_id = ? ORDER BY created_at DESC LIMIT 1",
       annotation.body.data.id
-    )?.detail_json))).toMatchObject({ anchorStrategy: "fallback", reason: "reanchor" });
+    )?.detail_json))).toMatchObject({ anchorStrategy: "line-id", reason: "reanchor" });
     expect(runtime.database.all(
       "SELECT version_no, source FROM chapter_annotation_versions WHERE annotation_id = ? ORDER BY version_no",
       annotation.body.data.id
@@ -510,6 +510,68 @@ describe("作品、导入和章节版本 API", () => {
       annotation.body.data.id
     )?.snapshot_json));
     expect(latestSnapshot).toMatchObject({ quote: "修改后的目标行", lineHashes: editedLineHashes });
+  });
+
+  it("使用稳定行身份区分并持续跟踪两条完全相同的正文", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "重复正文评论作品" }).expect(201);
+    const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "相同正文\n中间正文\n相同正文"
+    }).expect(201);
+    const originalLineIds = chapter.body.data.lineIds as string[];
+    expect(originalLineIds).toHaveLength(3);
+    expect(new Set(originalLineIds).size).toBe(3);
+    const firstAnnotation = await request(runtime.app).post(`/api/chapters/${chapter.body.data.id}/annotations`).send({
+      kind: "note",
+      startLine: 1,
+      endLine: 1,
+      note: "绑定第一条重复正文"
+    }).expect(201);
+    const secondAnnotation = await request(runtime.app).post(`/api/chapters/${chapter.body.data.id}/annotations`).send({
+      kind: "note",
+      startLine: 3,
+      endLine: 3,
+      note: "绑定第二条重复正文"
+    }).expect(201);
+
+    await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`).send({
+      content: "修改后的第一行\n中间正文\n相同正文",
+      lineIds: originalLineIds,
+      expectedVersionNo: 1
+    }).expect(200);
+    const edited = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/annotations`).expect(200);
+    expect(edited.body.data.find((item: { id: string }) => item.id === firstAnnotation.body.data.id))
+      .toMatchObject({ startLine: 1, quote: "修改后的第一行", versionNo: 2 });
+    expect(edited.body.data.find((item: { id: string }) => item.id === secondAnnotation.body.data.id))
+      .toMatchObject({ startLine: 3, quote: "相同正文", versionNo: 1 });
+    expect(JSON.parse(String(runtime.database.get(
+      "SELECT detail_json FROM audit_logs WHERE entity_id = ? ORDER BY rowid DESC LIMIT 1",
+      firstAnnotation.body.data.id
+    )?.detail_json))).toMatchObject({ anchorStrategy: "line-id" });
+
+    const invalidLineIds = await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`).send({
+      content: "错误新增\n修改后的第一行\n中间正文\n相同正文",
+      lineIds: [null, originalLineIds[2], originalLineIds[1], originalLineIds[0]],
+      expectedVersionNo: 2
+    }).expect(400);
+    expect(invalidLineIds.body.error.code).toBe("CHAPTER_LINE_IDS_INVALID");
+
+    await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`).send({
+      content: "新增正文\n修改后的第一行\n中间正文\n相同正文",
+      lineIds: [null, ...originalLineIds],
+      expectedVersionNo: 2
+    }).expect(200);
+    const moved = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/annotations`).expect(200);
+    expect(moved.body.data.find((item: { id: string }) => item.id === firstAnnotation.body.data.id))
+      .toMatchObject({ startLine: 2, quote: "修改后的第一行", versionNo: 3 });
+    expect(moved.body.data.find((item: { id: string }) => item.id === secondAnnotation.body.data.id))
+      .toMatchObject({ startLine: 4, quote: "相同正文", versionNo: 2 });
+    const savedChapter = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}`).expect(200);
+    expect(savedChapter.body.data.lineIds.slice(1)).toEqual(originalLineIds);
+    expect(savedChapter.body.data.lineIds[0]).not.toBeNull();
+    expect(new Set(savedChapter.body.data.lineIds).size).toBe(4);
   });
 
   it("按作品与正文顺序分页列出所有章节评论", async () => {

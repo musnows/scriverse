@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
   chapterAnnotationLineHashes,
+  createChapterLineIds,
+  MAX_CHAPTER_LINE_IDS,
   parseChapterAnnotationLineHashes,
   reanchorChapterAnnotations,
   type ChapterAnnotationAnchor
 } from "../../src/chapter-annotation-anchor.js";
 
-function anchor(input: Omit<ChapterAnnotationAnchor, "id" | "lineHashes"> & { lineHashesFrom?: string }): ChapterAnnotationAnchor {
+function anchor(input: Omit<ChapterAnnotationAnchor, "id" | "lineHashes" | "lineIds"> & { lineHashesFrom?: string; lineIds?: string[] }): ChapterAnnotationAnchor {
   return {
     id: "annotation-1",
     startLine: input.startLine,
     endLine: input.endLine,
     quote: input.quote,
-    lineHashes: chapterAnnotationLineHashes(input.lineHashesFrom ?? input.quote)
+    lineHashes: chapterAnnotationLineHashes(input.lineHashesFrom ?? input.quote),
+    lineIds: input.lineIds ?? []
   };
 }
 
@@ -71,7 +74,7 @@ describe("正文评论行锚点", () => {
     expect(reanchorChapterAnnotations(
       "甲\n乙\n目标行\n丙",
       "新增\n甲\n乙\n目标行\n丙",
-      [{ id: "annotation-1", startLine: 2, endLine: 2, quote: "目标行", lineHashes: [] }]
+      [{ id: "annotation-1", startLine: 2, endLine: 2, quote: "目标行", lineHashes: [], lineIds: [] }]
     )[0]).toMatchObject({
       startLine: 4,
       endLine: 4,
@@ -95,5 +98,30 @@ describe("正文评论行锚点", () => {
       .toEqual(chapterAnnotationLineHashes("甲\n乙"));
     expect(parseChapterAnnotationLineHashes('["invalid"]', "甲"))
       .toEqual(chapterAnnotationLineHashes("甲"));
+  });
+
+  it("使用稳定行身份区分两条完全相同的正文", () => {
+    const beforeContent = "相同正文\n相同正文";
+    const afterContent = "修改后的第一行\n相同正文";
+    const afterLineIds = ["line-first", "line-second"];
+    const first = reanchorChapterAnnotations(
+      beforeContent,
+      afterContent,
+      [anchor({ startLine: 1, endLine: 1, quote: "相同正文", lineIds: ["line-first"] })],
+      afterLineIds
+    )[0];
+    const second = reanchorChapterAnnotations(
+      beforeContent,
+      afterContent,
+      [anchor({ startLine: 2, endLine: 2, quote: "相同正文", lineIds: ["line-second"] })],
+      afterLineIds
+    )[0];
+
+    expect(first).toMatchObject({ startLine: 1, quote: "修改后的第一行", anchorStrategy: "line-id" });
+    expect(second).toMatchObject({ startLine: 2, quote: "相同正文", anchorStrategy: "hash" });
+  });
+
+  it("超大行数正文不会生成膨胀的行身份数组", () => {
+    expect(createChapterLineIds("\n".repeat(MAX_CHAPTER_LINE_IDS), () => "line-id")).toEqual([]);
   });
 });

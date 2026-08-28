@@ -79,6 +79,48 @@ function insertSystemOwnedWork(database: Database, workId: string, title: string
 }
 
 describe("数据库版本化迁移", () => {
+  it("迁移 123 为重复正文和评论回填稳定且不同的行身份", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-stable-line-ids-"));
+    roots.push(root);
+    const filename = join(root, "stable-line-ids.db");
+    const current = new Database(filename);
+    const store = new Store(current);
+    const work = store.createWork({ title: "稳定行身份迁移作品" });
+    const volume = store.createVolume(String(work.id), { title: "第一卷" });
+    const chapter = store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "第一章",
+      content: "相同正文\n相同正文"
+    });
+    const annotation = store.createChapterAnnotation(String(chapter.id), {
+      kind: "note",
+      startLine: 2,
+      endLine: 2,
+      note: "绑定第二行"
+    });
+    current.raw.exec("ALTER TABLE chapter_annotations DROP COLUMN anchor_line_ids_json");
+    current.raw.exec("ALTER TABLE chapters DROP COLUMN line_ids_json");
+    current.run("DELETE FROM schema_migrations WHERE version = 123");
+    current.close();
+
+    const migrated = new Database(filename);
+    const lineIds = JSON.parse(String(migrated.get(
+      "SELECT line_ids_json FROM chapters WHERE id = ?",
+      String(chapter.id)
+    )?.line_ids_json)) as string[];
+    const anchorLineIds = JSON.parse(String(migrated.get(
+      "SELECT anchor_line_ids_json FROM chapter_annotations WHERE id = ?",
+      String(annotation.id)
+    )?.anchor_line_ids_json)) as string[];
+    expect(lineIds).toHaveLength(2);
+    expect(new Set(lineIds).size).toBe(2);
+    expect(anchorLineIds).toEqual([lineIds[1]]);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 123")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
   it("迁移 122 为历史正文评论回填逐行哈希并支持幂等重启", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-annotation-line-hashes-"));
     roots.push(root);

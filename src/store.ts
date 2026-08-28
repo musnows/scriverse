@@ -45,7 +45,12 @@ import {
 } from "./roleplay-turn.js";
 import {
   chapterAnnotationLineHashes,
+  createChapterLineIds,
+  MAX_CHAPTER_LINE_IDS,
+  parseChapterAnnotationLineIds,
   parseChapterAnnotationLineHashes,
+  parseChapterLineIds,
+  reconcileChapterLineIds,
   reanchorChapterAnnotations
 } from "./chapter-annotation-anchor.js";
 
@@ -3234,7 +3239,7 @@ export class Store {
 
   saveChapter(
     chapterId: string,
-    input: { title?: string; content?: string; excludedFromAnalysis?: boolean; chapterType?: ChapterType },
+    input: { title?: string; content?: string; lineIds?: Array<string | null>; excludedFromAnalysis?: boolean; chapterType?: ChapterType },
     source = "manual",
     sourceRef: string | null = null,
     changeNote = "",
@@ -3256,9 +3261,23 @@ export class Store {
     this.db.transaction(() => {
       const lockedCurrent = this.getChapter(chapterId);
       this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(lockedCurrent.versionNo));
+      const storedLineIds = parseChapterLineIds(lockedCurrent.lineIds, String(lockedCurrent.content));
+      const beforeLineIds = storedLineIds.length > 0
+        ? storedLineIds
+        : createChapterLineIds(String(lockedCurrent.content), () => id("chapterLine"));
+      const nextLineIds = hasContentChange
+        ? reconcileChapterLineIds(
+            String(lockedCurrent.content),
+            nextContent,
+            beforeLineIds,
+            input.lineIds,
+            () => id("chapterLine")
+          )
+        : beforeLineIds;
+      if (!nextLineIds) throw new AppError(400, "CHAPTER_LINE_IDS_INVALID", "正文行身份与当前版本不匹配，请刷新后重试");
       this.db.run(
         `UPDATE chapters SET title = ?, content = ?, chapter_type = ?, word_count = ?, version_no = ?, analysis_status = ?,
-         excluded_from_analysis = ?, updated_at = ? WHERE id = ?`,
+         excluded_from_analysis = ?, line_ids_json = ?, updated_at = ? WHERE id = ?`,
         nextTitle,
         nextContent,
         nextChapterType,
@@ -3266,6 +3285,7 @@ export class Store {
         versionNo,
         hasTextChange || hasTypeChange ? "expired" : String(current.analysisStatus),
         nextExcluded ? 1 : 0,
+        JSON.stringify(nextLineIds),
         timestamp,
         chapterId
       );
@@ -3276,6 +3296,7 @@ export class Store {
         chapterId,
         String(lockedCurrent.content),
         nextContent,
+        nextLineIds,
         source,
         timestamp
       );
@@ -3307,11 +3328,12 @@ export class Store {
     chapterId: string,
     beforeContent: string,
     afterContent: string,
+    afterLineIds: readonly string[],
     source: string,
     timestamp: string
   ): void {
     const annotations = this.db.all(
-      `SELECT id, start_line, end_line, quote, line_hashes_json
+      `SELECT id, start_line, end_line, quote, line_hashes_json, anchor_line_ids_json
        FROM chapter_annotations
        WHERE chapter_id = ? AND deleted_at IS NULL`,
       chapterId
@@ -3320,18 +3342,20 @@ export class Store {
       startLine: numberValue(row, "start_line"),
       endLine: numberValue(row, "end_line"),
       quote: requiredString(row, "quote"),
-      lineHashes: parseChapterAnnotationLineHashes(row.line_hashes_json, requiredString(row, "quote"))
+      lineHashes: parseChapterAnnotationLineHashes(row.line_hashes_json, requiredString(row, "quote")),
+      lineIds: parseChapterAnnotationLineIds(row.anchor_line_ids_json)
     }));
-    for (const annotation of reanchorChapterAnnotations(beforeContent, afterContent, annotations)) {
+    for (const annotation of reanchorChapterAnnotations(beforeContent, afterContent, annotations, afterLineIds)) {
       if (!annotation.changed) continue;
       this.db.run(
         `UPDATE chapter_annotations
-         SET start_line = ?, end_line = ?, quote = ?, line_hashes_json = ?, version_no = version_no + 1
+         SET start_line = ?, end_line = ?, quote = ?, line_hashes_json = ?, anchor_line_ids_json = ?, version_no = version_no + 1
          WHERE id = ?`,
         annotation.startLine,
         annotation.endLine,
         annotation.quote,
         JSON.stringify(annotation.lineHashes),
+        JSON.stringify(annotation.lineIds),
         annotation.id
       );
       const updated = this.getChapterAnnotation(annotation.id);
@@ -3495,19 +3519,21 @@ export class Store {
       ? numberValue(this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS sort_order FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", volumeId) ?? {}, "sort_order") + 1
       : numberValue(version, "sort_order");
     const timestamp = now();
+    const lineIds = createChapterLineIds(content, () => id("chapterLine"));
     const nextVersionNo = numberValue(
       this.db.get("SELECT COALESCE(MAX(version_no), 0) AS version_no FROM chapter_versions WHERE chapter_id = ?", chapterId) ?? {},
       "version_no"
     ) + 1;
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO chapters (id, work_id, volume_id, title, content, chapter_type, sort_order, word_count, version_no, analysis_status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        `INSERT INTO chapters (id, work_id, volume_id, title, content, line_ids_json, chapter_type, sort_order, word_count, version_no, analysis_status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
         chapterId,
         workId,
         volumeId,
         title,
         content,
+        JSON.stringify(lineIds),
         chapterType,
         sortOrder,
         countWords(content),
@@ -3702,12 +3728,14 @@ export class Store {
   }
 
   private chapterAnnotationSnapshot(annotation: Record<string, unknown>): Record<string, unknown> {
+    const anchor = this.db.get("SELECT anchor_line_ids_json FROM chapter_annotations WHERE id = ?", String(annotation.id));
     return {
       kind: annotation.kind,
       startLine: annotation.startLine,
       endLine: annotation.endLine,
       quote: annotation.quote,
       lineHashes: chapterAnnotationLineHashes(String(annotation.quote)),
+      lineIds: parseChapterAnnotationLineIds(anchor?.anchor_line_ids_json),
       note: annotation.note,
       status: annotation.status,
       deletedAt: annotation.deletedAt ?? null
@@ -3860,10 +3888,15 @@ export class Store {
     const timestamp = now();
     const actorId = currentRequestActor()?.userId ?? null;
     const quote = lines.slice(input.startLine - 1, input.endLine).join("\n");
+    const chapterLineIds = parseChapterLineIds(chapter.lineIds, String(chapter.content));
+    if (lines.length <= MAX_CHAPTER_LINE_IDS && chapterLineIds.length !== lines.length) {
+      throw new AppError(409, "CHAPTER_LINE_IDS_MISSING", "正文行身份尚未初始化，请重新保存正文后再添加评论");
+    }
+    const anchorLineIds = chapterLineIds.slice(input.startLine - 1, input.endLine);
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO chapter_annotations (id, work_id, chapter_id, kind, start_line, end_line, quote, line_hashes_json, note, status, version_no, created_at, updated_at, created_by_user_id, updated_by_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, ?, ?)`,
+        `INSERT INTO chapter_annotations (id, work_id, chapter_id, kind, start_line, end_line, quote, line_hashes_json, anchor_line_ids_json, note, status, version_no, created_at, updated_at, created_by_user_id, updated_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, ?, ?)`,
         annotationId,
         String(chapter.workId),
         chapterId,
@@ -3872,6 +3905,7 @@ export class Store {
         input.endLine,
         quote,
         JSON.stringify(chapterAnnotationLineHashes(quote)),
+        JSON.stringify(anchorLineIds),
         input.note.trim(),
         timestamp,
         timestamp,
@@ -4147,14 +4181,16 @@ export class Store {
   ): string {
     const chapterId = id("chapter");
     const timestamp = now();
+    const lineIds = createChapterLineIds(content, () => id("chapterLine"));
     this.db.run(
-      `INSERT INTO chapters (id, work_id, volume_id, title, content, chapter_type, sort_order, word_count, version_no, analysis_status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', ?, ?)`,
+      `INSERT INTO chapters (id, work_id, volume_id, title, content, line_ids_json, chapter_type, sort_order, word_count, version_no, analysis_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', ?, ?)`,
       chapterId,
       workId,
       volumeId,
       title,
       content,
+      JSON.stringify(lineIds),
       chapterType,
       sortOrder,
       countWords(content),
@@ -4574,7 +4610,8 @@ export class Store {
   private mapChapter(row: Row): Record<string, unknown> {
     return {
       ...this.mapChapterDirectoryEntry(row),
-      content: requiredString(row, "content")
+      content: requiredString(row, "content"),
+      lineIds: parseChapterLineIds(row.line_ids_json, requiredString(row, "content"))
     };
   }
 
