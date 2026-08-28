@@ -32,7 +32,7 @@ import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount } from "/ai-usage.js?v=20260821-ai-usage-pricing-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260828-context-output-limit-v1";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260828-context-output-usage-v1";
 import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
@@ -12954,7 +12954,7 @@ function renderAiContextDistribution(usage) {
       const description = document.createElement("small");
       description.textContent = item.key === "skills"
         ? "待加入"
-        : item.key === "input" ? "用户和 agent 的交互" : "本次最大输出";
+        : item.key === "input" ? "用户和 agent 的交互" : "当前调用实际输出";
       title.append(" ", description);
     }
     const value = document.createElement("strong");

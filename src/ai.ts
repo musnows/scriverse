@@ -5951,12 +5951,11 @@ export class AiManager {
     const skillsTokens = 0;
     const inputTokens = messageTokens + functionTokens + skillsTokens;
     const remainingTokens = Math.max(0, contextWindow - inputTokens);
-    // 超窗时把可交互上下文压到剩余份额，保证五段分布之和始终等于 contextWindow。
+    // 超窗时把可交互上下文压到剩余份额，保证六段分布之和始终等于 contextWindow。
     const contextInteractionTokens = Math.max(0, contextWindow - systemPromptTokens - functionTokens - skillsTokens - remainingTokens);
     const threshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
     const conversationUsagePercent = Number(budget.conversationUsagePercent) || 0;
     const configuredOutputTokens = Number(budget.configuredOutputTokens) || DEFAULT_MAX_TOKENS;
-    const effectiveOutputTokens = Math.max(0, Math.min(configuredOutputTokens, remainingTokens));
     const maxOutputUsagePercent = Math.min(100, Math.round(configuredOutputTokens / contextWindow * 100));
     const compactableMessageCount = Math.max(0, (conversation?.messages.length ?? 0) - 2);
     const contextFallbackReached = remainingTokens <= MIN_CONTEXT_REMAINING_TOKENS;
@@ -5969,7 +5968,7 @@ export class AiManager {
       conversationBudgetTokens: Number(budget.conversationBudgetTokens),
       conversationUsagePercent,
       maxOutputTokens: configuredOutputTokens,
-      effectiveOutputTokens,
+      outputTokens: 0,
       maxOutputUsagePercent,
       maxOutputThresholdReached: maxOutputUsagePercent >= threshold,
       outputReserveTokens: Number(budget.outputReserveTokens),
@@ -5981,8 +5980,8 @@ export class AiManager {
         functionTokens,
         skillsTokens,
         contextTokens: contextInteractionTokens,
-        outputTokens: effectiveOutputTokens,
-        leftTokens: Math.max(0, remainingTokens - effectiveOutputTokens)
+        outputTokens: 0,
+        leftTokens: remainingTokens
       },
       compactThreshold: threshold,
       compactableMessageCount,
@@ -6246,7 +6245,8 @@ export class AiManager {
     model: ModelRow,
     messages: CompletionMessage[],
     tools: Record<string, unknown>[],
-    reportedUsage?: unknown
+    reportedUsage?: unknown,
+    generatedOutputTokens = 0
   ): Record<string, unknown> {
     const baseUsage = this.contextUsageForModel(input, model);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
@@ -6259,13 +6259,12 @@ export class AiManager {
     const inputTokens = serializedMessageTokens + functionTokens + skillsTokens;
     const remainingTokens = Math.max(0, contextWindow - inputTokens);
     const contextTokens = Math.max(0, contextWindow - systemPromptTokens - functionTokens - skillsTokens - remainingTokens);
-    const configuredOutputTokens = Number(baseUsage.maxOutputTokens) || DEFAULT_MAX_TOKENS;
-    const effectiveOutputTokens = Math.max(0, Math.min(configuredOutputTokens, remainingTokens));
+    const outputTokens = Math.max(0, Math.round(Number(generatedOutputTokens) || 0));
     const estimatedUsage = {
       ...baseUsage,
       contextWindow,
       inputTokens,
-      effectiveOutputTokens,
+      outputTokens,
       remainingTokens,
       contextFallbackReached: remainingTokens <= MIN_CONTEXT_REMAINING_TOKENS,
       usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
@@ -6274,8 +6273,8 @@ export class AiManager {
         functionTokens,
         skillsTokens,
         contextTokens,
-        outputTokens: effectiveOutputTokens,
-        leftTokens: Math.max(0, remainingTokens - effectiveOutputTokens)
+        outputTokens,
+        leftTokens: Math.max(0, remainingTokens - outputTokens)
       }
     };
     const reportedInputTokens = resolveReportedInputTokens(reportedUsage);
@@ -6288,11 +6287,10 @@ export class AiManager {
     const reportedSkillsTokens = Math.min(skillsTokens, reportedDistributionRemaining);
     reportedDistributionRemaining -= reportedSkillsTokens;
     const reportedRemainingTokens = Math.max(0, contextWindow - reportedInputTokens);
-    const reportedEffectiveOutputTokens = Math.max(0, Math.min(configuredOutputTokens, reportedRemainingTokens));
     return {
       ...estimatedUsage,
       inputTokens: reportedInputTokens,
-      effectiveOutputTokens: reportedEffectiveOutputTokens,
+      outputTokens,
       remainingTokens: reportedRemainingTokens,
       contextFallbackReached: reportedRemainingTokens <= MIN_CONTEXT_REMAINING_TOKENS,
       usagePercent: Math.min(100, Math.round(reportedInputTokens / contextWindow * 100)),
@@ -6302,8 +6300,8 @@ export class AiManager {
         functionTokens: reportedFunctionTokens,
         skillsTokens: reportedSkillsTokens,
         contextTokens: reportedDistributionRemaining,
-        outputTokens: reportedEffectiveOutputTokens,
-        leftTokens: Math.max(0, reportedRemainingTokens - reportedEffectiveOutputTokens)
+        outputTokens,
+        leftTokens: Math.max(0, reportedRemainingTokens - outputTokens)
       }
     };
   }
@@ -9172,7 +9170,7 @@ export class AiManager {
         context,
         toolCalls: executedToolCalls,
         processSteps,
-        contextUsage: this.completionContextUsage(effectiveInput, model, completionMessages, tools, payload.usage)
+        contextUsage: this.completionContextUsage(effectiveInput, model, completionMessages, tools, payload.usage, outputTokens)
       };
     } catch (error) {
       const message = error instanceof Error ? redactProviderSecretsText(error.message, ...activeSecrets) : "AI 调用失败";
