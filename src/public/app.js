@@ -46,7 +46,7 @@ import {
   renderWritePlanDetailMarkup,
   isInteractiveToolPending,
   aiFormatDateTime
-} from "/ai-interactive.js?v=20260828-ai-write-tools-v3";
+} from "/ai-interactive.js?v=20260829-question-supplement-v4";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
@@ -3173,14 +3173,14 @@ function renderAiUserQuestionOptions(question) {
   customRadio.type = "radio";
   customRadio.name = "ai-question-choice";
   customRadio.value = "custom";
-  customRadio.checked = question.isCustomAnswer === true;
+  customRadio.checked = question.selectedOption == null && question.isCustomAnswer === true;
   customRadio.disabled = !isPending;
   const customText = document.createElement("span");
   customText.textContent = "自定义回答";
   customLabel.append(customRadio, customText);
   host.append(customLabel);
-  customInput.value = question.isCustomAnswer ? (question.answerText ?? "") : "";
-  customInput.disabled = !isPending || !(question.isCustomAnswer === true);
+  customInput.value = question.customAnswer ?? (question.selectedOption == null && question.isCustomAnswer ? (question.answerText ?? "") : "");
+  customInput.disabled = !isPending;
   $("#ai-question-submit").disabled = !isPending;
   $("#ai-question-skip").disabled = !isPending;
   $("#ai-question-expiry").textContent = isPending
@@ -3225,8 +3225,14 @@ async function respondAiUserQuestion(questionId, payload) {
       question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/answer`), { method: "POST", body: { customAnswer: payload.customAnswer } });
       toast("回答已提交给 AI");
     } else {
-      question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/answer`), { method: "POST", body: { selectedOption: payload.selectedOption } });
-      toast("回答已提交给 AI");
+      question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/answer`), {
+        method: "POST",
+        body: {
+          selectedOption: payload.selectedOption,
+          ...(payload.customAnswer ? { customAnswer: payload.customAnswer } : {})
+        }
+      });
+      toast(payload.customAnswer ? "选项和补充信息已提交给 AI" : "回答已提交给 AI");
     }
     cacheAiQuestionView(question);
     aiQuestionDialogQuestionId = String(question.id);
@@ -20248,11 +20254,18 @@ $("#ai-question-form").addEventListener("change", (event) => {
   if (control?.name !== "ai-question-choice") return;
   const isCustom = control.value === "custom";
   const customInput = $("#ai-question-custom-answer");
-  customInput.disabled = !isCustom || control.disabled;
-  if (isCustom && !customInput.disabled) customInput.focus();
+  if (isCustom && !control.disabled) customInput.focus();
   syncAiQuestionSubmitState();
 });
-$("#ai-question-custom-answer").addEventListener("input", syncAiQuestionSubmitState);
+$("#ai-question-custom-answer").addEventListener("input", () => {
+  const customInput = $("#ai-question-custom-answer");
+  const checked = document.querySelector('input[name="ai-question-choice"]:checked');
+  if (!checked && String(customInput.value).trim()) {
+    const customRadio = document.querySelector('input[name="ai-question-choice"][value="custom"]');
+    if (customRadio && !customRadio.disabled) customRadio.checked = true;
+  }
+  syncAiQuestionSubmitState();
+});
 $("#ai-question-submit").addEventListener("click", () => {
   const checked = document.querySelector('input[name="ai-question-choice"]:checked');
   if (!checked || aiQuestionDialogQuestionId == null) return;
@@ -20262,7 +20275,12 @@ $("#ai-question-submit").addEventListener("click", () => {
     respondAiUserQuestion(aiQuestionDialogQuestionId, { action: "custom", customAnswer: text }).catch((error) => toast(error.message, "error"));
     return;
   }
-  respondAiUserQuestion(aiQuestionDialogQuestionId, { action: "option", selectedOption: Number(checked.value) }).catch((error) => toast(error.message, "error"));
+  const supplementalAnswer = String($("#ai-question-custom-answer").value).trim();
+  respondAiUserQuestion(aiQuestionDialogQuestionId, {
+    action: "option",
+    selectedOption: Number(checked.value),
+    ...(supplementalAnswer ? { customAnswer: supplementalAnswer } : {})
+  }).catch((error) => toast(error.message, "error"));
 });
 $("#ai-question-skip").addEventListener("click", () => {
   if (aiQuestionDialogQuestionId == null) return;

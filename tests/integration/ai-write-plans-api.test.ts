@@ -136,17 +136,32 @@ describe("AI 可写工具与审批中心 API", () => {
     const missingAnswer = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${question.id}/answer`).send({});
     expect(missingAnswer.status).toBe(400);
     const bothAnswers = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${question.id}/answer`)
-      .send({ selectedOption: 0, customAnswer: "x" });
-    expect(bothAnswers.status).toBe(400);
+      .send({ selectedOption: 0, customAnswer: "补充说明" })
+      .expect(200);
+    expect(bothAnswers.body.data).toMatchObject({
+      selectedOption: 0,
+      selectedOptionLabel: "甲",
+      customAnswer: "补充说明",
+      answerText: "甲\n补充信息：补充说明",
+      isCustomAnswer: true
+    });
 
-    const answered = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${question.id}/answer`)
+    const customQuestion = manager.createQuestion({
+      workId,
+      conversationId: "conv-api",
+      initiator: null,
+      recipientUserId: null,
+      question: "再选一次？",
+      options: ["甲", "乙"]
+    });
+    const answered = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${customQuestion.id}/answer`)
       .send({ customAnswer: "都不要" })
       .expect(200);
     expect(answered.body.data.isCustomAnswer).toBe(true);
     expect(answered.body.data.answerText).toBe("都不要");
 
     // 二次回答与拒绝都已关闭的问题必须冲突。
-    const again = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${question.id}/reject`);
+    const again = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${customQuestion.id}/reject`);
     expect(again.status).toBe(409);
     expect(again.body.error.code).toBe("AI_QUESTION_CLOSED");
   });

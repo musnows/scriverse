@@ -3439,6 +3439,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         scope,
         status: String(continuation.status ?? "rejected"),
         answerText: String(continuation.answerText ?? ""),
+        selectedOptionLabel: typeof continuation.selectedOptionLabel === "string" ? continuation.selectedOptionLabel : null,
+        supplementalAnswer: typeof continuation.customAnswer === "string" ? continuation.customAnswer : "",
         ...(typeof continuation.modelId === "string" && continuation.modelId ? { modelId: continuation.modelId } : {}),
         ...(typeof continuation.toolCallId === "string" && continuation.toolCallId ? { toolCallId: continuation.toolCallId } : {})
       });

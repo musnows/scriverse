@@ -494,6 +494,26 @@ describe("AiWritePlanManager 工具开关与审批流水线", () => {
     expect(custom.isCustomAnswer).toBe(true);
     expect(custom.answerText).toBe("沈青梧");
     expect(manager.latestPendingQuestion("conv-1")).toBeNull();
+
+    const third = manager.createQuestion({
+      workId,
+      conversationId: "conv-1",
+      initiator: null,
+      recipientUserId: null,
+      question: "采用哪个方向？",
+      options: ["第一个", "第二个"]
+    });
+    const supplemented = manager.answerQuestion(third.id, workId, null, {
+      selectedOption: 0,
+      customAnswer: "但保留第二个方案的结尾"
+    });
+    expect(supplemented).toMatchObject({
+      selectedOption: 0,
+      selectedOptionLabel: "第一个",
+      customAnswer: "但保留第二个方案的结尾",
+      answerText: "第一个\n补充信息：但保留第二个方案的结尾",
+      isCustomAnswer: true
+    });
   });
 
   it("待回答问题阻止写计划且 continuation 只能认领一次", async () => {
@@ -523,10 +543,12 @@ describe("AiWritePlanManager 工具开关与审批流水线", () => {
       aiSummary: "不能提前写入",
       operations: [{ opType: "create_entry", entityType: "setting", input: { title: "未确认", category: "地点", content: "内容" } }]
     })).toThrowError(/待回答/u);
-    manager.answerQuestion(question.id, workId, null, { selectedOption: 0 });
+    manager.answerQuestion(question.id, workId, null, { selectedOption: 0, customAnswer: "补充采用冷色调" });
     expect(manager.claimQuestionContinuation(question.id, workId, null)).toMatchObject({
       conversationId: "conv-blocked",
-      answerText: "甲",
+      answerText: "甲\n补充信息：补充采用冷色调",
+      selectedOptionLabel: "甲",
+      customAnswer: "补充采用冷色调",
       toolCallId: "tool-question-1"
     });
     expect(manager.claimQuestionContinuation(question.id, workId, null)).toBeNull();

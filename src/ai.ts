@@ -5675,10 +5675,17 @@ export class AiManager {
     modelId?: string;
     status: string;
     answerText: string;
+    selectedOptionLabel?: string | null;
+    supplementalAnswer?: string;
     toolCallId?: string;
   }): Promise<Record<string, unknown>> {
     const controlledResult = input.status === "answered"
-      ? { status: "answered", answer: input.answerText }
+      ? {
+          status: "answered",
+          answer: input.answerText,
+          selectedOption: input.selectedOptionLabel ?? null,
+          supplementalAnswer: input.supplementalAnswer || null
+        }
       : { status: input.status, answer: null };
     return this.createStreamingChat({
       workId: input.workId,

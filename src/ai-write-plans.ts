@@ -468,9 +468,9 @@ export const answerAiUserQuestionSchema = z.object({
   selectedOption: z.number().int().min(0).optional(),
   customAnswer: z.string().trim().min(1).max(2000).optional()
 }).strict().refine(
-  // 恰好提供其一：要么选择预设选项，要么填写自定义回答。
-  (input) => (input.selectedOption !== undefined) !== (input.customAnswer !== undefined),
-  { message: "只能选择预设选项或填写自定义回答之一" }
+  // 至少提供一种回答；选择预设项后仍可附带自定义补充信息。
+  (input) => input.selectedOption !== undefined || input.customAnswer !== undefined,
+  { message: "必须选择预设选项或填写自定义回答" }
 );
 
 // ---------------------------------------------------------------------------
@@ -1169,6 +1169,8 @@ export type QuestionView = {
   statusLabel: string;
   options: Array<{ index: number; label: string; recommended: boolean }>;
   selectedOption: number | null;
+  selectedOptionLabel: string | null;
+  customAnswer: string;
   answerText: string;
   isCustomAnswer: boolean;
   createdAt: string;
@@ -1176,6 +1178,24 @@ export type QuestionView = {
   decidedAt: string | null;
   resumeState: string;
 };
+
+function resolvedQuestionAnswer(row: QuestionRow): {
+  selectedOption: number | null;
+  selectedOptionLabel: string | null;
+  customAnswer: string;
+  answerText: string;
+} {
+  const options = json<Array<string>>(row.options_json, []);
+  const selectedOption = row.selected_option === null ? null : Number(row.selected_option);
+  const selectedOptionLabel = selectedOption !== null && selectedOption >= 0 && selectedOption < options.length
+    ? options[selectedOption] ?? null
+    : null;
+  const customAnswer = row.is_custom_answer === 1 ? row.answer_text : "";
+  const answerText = selectedOptionLabel
+    ? (customAnswer ? `${selectedOptionLabel}\n补充信息：${customAnswer}` : selectedOptionLabel)
+    : (customAnswer || row.answer_text);
+  return { selectedOption, selectedOptionLabel, customAnswer, answerText };
+}
 
 export type AiWriteToolsView = Record<AiWriteToolId, boolean>;
 
@@ -2504,25 +2524,28 @@ export class AiWritePlanManager {
   answerQuestion(questionId: string, workId: string, respondent: PlanViewer, payload: { selectedOption?: number; customAnswer?: string }): QuestionView {
     const row = this.assertAnswerable(questionId, workId, respondent);
     const options = json<Array<string>>(row.options_json, []);
-    let answerText: string;
+    const customAnswer = payload.customAnswer?.trim().slice(0, 2000) ?? "";
+    if (payload.customAnswer !== undefined && !customAnswer) {
+      throw new AppError(400, "AI_QUESTION_CUSTOM_ANSWER_INVALID", "自定义回答不能为空");
+    }
     let selectedOption: number | null = null;
-    let isCustom = false;
-    if (payload.customAnswer !== undefined) {
-      answerText = payload.customAnswer.trim().slice(0, 2000);
-      isCustom = true;
-    } else {
-      if (payload.selectedOption === undefined || payload.selectedOption < 0 || payload.selectedOption >= options.length) {
+    let selectedOptionLabel = "";
+    if (payload.selectedOption !== undefined) {
+      if (payload.selectedOption < 0 || payload.selectedOption >= options.length) {
         throw new AppError(400, "AI_QUESTION_OPTION_INVALID", "选择的选项编号无效");
       }
       selectedOption = payload.selectedOption;
-      answerText = options[selectedOption] ?? "";
+      selectedOptionLabel = options[selectedOption] ?? "";
     }
+    if (selectedOption === null && !customAnswer) throw new AppError(400, "AI_QUESTION_ANSWER_REQUIRED", "必须提供回答");
+    const isCustom = Boolean(customAnswer);
+    const storedAnswerText = customAnswer || selectedOptionLabel;
     const updated = this.database.run(
       `UPDATE ai_user_questions
        SET status = 'answered', selected_option = ?, answer_text = ?, is_custom_answer = ?, decided_at = ?
-       WHERE id = ? AND status = 'pending'`,
+      WHERE id = ? AND status = 'pending'`,
       selectedOption,
-      answerText,
+      storedAnswerText,
       isCustom ? 1 : 0,
       now(),
       questionId
@@ -2530,7 +2553,8 @@ export class AiWritePlanManager {
     if (updated.changes !== 1) throw new AppError(409, "AI_QUESTION_ALREADY_DECIDED", "该问题已被处理");
     this.store.audit(row.work_id, "ai.question.answered", "ai_user_question", questionId, {
       answeredBy: respondent?.userId ?? null,
-      isCustomAnswer: isCustom
+      isCustomAnswer: isCustom,
+      hasSelectedOption: selectedOption !== null
     });
     return this.getQuestion(questionId, workId, respondent);
   }
@@ -2636,11 +2660,15 @@ export class AiWritePlanManager {
       questionId
     );
     if (claimed.changes !== 1) return null;
+    const answer = resolvedQuestionAnswer(row);
     return {
       ...continuation,
       questionId,
       status: row.status,
-      answerText: row.answer_text,
+      answerText: answer.answerText,
+      selectedOption: answer.selectedOption,
+      selectedOptionLabel: answer.selectedOptionLabel,
+      customAnswer: answer.customAnswer,
       toolCallId: row.tool_call_id
     };
   }
@@ -2713,6 +2741,7 @@ export class AiWritePlanManager {
 
   private toQuestionView(row: QuestionRow): QuestionView {
     const options = json<Array<string>>(row.options_json, []);
+    const answer = resolvedQuestionAnswer(row);
     return {
       id: row.id,
       workId: row.work_id,
@@ -2721,8 +2750,10 @@ export class AiWritePlanManager {
       status: row.status,
       statusLabel: aiQuestionStatusLabels[row.status] ?? row.status,
       options: options.map((label, index) => ({ index, label, recommended: index === 0 })),
-      selectedOption: row.selected_option === null ? null : Number(row.selected_option),
-      answerText: row.answer_text,
+      selectedOption: answer.selectedOption,
+      selectedOptionLabel: answer.selectedOptionLabel,
+      customAnswer: answer.customAnswer,
+      answerText: answer.answerText,
       isCustomAnswer: row.is_custom_answer === 1,
       createdAt: row.created_at,
       expiresAt: row.expires_at,

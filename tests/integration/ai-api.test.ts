@@ -4515,7 +4515,8 @@ describe("AI 供应商、模型与建议 API", () => {
         ] } }] }), { status: 200 });
       }
       expect(body.messages?.map((message) => message.content ?? "").join("\n")).toContain('"toolCallId":"ask-once"');
-      expect(body.messages?.map((message) => message.content ?? "").join("\n")).toContain('"answer":"甲"');
+      expect(body.messages?.map((message) => message.content ?? "").join("\n")).toContain('"selectedOption":"甲"');
+      expect(body.messages?.map((message) => message.content ?? "").join("\n")).toContain('"supplementalAnswer":"补充采用冷色调"');
       return new Response(JSON.stringify({ choices: [{ message: { content: "已按真实回答继续。" } }] }), { status: 200 });
     });
 
@@ -4532,8 +4533,16 @@ describe("AI 供应商、模型与建议 API", () => {
     const questionId = String(questions.body.data.questions[0].id);
     expect(questions.body.data.questions[0]).toMatchObject({ status: "pending", resumeState: "pending" });
 
-    const answered = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`).send({ selectedOption: 0 }).expect(200);
-    expect(answered.body.data).toMatchObject({ status: "answered", answerText: "甲", resumeState: "completed" });
+    const answered = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
+      .send({ selectedOption: 0, customAnswer: "补充采用冷色调" })
+      .expect(200);
+    expect(answered.body.data).toMatchObject({
+      status: "answered",
+      selectedOptionLabel: "甲",
+      customAnswer: "补充采用冷色调",
+      answerText: "甲\n补充信息：补充采用冷色调",
+      resumeState: "completed"
+    });
     expect(completionCount).toBe(2);
     await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`).send({ selectedOption: 0 }).expect(409);
     expect(completionCount).toBe(2);

@@ -330,7 +330,7 @@ function buildQuestionCard(model, actions) {
   const note = document.createElement("p");
   note.className = "ai-interactive-note";
   note.textContent = model.ok
-    ? "选择一个预设选项或填写自定义回答；不做选择时该问题会过期，AI 不允许自行假定答案。"
+    ? "选择一个预设选项后仍可填写补充信息，也可以只填写自定义回答；不作答时该问题会过期。"
     : "本次提问未能创建。";
   card.append(note);
   return card;
