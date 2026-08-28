@@ -3553,6 +3553,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 #character-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 #knowledge-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .entity-editor-header, .character-editor-header { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr) minmax(160px, 1fr); align-items: center; gap: 24px; min-height: 78px; padding: 14px clamp(18px, 3vw, 44px); border-bottom: 1px solid var(--line); background: var(--panel); }
+.character-editor-header { grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr) auto; }
 .entity-editor-heading { min-width: 0; text-align: center; }
 .entity-editor-heading h1 { overflow: hidden; margin: 2px 0 0; font-size: 24px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .entity-editor-readonly-badge { display: inline-block; width: fit-content; margin: 0 auto; padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--muted) 55%, var(--line)); border-radius: 999px; color: var(--muted); font-size: 10px; line-height: 1.2; }
@@ -3635,6 +3636,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .knowledge-editor-header-note { color: var(--muted); font-size: 10px; text-align: right; }
 .character-version-badge { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper-deep); color: var(--accent-dark); font: 10px/1 var(--font-latin), monospace; }
 .character-editor-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.character-editor-header-actions > .primary-button, .character-editor-header-actions > .ghost-button { flex: 0 0 auto; white-space: nowrap; }
 .character-editor-header-actions .ghost-button { min-height: 34px; }
 .character-editor-header-actions .ghost-button:disabled { cursor: not-allowed; opacity: .46; }
 .character-editor-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; }
