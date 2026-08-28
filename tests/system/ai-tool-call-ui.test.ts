@@ -81,7 +81,9 @@ describe("AI 工具调用记录界面", () => {
     expect(styles).toContain(".ai-tool-call-code-block { position: relative;");
     expect(styles).toContain("padding: 12px 44px 12px 12px;");
     expect(page).toContain("feature=ai-write-card-actions-compact-v1");
+    expect(page).toContain("feature=ai-write-plan-actions-footer-v1");
     expect(styles).toContain(".ai-interactive-actions :is(button.ghost-button, button.primary-button) { min-width: 0; min-height: 24px; padding: 3px 7px; font-size: calc(9px * var(--ai-font-scale)); line-height: 1.35; }");
+    expect(styles).toContain(".card-actions.ai-plan-actions { flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 0; padding: 14px 24px 20px; }");
     expect(styles).not.toContain("padding: 30px 12px 12px;");
     expect(styles).not.toContain("ai-stream-cursor");
     expect(styles).not.toContain(".is-streaming .message-body:empty::after");

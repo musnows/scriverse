@@ -2930,7 +2930,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-op-audits li { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 10px; }
 .ai-op-audits strong { color: var(--ink); }
 .ai-plan-audit-note { margin: 0; }
-.ai-plan-actions { flex-wrap: wrap; }
+.card-actions.ai-plan-actions { flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 0; padding: 14px 24px 20px; }
+.card-actions.ai-plan-actions > button { flex: 0 0 auto; }
 .ai-question-dialog { width: min(540px, 92vw); }
 .ai-question-body { display: grid; gap: 12px; padding: 18px 22px 8px; }
 .ai-question-text { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
@@ -2959,6 +2960,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-approval-empty { margin: 18px 0; }
 @media (max-width: 680px) {
   .ai-write-plan-body { padding: 14px 14px 16px; }
+  .ai-write-plan-dialog .ai-plan-actions { padding: 12px 16px 16px; }
   .ai-approval-center-body, .ai-question-body { padding: 12px 14px 14px; }
   .ai-field-diff-table { table-layout: auto; }
   .ai-field-diff-table th:nth-child(2), .ai-field-diff-table th:nth-child(3) { font-size: 8px; }
