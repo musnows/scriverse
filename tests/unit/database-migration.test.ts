@@ -112,6 +112,51 @@ describe("数据库版本化迁移", () => {
     database.close();
   });
 
+  it("迁移 122 建立角色共享记忆表且不迁移 compact 摘要", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-122-"));
+    roots.push(root);
+    const filename = join(root, "migration-122.db");
+    const current = new Database(filename);
+    insertSystemOwnedWork(current, "work-roleplay-memory", "角色扮演迁移", "2025-01-01");
+    current.run(
+      `INSERT INTO characters (id, work_id, name, created_at, updated_at)
+       VALUES ('character-roleplay-memory', 'work-roleplay-memory', '林舟', '2025-01-01', '2025-01-01')`
+    );
+    current.run(
+      `INSERT INTO ai_conversations (
+        id, work_id, roleplay_character_id, task_type, title, compacted_summary,
+        compacted_message_count, created_at, updated_at, created_by_user_id
+      ) VALUES (?, ?, ?, 'roleplay', '旧扮演', ?, 4, '2025-01-01', '2025-01-01', ?)`,
+      "conversation-roleplay-memory",
+      "work-roleplay-memory",
+      "character-roleplay-memory",
+      JSON.stringify({ storyFacts: [{ text: "这只是上下文摘要" }] }),
+      SYSTEM_USER_ID
+    );
+    current.run("DELETE FROM schema_migrations WHERE version = 122");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.all("PRAGMA table_info(roleplay_memories)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "work_id",
+      "character_id",
+      "content_hash",
+      "origin",
+      "canonical"
+    ]));
+    expect(migrated.all("PRAGMA table_info(roleplay_memories)").map((column) => column.name)).not.toContain("scope_id");
+    expect(migrated.all("PRAGMA table_info(ai_conversations)").map((column) => column.name)).not.toContain("roleplay_memory_scope_id");
+    expect(migrated.all("PRAGMA table_info(ai_conversation_messages)").map((column) => column.name)).not.toContain("roleplay_memory_revision");
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE name = 'roleplay_memory_scopes'")).toBeUndefined();
+    expect(migrated.get("SELECT COUNT(*) AS count FROM roleplay_memories")).toEqual({ count: 0 });
+    expect(migrated.get("SELECT compacted_summary FROM ai_conversations WHERE id = 'conversation-roleplay-memory'")).toEqual({
+      compacted_summary: JSON.stringify({ storyFacts: [{ text: "这只是上下文摘要" }] })
+    });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
   it("无损回填角色主名与别名并支持幂等重启", () => {
     const filename = createLegacyDatabase();
     const first = new Database(filename);

@@ -43,6 +43,15 @@ import {
   roleplayUserTurnTitleSource,
   type RoleplayScenePin
 } from "./roleplay-turn.js";
+import {
+  normalizeRoleplayMemoryContent,
+  roleplayMemoryCandidateIsSafe,
+  type RoleplayMemoryCandidate,
+  type RoleplayMemoryCategory,
+  type RoleplayMemoryCertainty,
+  type RoleplayMemoryImportance,
+  type RoleplayMemoryStatus
+} from "./roleplay-memory.js";
 
 type WorkInput = {
   title: string;
@@ -667,8 +676,10 @@ export function defaultAiConversationTitle(prompt: string): string {
 
 export type AiConversationContext = {
   workId: string;
+  taskType: AiConversationTaskType;
   roleplayCharacterId: string | null;
   roleplayUserCharacterId: string | null;
+  roleplayMemories: Record<string, unknown>[];
   summary: string;
   compactedMessageCount: number;
   totalMessageCount: number;
@@ -681,6 +692,26 @@ export type AiConversationContext = {
     content: string;
     metadata: Record<string, unknown>;
   }>;
+};
+
+export type RoleplayMemoryInput = {
+  category: RoleplayMemoryCategory;
+  content: string;
+  importance?: RoleplayMemoryImportance;
+  certainty?: RoleplayMemoryCertainty;
+  isPinned?: boolean;
+};
+
+export type RoleplayMemoryUpdateInput = Partial<RoleplayMemoryInput> & {
+  expectedVersion: number;
+};
+
+export type RoleplayMemoryListOptions = {
+  query?: string;
+  categories?: RoleplayMemoryCategory[];
+  statuses?: RoleplayMemoryStatus[];
+  cursor?: number;
+  limit?: number;
 };
 
 export type AiConversationTitleContext = {
@@ -7874,6 +7905,7 @@ export class Store {
       sourceId
     );
     const referenceSnapshot = { relationships: sourceRelationships, timelineEvents, memberships: sourceMemberships };
+    let roleplayMemoryMerge = { migrated: 0, deduplicated: 0 };
 
     this.db.transaction(() => {
       const lockedTarget = this.getCharacter(targetId);
@@ -7946,6 +7978,7 @@ export class Store {
       this.db.run("UPDATE character_profile_sections SET character_id = ?, updated_at = ? WHERE character_id = ?", targetId, timestamp, sourceId);
       this.db.run("UPDATE character_profile_section_versions SET character_id = ? WHERE character_id = ?", targetId, sourceId);
       this.db.run("UPDATE character_profile_section_search SET character_id = ? WHERE character_id = ?", targetId, sourceId);
+      roleplayMemoryMerge = this.mergeRoleplayMemoriesForCharacters(workId, targetId, sourceId, timestamp);
       const sourceVersionNo = Number(source.versionNo) + 1;
       this.db.run(
         "UPDATE characters SET merged_into_character_id = ?, merged_at = ?, version_no = ?, updated_at = ? WHERE id = ?",
@@ -7982,15 +8015,116 @@ export class Store {
       this.audit(workId, "character.merged", "character", targetId, {
         mergeId,
         sourceCharacterId: sourceId,
-        reviewId: input.reviewId
+        reviewId: input.reviewId,
+        roleplayMemoryMerge
       });
     });
     return {
       mergeId,
       target: this.getCharacter(targetId),
       source: this.getCharacter(sourceId),
-      review: input.reviewId ? this.getReviewItem(input.reviewId) : null
+      review: input.reviewId ? this.getReviewItem(input.reviewId) : null,
+      roleplayMemoryMerge
     };
+  }
+
+  private mergeRoleplayMemoriesForCharacters(
+    workId: string,
+    targetCharacterId: string,
+    sourceCharacterId: string,
+    timestamp: string
+  ): { migrated: number; deduplicated: number } {
+    let migrated = 0;
+    let deduplicated = 0;
+    const sourceMemories = this.db.all(
+      "SELECT * FROM roleplay_memories WHERE work_id = ? AND character_id = ? ORDER BY created_at, id",
+      workId,
+      sourceCharacterId
+    );
+    for (const sourceMemory of sourceMemories) {
+      const sourceMemoryId = requiredString(sourceMemory, "id");
+      const duplicate = this.db.get(
+        "SELECT * FROM roleplay_memories WHERE character_id = ? AND content_hash = ?",
+        targetCharacterId,
+        requiredString(sourceMemory, "content_hash")
+      );
+      if (!duplicate) {
+        this.db.run(
+          "UPDATE roleplay_memories SET character_id = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?",
+          targetCharacterId,
+          currentRequestActor()?.userId ?? null,
+          timestamp,
+          sourceMemoryId
+        );
+        migrated += 1;
+        continue;
+      }
+
+      const targetMemoryId = requiredString(duplicate, "id");
+      this.db.run(
+        "UPDATE roleplay_memories SET superseded_by_memory_id = ? WHERE superseded_by_memory_id = ?",
+        targetMemoryId,
+        sourceMemoryId
+      );
+      for (const source of this.db.all("SELECT * FROM roleplay_memory_sources WHERE memory_id = ? ORDER BY created_at, id", sourceMemoryId)) {
+        this.db.run(
+          `INSERT OR IGNORE INTO roleplay_memory_sources (
+            id, memory_id, conversation_id, message_id, message_role, source_created_by_user_id,
+            source_created_at, evidence_snapshot, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id("roleplay_memory_source"),
+          targetMemoryId,
+          optionalString(source, "conversation_id"),
+          optionalString(source, "message_id"),
+          requiredString(source, "message_role"),
+          optionalString(source, "source_created_by_user_id"),
+          requiredString(source, "source_created_at"),
+          requiredString(source, "evidence_snapshot"),
+          requiredString(source, "created_at")
+        );
+      }
+      let nextVersion = numberValue(duplicate, "version_no");
+      for (const version of this.db.all("SELECT * FROM roleplay_memory_versions WHERE memory_id = ? ORDER BY version_no", sourceMemoryId)) {
+        nextVersion += 1;
+        this.db.run(
+          `INSERT INTO roleplay_memory_versions (
+            id, memory_id, version_no, category, content, importance, certainty,
+            status, is_pinned, action, actor_user_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'merged', ?, ?)`,
+          id("roleplay_memory_version"),
+          targetMemoryId,
+          nextVersion,
+          requiredString(version, "category"),
+          requiredString(version, "content"),
+          requiredString(version, "importance"),
+          requiredString(version, "certainty"),
+          requiredString(version, "status"),
+          booleanValue(version, "is_pinned") ? 1 : 0,
+          currentRequestActor()?.userId ?? optionalString(version, "actor_user_id"),
+          requiredString(version, "created_at")
+        );
+      }
+      nextVersion += 1;
+      this.db.run(
+        `UPDATE roleplay_memories SET is_pinned = CASE WHEN is_pinned = 1 OR ? = 1 THEN 1 ELSE 0 END,
+         status = CASE WHEN status = 'active' OR ? = 'active' THEN 'active' ELSE status END,
+         superseded_by_memory_id = CASE WHEN status = 'active' OR ? = 'active' THEN NULL ELSE superseded_by_memory_id END,
+         version_no = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+        booleanValue(sourceMemory, "is_pinned") ? 1 : 0,
+        requiredString(sourceMemory, "status"),
+        requiredString(sourceMemory, "status"),
+        nextVersion,
+        currentRequestActor()?.userId ?? null,
+        timestamp,
+        targetMemoryId
+      );
+      const mergedTarget = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", targetMemoryId);
+      if (!mergedTarget) throw notFound("角色扮演记忆");
+      this.insertRoleplayMemoryVersion(mergedTarget, "merged");
+      this.db.run("DELETE FROM roleplay_memories WHERE id = ?", sourceMemoryId);
+      deduplicated += 1;
+    }
+    return { migrated, deduplicated };
   }
 
   resolveCharacterDuplicateReview(reviewId: string): Record<string, unknown> {
@@ -8970,6 +9104,391 @@ export class Store {
     };
   }
 
+  private roleplayMemoryContentHash(content: string): string {
+    return this.hashContent(normalizeRoleplayMemoryContent(content).toLocaleLowerCase("zh-CN"));
+  }
+
+  private insertRoleplayMemoryVersion(
+    memory: Row,
+    action: "created" | "edited" | "pinned" | "archived" | "restored" | "superseded" | "merged"
+  ): void {
+    this.db.run(
+      `INSERT INTO roleplay_memory_versions (
+        id, memory_id, version_no, category, content, importance, certainty,
+        status, is_pinned, action, actor_user_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id("roleplay_memory_version"),
+      requiredString(memory, "id"),
+      numberValue(memory, "version_no"),
+      requiredString(memory, "category"),
+      requiredString(memory, "content"),
+      requiredString(memory, "importance"),
+      requiredString(memory, "certainty"),
+      requiredString(memory, "status"),
+      booleanValue(memory, "is_pinned") ? 1 : 0,
+      action,
+      currentRequestActor()?.userId ?? optionalString(memory, "updated_by_user_id"),
+      now()
+    );
+  }
+
+  private roleplayMemoryListRows(characterId: string, options: RoleplayMemoryListOptions = {}): { rows: Row[]; total: number; cursor: number; limit: number } {
+    const cursor = Math.max(0, Math.min(100_000, options.cursor ?? 0));
+    const limit = Math.max(1, Math.min(100, options.limit ?? 20));
+    const where = ["memory.character_id = ?"];
+    const params: SQLInputValue[] = [characterId];
+    const statuses = options.statuses?.length ? [...new Set(options.statuses)] : ["active" as const];
+    where.push(`memory.status IN (${statuses.map(() => "?").join(", ")})`);
+    params.push(...statuses);
+    const categories = options.categories?.length ? [...new Set(options.categories)] : [];
+    if (categories.length > 0) {
+      where.push(`memory.category IN (${categories.map(() => "?").join(", ")})`);
+      params.push(...categories);
+    }
+    const query = normalizeRoleplayMemoryContent(options.query ?? "", 200).toLocaleLowerCase("zh-CN");
+    if (query) {
+      if (Array.from(query).length >= 3) {
+        where.push("memory.id IN (SELECT memory_id FROM roleplay_memory_fts WHERE roleplay_memory_fts MATCH ?)");
+        params.push(JSON.stringify(query));
+      } else {
+        where.push("lower(memory.content) LIKE ? ESCAPE '\\'");
+        params.push(`%${escapeSqlLikePattern(query)}%`);
+      }
+    }
+    const whereSql = where.join(" AND ");
+    const total = Number(this.db.get(`SELECT COUNT(*) AS count FROM roleplay_memories memory WHERE ${whereSql}`, ...params)?.count ?? 0);
+    const rows = this.db.all(
+      `SELECT memory.* FROM roleplay_memories memory
+       WHERE ${whereSql}
+       ORDER BY memory.is_pinned DESC,
+         CASE memory.importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+         memory.updated_at DESC, memory.id
+       LIMIT ? OFFSET ?`,
+      ...params,
+      limit,
+      cursor
+    );
+    return { rows, total, cursor, limit };
+  }
+
+  listRoleplayMemories(characterId: string, options: RoleplayMemoryListOptions = {}): Record<string, unknown> {
+    const character = this.getCharacter(characterId);
+    const page = this.roleplayMemoryListRows(characterId, options);
+    const nextCursor = page.cursor + page.rows.length < page.total ? page.cursor + page.rows.length : null;
+    return {
+      character: { id: character.id, name: character.name, workId: character.workId },
+      items: page.rows.map((memory) => this.mapRoleplayMemory(memory, true)),
+      pagination: { cursor: page.cursor, limit: page.limit, total: page.total, nextCursor }
+    };
+  }
+
+  isRoleplayMemorySourceTarget(sourceId: string, conversationId: string, messageId: string): boolean {
+    return Boolean(this.db.get(
+      `SELECT source.id
+       FROM roleplay_memory_sources source
+       INNER JOIN roleplay_memories memory ON memory.id = source.memory_id
+       WHERE source.id = ? AND source.conversation_id = ? AND source.message_id = ?`,
+      sourceId,
+      conversationId,
+      messageId
+    ));
+  }
+
+  getRoleplayMemoryPromptItems(workId: string, characterId: string, limit = 12): Record<string, unknown>[] {
+    const character = this.getCharacter(characterId);
+    if (String(character.workId) !== workId) throw new AppError(400, "ROLEPLAY_CHARACTER_WORK_MISMATCH", "角色不属于当前作品");
+    return this.roleplayMemoryListRows(characterId, {
+      statuses: ["active"],
+      limit: Math.max(1, Math.min(30, limit))
+    }).rows.map((memory) => this.mapRoleplayMemory(memory, false));
+  }
+
+  recallRoleplayMemories(
+    workId: string,
+    characterId: string,
+    query: string,
+    categories: RoleplayMemoryCategory[],
+    cursor: number
+  ): Record<string, unknown> {
+    const character = this.getCharacter(characterId);
+    if (String(character.workId) !== workId) throw new AppError(400, "ROLEPLAY_CHARACTER_WORK_MISMATCH", "角色不属于当前作品");
+    const result = this.listRoleplayMemories(characterId, { query, categories, statuses: ["active"], cursor, limit: 20 });
+    return {
+      origin: "roleplay",
+      canonical: false,
+      character: result.character,
+      memories: result.items,
+      pagination: result.pagination
+    };
+  }
+
+  createRoleplayMemory(characterId: string, input: RoleplayMemoryInput): Record<string, unknown> {
+    const character = this.getCharacter(characterId);
+    if (character.mergedIntoCharacterId) throw new AppError(409, "ROLEPLAY_MEMORY_CHARACTER_MERGED", "已合并角色不能新增角色扮演记忆");
+    const workId = String(character.workId);
+    const content = normalizeRoleplayMemoryContent(input.content);
+    if (!content) throw new AppError(400, "ROLEPLAY_MEMORY_CONTENT_REQUIRED", "请输入记忆内容");
+    const memoryId = id("roleplay_memory");
+    const contentHash = this.roleplayMemoryContentHash(content);
+    const timestamp = now();
+    this.db.transaction(() => {
+      if (this.db.get("SELECT id FROM roleplay_memories WHERE character_id = ? AND content_hash = ?", characterId, contentHash)) {
+        throw new AppError(409, "ROLEPLAY_MEMORY_DUPLICATE", "该角色已经有相同内容的角色扮演记忆");
+      }
+      this.db.run(
+        `INSERT INTO roleplay_memories (
+          id, work_id, character_id, category, content, content_hash, importance, certainty,
+          status, is_pinned, version_no, source_type, created_by_user_id, updated_by_user_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 1, 'manual', ?, ?, ?, ?)`,
+        memoryId,
+        workId,
+        characterId,
+        input.category,
+        content,
+        contentHash,
+        input.importance ?? "medium",
+        input.certainty ?? "experienced",
+        input.isPinned ? 1 : 0,
+        currentRequestActor()?.userId ?? null,
+        currentRequestActor()?.userId ?? null,
+        timestamp,
+        timestamp
+      );
+      const memory = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+      if (!memory) throw notFound("角色扮演记忆");
+      this.insertRoleplayMemoryVersion(memory, "created");
+      this.audit(workId, "roleplay-memory.created", "roleplay-memory", memoryId, { characterId });
+    });
+    const memory = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+    if (!memory) throw notFound("角色扮演记忆");
+    return this.mapRoleplayMemory(memory, true);
+  }
+
+  commitRoleplayMemoryCandidates(
+    conversationId: string,
+    assistantMessageId: string,
+    sourceUserMessageId: string,
+    candidates: RoleplayMemoryCandidate[]
+  ): Record<string, unknown>[] {
+    if (candidates.length === 0) return [];
+    const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    const characterId = optionalString(conversation, "roleplay_character_id");
+    if (!characterId) throw new AppError(409, "ROLEPLAY_MEMORY_REQUIRES_ROLEPLAY", "只有角色扮演对话可以写入角色扮演记忆");
+    const workId = requiredString(conversation, "work_id");
+    const assistant = this.db.get(
+      "SELECT * FROM ai_conversation_messages WHERE id = ? AND conversation_id = ? AND role = 'assistant'",
+      assistantMessageId,
+      conversationId
+    );
+    if (!assistant) throw new AppError(400, "ROLEPLAY_MEMORY_ASSISTANT_MISMATCH", "角色扮演记忆来源回复不属于当前对话");
+    const userMessage = this.db.get(
+      "SELECT * FROM ai_conversation_messages WHERE id = ? AND conversation_id = ? AND role = 'user'",
+      sourceUserMessageId,
+      conversationId
+    );
+    if (!userMessage) throw new AppError(400, "ROLEPLAY_MEMORY_USER_MESSAGE_MISMATCH", "角色扮演记忆来源消息不属于当前对话");
+    const committedIds: string[] = [];
+    this.db.transaction(() => {
+      const validCandidates = candidates.slice(0, 8).flatMap((candidate) => {
+        const content = normalizeRoleplayMemoryContent(candidate.content, 500);
+        if (!content || !roleplayMemoryCandidateIsSafe(content)) return [];
+        return [{ ...candidate, content }];
+      });
+      const insertable = validCandidates.flatMap((candidate) => {
+        const idempotencyKey = this.hashContent(`${assistantMessageId}:${JSON.stringify(candidate)}`);
+        const contentHash = this.roleplayMemoryContentHash(candidate.content);
+        const existing = this.db.get(
+          "SELECT id FROM roleplay_memories WHERE character_id = ? AND (idempotency_key = ? OR content_hash = ?)",
+          characterId,
+          idempotencyKey,
+          contentHash
+        );
+        return existing ? [] : [{ candidate, idempotencyKey, contentHash }];
+      });
+      if (insertable.length === 0) return;
+      const timestamp = now();
+      for (const { candidate, idempotencyKey, contentHash } of insertable) {
+        const memoryId = id("roleplay_memory");
+        const superseded = candidate.supersedesMemoryId
+          ? this.db.get(
+              "SELECT * FROM roleplay_memories WHERE id = ? AND character_id = ? AND status = 'active'",
+              candidate.supersedesMemoryId,
+              characterId
+            )
+          : undefined;
+        this.db.run(
+          `INSERT INTO roleplay_memories (
+            id, work_id, character_id, category, content, content_hash, importance, certainty, status, is_pinned, version_no,
+            source_type, source_assistant_message_id, idempotency_key,
+            created_by_user_id, updated_by_user_id, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, 1, 'ai', ?, ?, ?, ?, ?, ?)`,
+          memoryId,
+          workId,
+          characterId,
+          candidate.category,
+          candidate.content,
+          contentHash,
+          candidate.importance,
+          candidate.certainty,
+          assistantMessageId,
+          idempotencyKey,
+          optionalString(conversation, "created_by_user_id"),
+          optionalString(conversation, "created_by_user_id"),
+          timestamp,
+          timestamp
+        );
+        const memory = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+        if (!memory) throw notFound("角色扮演记忆");
+        this.insertRoleplayMemoryVersion(memory, "created");
+        for (const source of [userMessage, assistant]) {
+          this.db.run(
+            `INSERT INTO roleplay_memory_sources (
+              id, memory_id, conversation_id, message_id, message_role, source_created_by_user_id,
+              source_created_at, evidence_snapshot, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            id("roleplay_memory_source"),
+            memoryId,
+            conversationId,
+            requiredString(source, "id"),
+            requiredString(source, "role"),
+            optionalString(conversation, "created_by_user_id"),
+            requiredString(source, "created_at"),
+            Array.from(requiredString(source, "content")
+              .replace(/\r\n?/gu, "\n")
+              .replace(/\n{3,}/gu, "\n\n")
+              .trim()).slice(0, 2_000).join(""),
+            timestamp
+          );
+        }
+        if (superseded) {
+          const nextVersion = numberValue(superseded, "version_no") + 1;
+          this.db.run(
+            `UPDATE roleplay_memories SET status = 'superseded', superseded_by_memory_id = ?,
+             version_no = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+            memoryId,
+            nextVersion,
+            optionalString(conversation, "created_by_user_id"),
+            timestamp,
+            requiredString(superseded, "id")
+          );
+          const updatedSuperseded = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", requiredString(superseded, "id"));
+          if (updatedSuperseded) this.insertRoleplayMemoryVersion(updatedSuperseded, "superseded");
+        }
+        committedIds.push(memoryId);
+      }
+      this.audit(workId, "roleplay-memory.ai-committed", "character", characterId, {
+        conversationId,
+        assistantMessageId,
+        memoryCount: committedIds.length
+      });
+    });
+    return committedIds.flatMap((memoryId) => {
+      const memory = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+      return memory ? [this.mapRoleplayMemory(memory, true)] : [];
+    });
+  }
+
+  getRoleplayMemoryAccess(memoryId: string): { workId: string; characterId: string } {
+    const row = this.db.get(
+      "SELECT work_id, character_id FROM roleplay_memories WHERE id = ?",
+      memoryId
+    );
+    if (!row) throw notFound("角色扮演记忆");
+    return { workId: requiredString(row, "work_id"), characterId: requiredString(row, "character_id") };
+  }
+
+  updateRoleplayMemory(memoryId: string, input: RoleplayMemoryUpdateInput): Record<string, unknown> {
+    const memory = this.db.get(
+      "SELECT * FROM roleplay_memories WHERE id = ?",
+      memoryId
+    );
+    if (!memory) throw notFound("角色扮演记忆");
+    if (numberValue(memory, "version_no") !== input.expectedVersion) {
+      throw new AppError(409, "ROLEPLAY_MEMORY_VERSION_CONFLICT", "记忆已被其他操作更新，请刷新后重试");
+    }
+    const content = input.content === undefined ? requiredString(memory, "content") : normalizeRoleplayMemoryContent(input.content);
+    if (!content) throw new AppError(400, "ROLEPLAY_MEMORY_CONTENT_REQUIRED", "请输入记忆内容");
+    const category = input.category ?? requiredString(memory, "category");
+    const importance = input.importance ?? requiredString(memory, "importance");
+    const certainty = input.certainty ?? requiredString(memory, "certainty");
+    const isPinned = input.isPinned ?? booleanValue(memory, "is_pinned");
+    const contentChanged = content !== requiredString(memory, "content")
+      || category !== requiredString(memory, "category")
+      || importance !== requiredString(memory, "importance")
+      || certainty !== requiredString(memory, "certainty");
+    const pinnedChanged = isPinned !== booleanValue(memory, "is_pinned");
+    if (!contentChanged && !pinnedChanged) return this.mapRoleplayMemory(memory, true);
+    this.db.transaction(() => {
+      const timestamp = now();
+      const contentHash = this.roleplayMemoryContentHash(content);
+      const duplicate = this.db.get(
+        "SELECT id FROM roleplay_memories WHERE character_id = ? AND content_hash = ? AND id <> ?",
+        requiredString(memory, "character_id"),
+        contentHash,
+        memoryId
+      );
+      if (duplicate) throw new AppError(409, "ROLEPLAY_MEMORY_DUPLICATE", "该角色已经有相同内容的角色扮演记忆");
+      this.db.run(
+        `UPDATE roleplay_memories SET category = ?, content = ?, content_hash = ?, importance = ?, certainty = ?, is_pinned = ?,
+         version_no = version_no + 1, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+        category,
+        content,
+        contentHash,
+        importance,
+        certainty,
+        isPinned ? 1 : 0,
+        currentRequestActor()?.userId ?? null,
+        timestamp,
+        memoryId
+      );
+      const updated = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+      if (!updated) throw notFound("角色扮演记忆");
+      this.insertRoleplayMemoryVersion(updated, contentChanged ? "edited" : "pinned");
+      this.audit(requiredString(memory, "work_id"), "roleplay-memory.updated", "roleplay-memory", memoryId, {
+        characterId: requiredString(memory, "character_id")
+      });
+    });
+    const updated = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+    if (!updated) throw notFound("角色扮演记忆");
+    return this.mapRoleplayMemory(updated, true);
+  }
+
+  setRoleplayMemoryArchived(memoryId: string, archived: boolean, expectedVersion: number): Record<string, unknown> {
+    const memory = this.db.get(
+      "SELECT * FROM roleplay_memories WHERE id = ?",
+      memoryId
+    );
+    if (!memory) throw notFound("角色扮演记忆");
+    if (numberValue(memory, "version_no") !== expectedVersion) {
+      throw new AppError(409, "ROLEPLAY_MEMORY_VERSION_CONFLICT", "记忆已被其他操作更新，请刷新后重试");
+    }
+    const nextStatus = archived ? "archived" : "active";
+    if (requiredString(memory, "status") === nextStatus) return this.mapRoleplayMemory(memory, true);
+    this.db.transaction(() => {
+      const timestamp = now();
+      this.db.run(
+        `UPDATE roleplay_memories SET status = ?,
+         superseded_by_memory_id = CASE WHEN ? = 'active' THEN NULL ELSE superseded_by_memory_id END,
+         version_no = version_no + 1, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+        nextStatus,
+        nextStatus,
+        currentRequestActor()?.userId ?? null,
+        timestamp,
+        memoryId
+      );
+      const updated = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+      if (!updated) throw notFound("角色扮演记忆");
+      this.insertRoleplayMemoryVersion(updated, archived ? "archived" : "restored");
+      this.audit(requiredString(memory, "work_id"), archived ? "roleplay-memory.archived" : "roleplay-memory.restored", "roleplay-memory", memoryId, {
+        characterId: requiredString(memory, "character_id")
+      });
+    });
+    const updated = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+    if (!updated) throw notFound("角色扮演记忆");
+    return this.mapRoleplayMemory(updated, true);
+  }
+
   getAiConversationContext(conversationId: string, workId: string, excludeMessageId?: string): AiConversationContext {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
@@ -9010,10 +9529,13 @@ export class Store {
         );
       }
     }
+    const roleplayCharacterId = optionalString(conversation, "roleplay_character_id");
     return {
       workId,
-      roleplayCharacterId: optionalString(conversation, "roleplay_character_id"),
+      taskType: (optionalString(conversation, "task_type") ?? (roleplayCharacterId ? "roleplay" : "chat")) as AiConversationTaskType,
+      roleplayCharacterId,
       roleplayUserCharacterId: optionalString(conversation, "roleplay_user_character_id"),
+      roleplayMemories: roleplayCharacterId ? this.getRoleplayMemoryPromptItems(workId, roleplayCharacterId) : [],
       summary: requiredString(conversation, "compacted_summary"),
       compactedMessageCount,
       totalMessageCount,
@@ -9949,6 +10471,53 @@ export class Store {
       metadata: json(requiredString(row, "metadata_json"), {}),
       requestId: optionalString(row, "request_id"),
       createdAt: requiredString(row, "created_at")
+    };
+  }
+
+  private mapRoleplayMemory(row: Row, includeDetails: boolean): Record<string, unknown> {
+    const memoryId = requiredString(row, "id");
+    const actor = currentRequestActor();
+    const sources = includeDetails
+      ? this.db.all(
+          `SELECT source.*, conversation.created_by_user_id AS conversation_owner_id
+           FROM roleplay_memory_sources source
+           LEFT JOIN ai_conversations conversation ON conversation.id = source.conversation_id
+           WHERE source.memory_id = ? ORDER BY source.source_created_at, source.id`,
+          memoryId
+        ).map((source) => {
+          const sourceOwnerId = optionalString(source, "conversation_owner_id") ?? optionalString(source, "source_created_by_user_id");
+          const canOpen = actor === null || actor.role === "admin" || (sourceOwnerId !== null && sourceOwnerId === actor.userId);
+          return {
+            id: requiredString(source, "id"),
+            role: requiredString(source, "message_role"),
+            sourceType: requiredString(row, "source_type"),
+            sourceAt: requiredString(source, "source_created_at"),
+            canOpen,
+            restricted: !canOpen,
+            conversationId: canOpen ? optionalString(source, "conversation_id") : null,
+            messageId: canOpen ? optionalString(source, "message_id") : null,
+            evidence: canOpen ? requiredString(source, "evidence_snapshot") : null
+          };
+        })
+      : undefined;
+    return {
+      id: memoryId,
+      workId: requiredString(row, "work_id"),
+      characterId: requiredString(row, "character_id"),
+      category: requiredString(row, "category"),
+      content: requiredString(row, "content"),
+      importance: requiredString(row, "importance"),
+      certainty: requiredString(row, "certainty"),
+      origin: "roleplay",
+      canonical: false,
+      status: requiredString(row, "status"),
+      isPinned: booleanValue(row, "is_pinned"),
+      versionNo: numberValue(row, "version_no"),
+      supersededByMemoryId: optionalString(row, "superseded_by_memory_id"),
+      sourceType: requiredString(row, "source_type"),
+      ...(sources ? { sources } : {}),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
     };
   }
 
