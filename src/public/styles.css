@@ -2905,16 +2905,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-scene-button.hidden { display: none; }
 .ai-image-button-icon, .ai-scene-button-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 
-.roleplay-memory-dialog { width: min(920px, 94vw); max-width: calc(100vw - 24px); }
-.roleplay-memory-dialog-body { display: grid; align-content: start; gap: 14px; min-height: min(480px, 68vh); max-height: 72vh; padding: 16px 22px 22px; overflow-y: auto; }
-.character-roleplay-memory-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 14px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--accent) 5%, var(--paper)); }
-.character-roleplay-memory-field > div { display: grid; min-width: 0; gap: 4px; }
-.character-roleplay-memory-field strong { color: var(--ink); font-size: 13px; }
-.character-roleplay-memory-field p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
-.character-roleplay-memory-field button { min-height: 38px; }
-.roleplay-memory-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.character-roleplay-memory-surface { display: grid; grid-column: 1 / -1; gap: 14px; min-width: 0; }
+.roleplay-memory-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .roleplay-memory-toolbar button { min-height: 34px; }
-.roleplay-memory-toolbar .module-filter-toggle { width: auto; min-width: 88px; padding: 6px 10px; }
 .roleplay-memory-filter-panel { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(120px, .45fr) minmax(120px, .45fr) auto; align-items: end; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
 .roleplay-memory-filter-panel.hidden { display: none; }
 .roleplay-memory-filter-panel label { display: grid; gap: 4px; color: var(--muted); font-size: 9px; }
@@ -2942,10 +2935,6 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .roleplay-memory-pagination { margin-top: 2px; }
 
 @media (max-width: 640px) {
-  .roleplay-memory-dialog { width: calc(100vw - 16px); max-width: calc(100vw - 16px); }
-  .roleplay-memory-dialog-body { min-height: min(520px, 72vh); max-height: 76vh; padding: 12px; }
-  .character-roleplay-memory-field { grid-template-columns: minmax(0, 1fr); }
-  .character-roleplay-memory-field button { width: 100%; }
   .roleplay-memory-filter-panel { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .roleplay-memory-filter-panel label:first-child { grid-column: 1 / -1; }
   .roleplay-memory-filter-panel button { width: 100%; }
