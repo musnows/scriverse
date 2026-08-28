@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import { buffer } from "node:stream/consumers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
+import { chapterAnnotationLineHashes } from "../../src/chapter-annotation-anchor.js";
 import { createTestRuntime } from "../helpers.js";
 
 describe("作品、导入和章节版本 API", () => {
@@ -447,6 +448,11 @@ describe("作品、导入和章节版本 API", () => {
       endLine: 3,
       note: "跟随这一行"
     }).expect(201);
+    const originalLineHashes = chapterAnnotationLineHashes("评论目标行");
+    expect(JSON.parse(String(runtime.database.get(
+      "SELECT line_hashes_json FROM chapter_annotations WHERE id = ?",
+      annotation.body.data.id
+    )?.line_hashes_json))).toEqual(originalLineHashes);
 
     await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`).send({
       content: "新增一行\n新增二行\n第一行\n第二行\n评论目标行\n最后一行",
@@ -462,6 +468,14 @@ describe("作品、导入和章节版本 API", () => {
     });
     expect((await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/annotation-counts`).expect(200)).body.data)
       .toEqual([{ line: 5, count: 1 }]);
+    expect(JSON.parse(String(runtime.database.get(
+      "SELECT line_hashes_json FROM chapter_annotations WHERE id = ?",
+      annotation.body.data.id
+    )?.line_hashes_json))).toEqual(originalLineHashes);
+    expect(JSON.parse(String(runtime.database.get(
+      "SELECT detail_json FROM audit_logs WHERE entity_id = ? ORDER BY created_at DESC LIMIT 1",
+      annotation.body.data.id
+    )?.detail_json))).toMatchObject({ anchorStrategy: "hash", reason: "reanchor" });
 
     await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`).send({
       content: "新增一行\n新增二行\n第一行\n第二行\n修改后的目标行\n最后一行",
@@ -469,6 +483,16 @@ describe("作品、导入和章节版本 API", () => {
     }).expect(200);
     const edited = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/annotations`).expect(200);
     expect(edited.body.data[0]).toMatchObject({ startLine: 5, endLine: 5, quote: "修改后的目标行", versionNo: 3 });
+    const editedLineHashes = chapterAnnotationLineHashes("修改后的目标行");
+    expect(JSON.parse(String(runtime.database.get(
+      "SELECT line_hashes_json FROM chapter_annotations WHERE id = ?",
+      annotation.body.data.id
+    )?.line_hashes_json))).toEqual(editedLineHashes);
+    expect(editedLineHashes).not.toEqual(originalLineHashes);
+    expect(JSON.parse(String(runtime.database.get(
+      "SELECT detail_json FROM audit_logs WHERE entity_id = ? ORDER BY created_at DESC LIMIT 1",
+      annotation.body.data.id
+    )?.detail_json))).toMatchObject({ anchorStrategy: "fallback", reason: "reanchor" });
     expect(runtime.database.all(
       "SELECT version_no, source FROM chapter_annotation_versions WHERE annotation_id = ? ORDER BY version_no",
       annotation.body.data.id
@@ -481,6 +505,11 @@ describe("作品、导入和章节版本 API", () => {
       "SELECT action FROM audit_logs WHERE entity_id = ? ORDER BY created_at DESC LIMIT 1",
       annotation.body.data.id
     )).toEqual({ action: "chapter.annotation.updated" });
+    const latestSnapshot = JSON.parse(String(runtime.database.get(
+      "SELECT snapshot_json FROM chapter_annotation_versions WHERE annotation_id = ? ORDER BY version_no DESC LIMIT 1",
+      annotation.body.data.id
+    )?.snapshot_json));
+    expect(latestSnapshot).toMatchObject({ quote: "修改后的目标行", lineHashes: editedLineHashes });
   });
 
   it("按作品与正文顺序分页列出所有章节评论", async () => {

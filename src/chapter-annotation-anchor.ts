@@ -1,11 +1,15 @@
+import { createHash } from "node:crypto";
+
 export type ChapterAnnotationAnchor = {
   id: string;
   startLine: number;
   endLine: number;
   quote: string;
+  lineHashes: readonly string[];
 };
 
 export type ReanchoredChapterAnnotation = ChapterAnnotationAnchor & {
+  anchorStrategy: "hash" | "fallback";
   changed: boolean;
 };
 
@@ -18,6 +22,31 @@ function chapterLines(content: string): string[] {
   return content.replace(/\r\n?/gu, "\n").split("\n");
 }
 
+function lineHash(line: string): string {
+  return createHash("sha256").update(line, "utf8").digest("hex");
+}
+
+export function chapterAnnotationLineHashes(content: string): string[] {
+  return chapterLines(content).map((line) => lineHash(line));
+}
+
+export function parseChapterAnnotationLineHashes(value: unknown, fallbackContent: string): string[] {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value) as unknown;
+    } catch {
+      parsed = null;
+    }
+  }
+  if (
+    Array.isArray(parsed)
+    && parsed.length > 0
+    && parsed.every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/u.test(hash))
+  ) return [...parsed];
+  return chapterAnnotationLineHashes(fallbackContent);
+}
+
 function linePositions(lines: readonly string[]): Map<string, number[]> {
   const positions = new Map<string, number[]>();
   lines.forEach((line, index) => {
@@ -28,16 +57,20 @@ function linePositions(lines: readonly string[]): Map<string, number[]> {
   return positions;
 }
 
-function exactQuoteStarts(
-  lines: readonly string[],
+function exactSequenceStarts(
+  values: readonly string[],
   positions: ReadonlyMap<string, readonly number[]>,
-  quoteLines: readonly string[]
+  sequence: readonly string[]
 ): number[] {
-  const candidates = positions.get(quoteLines[0] ?? "") ?? [];
+  const candidates = positions.get(sequence[0] ?? "") ?? [];
   return candidates.filter((start) => (
-    start + quoteLines.length <= lines.length
-    && quoteLines.every((line, offset) => lines[start + offset] === line)
+    start + sequence.length <= values.length
+    && sequence.every((value, offset) => values[start + offset] === value)
   ));
+}
+
+function sameHashes(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((hash, index) => hash === right[index]);
 }
 
 function closestStart(candidates: readonly number[], target: number): number | null {
@@ -167,6 +200,8 @@ export function reanchorChapterAnnotations(
   const afterLines = chapterLines(afterContent);
   const beforePositions = linePositions(beforeLines);
   const afterPositions = linePositions(afterLines);
+  const afterLineHashes = afterLines.map((line) => lineHash(line));
+  const afterHashPositions = linePositions(afterLineHashes);
   const mapLineIndex = lineIndexMapper(beforeLines, afterLines);
 
   return annotations.map((annotation) => {
@@ -174,7 +209,7 @@ export function reanchorChapterAnnotations(
     const storedEnd = Math.max(storedStart, Math.min(beforeLines.length - 1, annotation.endLine - 1));
     const quoteLines = chapterLines(annotation.quote);
     const recoveredStart = closestStart(
-      exactQuoteStarts(beforeLines, beforePositions, quoteLines),
+      exactSequenceStarts(beforeLines, beforePositions, quoteLines),
       storedStart
     );
     const beforeStart = recoveredStart ?? storedStart;
@@ -183,23 +218,30 @@ export function reanchorChapterAnnotations(
       : Math.min(beforeLines.length - 1, recoveredStart + quoteLines.length - 1);
     const mappedStart = mapLineIndex(beforeStart);
     const mappedEnd = Math.max(mappedStart, mapLineIndex(beforeEnd));
-    const exactAfterStart = closestStart(
-      exactQuoteStarts(afterLines, afterPositions, quoteLines),
-      mappedStart
-    );
-    const nextStart = exactAfterStart ?? mappedStart;
-    const nextEnd = exactAfterStart === null
-      ? mappedEnd
-      : Math.min(afterLines.length - 1, exactAfterStart + quoteLines.length - 1);
+    const hashMatches = exactSequenceStarts(afterLineHashes, afterHashPositions, annotation.lineHashes);
+    const exactAfterStart = closestStart(exactSequenceStarts(afterLines, afterPositions, quoteLines), mappedStart);
+    const anchorStrategy = hashMatches.length === 1 ? "hash" : "fallback";
+    const nextStart = hashMatches.length === 1 ? hashMatches[0]! : exactAfterStart ?? mappedStart;
+    const nextEnd = hashMatches.length === 1
+      ? Math.min(afterLines.length - 1, nextStart + annotation.lineHashes.length - 1)
+      : exactAfterStart === null
+        ? mappedEnd
+        : Math.min(afterLines.length - 1, exactAfterStart + quoteLines.length - 1);
     const startLine = nextStart + 1;
     const endLine = nextEnd + 1;
     const quote = afterLines.slice(nextStart, nextEnd + 1).join("\n");
+    const lineHashes = afterLineHashes.slice(nextStart, nextEnd + 1);
     return {
       ...annotation,
       startLine,
       endLine,
       quote,
-      changed: startLine !== annotation.startLine || endLine !== annotation.endLine || quote !== annotation.quote
+      lineHashes,
+      anchorStrategy,
+      changed: startLine !== annotation.startLine
+        || endLine !== annotation.endLine
+        || quote !== annotation.quote
+        || !sameHashes(lineHashes, annotation.lineHashes)
     };
   });
 }

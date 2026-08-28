@@ -43,7 +43,11 @@ import {
   roleplayUserTurnTitleSource,
   type RoleplayScenePin
 } from "./roleplay-turn.js";
-import { reanchorChapterAnnotations } from "./chapter-annotation-anchor.js";
+import {
+  chapterAnnotationLineHashes,
+  parseChapterAnnotationLineHashes,
+  reanchorChapterAnnotations
+} from "./chapter-annotation-anchor.js";
 
 type WorkInput = {
   title: string;
@@ -3307,7 +3311,7 @@ export class Store {
     timestamp: string
   ): void {
     const annotations = this.db.all(
-      `SELECT id, start_line, end_line, quote
+      `SELECT id, start_line, end_line, quote, line_hashes_json
        FROM chapter_annotations
        WHERE chapter_id = ? AND deleted_at IS NULL`,
       chapterId
@@ -3315,17 +3319,19 @@ export class Store {
       id: requiredString(row, "id"),
       startLine: numberValue(row, "start_line"),
       endLine: numberValue(row, "end_line"),
-      quote: requiredString(row, "quote")
+      quote: requiredString(row, "quote"),
+      lineHashes: parseChapterAnnotationLineHashes(row.line_hashes_json, requiredString(row, "quote"))
     }));
     for (const annotation of reanchorChapterAnnotations(beforeContent, afterContent, annotations)) {
       if (!annotation.changed) continue;
       this.db.run(
         `UPDATE chapter_annotations
-         SET start_line = ?, end_line = ?, quote = ?, version_no = version_no + 1
+         SET start_line = ?, end_line = ?, quote = ?, line_hashes_json = ?, version_no = version_no + 1
          WHERE id = ?`,
         annotation.startLine,
         annotation.endLine,
         annotation.quote,
+        JSON.stringify(annotation.lineHashes),
         annotation.id
       );
       const updated = this.getChapterAnnotation(annotation.id);
@@ -3335,6 +3341,7 @@ export class Store {
         startLine: annotation.startLine,
         endLine: annotation.endLine,
         versionNo: updated.versionNo,
+        anchorStrategy: annotation.anchorStrategy,
         reason: "reanchor",
         source
       });
@@ -3700,6 +3707,7 @@ export class Store {
       startLine: annotation.startLine,
       endLine: annotation.endLine,
       quote: annotation.quote,
+      lineHashes: chapterAnnotationLineHashes(String(annotation.quote)),
       note: annotation.note,
       status: annotation.status,
       deletedAt: annotation.deletedAt ?? null
@@ -3851,17 +3859,19 @@ export class Store {
     const annotationId = id("chapterAnnotation");
     const timestamp = now();
     const actorId = currentRequestActor()?.userId ?? null;
+    const quote = lines.slice(input.startLine - 1, input.endLine).join("\n");
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO chapter_annotations (id, work_id, chapter_id, kind, start_line, end_line, quote, note, status, version_no, created_at, updated_at, created_by_user_id, updated_by_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, ?, ?)`,
+        `INSERT INTO chapter_annotations (id, work_id, chapter_id, kind, start_line, end_line, quote, line_hashes_json, note, status, version_no, created_at, updated_at, created_by_user_id, updated_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, ?, ?)`,
         annotationId,
         String(chapter.workId),
         chapterId,
         input.kind,
         input.startLine,
         input.endLine,
-        lines.slice(input.startLine - 1, input.endLine).join("\n"),
+        quote,
+        JSON.stringify(chapterAnnotationLineHashes(quote)),
         input.note.trim(),
         timestamp,
         timestamp,
