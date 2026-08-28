@@ -5567,7 +5567,31 @@ export class AiManager {
       throw error;
     }
     const processDurationMs = Math.min(86_400_000, Math.max(0, Math.round(Number(process.hrtime.bigint() - processStartedAt) / 1_000_000)));
+    const modelDisplayName = typeof generated.model.displayName === "string" ? generated.model.displayName : undefined;
+    const generatedMessageMetadata = {
+      ...(modelDisplayName ? { modelDisplayName } : {}),
+      outputTokens: generated.outputTokens,
+      processDurationMs,
+      ...(generated.reasoningContent === undefined ? {} : { reasoningContent: generated.reasoningContent }),
+      ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
+      toolCalls: generated.toolCalls,
+      processSteps: generated.processSteps,
+      ...(generated.anthropicContent?.length ? { anthropicContent: generated.anthropicContent } : {})
+    };
     if (generated.suspendedQuestionId) {
+      const suspendedContent = streamedConversationContent.trim()
+        ? streamedConversationContent
+        : "已向你提出问题，等待回答后继续。";
+      if (!streamedConversationContent.trim()) persistStreamDelta(suspendedContent);
+      const conversationMessage = input.conversationId && input.assistantMessageRequestId
+        ? this.store.upsertAiConversationAssistantMessage(
+          input.conversationId,
+          input.assistantMessageRequestId,
+          suspendedContent,
+          generatedMessageMetadata,
+          true
+        )
+        : persistedConversationMessage;
       return {
         id: `question:${generated.suspendedQuestionId}`,
         callId: generated.callId,
@@ -5579,7 +5603,8 @@ export class AiManager {
         processSteps: generated.processSteps,
         contextUsage: generated.contextUsage,
         suspendedQuestionId: generated.suspendedQuestionId,
-        conversationTitle: input.conversationId ? this.store.getAiConversationSummary(input.conversationId).title : "新对话"
+        conversationTitle: input.conversationId ? this.store.getAiConversationSummary(input.conversationId).title : "新对话",
+        ...(conversationMessage ? { conversationMessage } : {})
       };
     }
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
@@ -5598,22 +5623,12 @@ export class AiManager {
       now(),
       currentRequestActor()?.userId ?? null
     );
-    const modelDisplayName = typeof generated.model.displayName === "string" ? generated.model.displayName : undefined;
     const conversationMessage = input.conversationId && input.assistantMessageRequestId
       ? this.store.upsertAiConversationAssistantMessage(
         input.conversationId,
         input.assistantMessageRequestId,
         generated.content,
-        {
-          ...(modelDisplayName ? { modelDisplayName } : {}),
-          outputTokens: generated.outputTokens,
-          processDurationMs,
-          ...(generated.reasoningContent === undefined ? {} : { reasoningContent: generated.reasoningContent }),
-          ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
-          toolCalls: generated.toolCalls,
-          processSteps: generated.processSteps,
-          ...(generated.anthropicContent?.length ? { anthropicContent: generated.anthropicContent } : {})
-        },
+        generatedMessageMetadata,
         true
       )
       : persistedConversationMessage;

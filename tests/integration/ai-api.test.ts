@@ -4527,8 +4527,18 @@ describe("AI 供应商、模型与建议 API", () => {
       conversationId
     }).expect(200);
     expect(suspended.text).toContain('"name":"ask_user_question"');
+    expect(suspended.text).toContain("已向你提出问题，等待回答后继续。");
+    expect(suspended.text).toMatch(/"messageId":"message_[^"]+"/u);
     expect(suspended.text).not.toContain('"name":"propose_write_plan"');
     expect(completionCount).toBe(1);
+    const suspendedAssistant = runtime.database.get<{ content: string; metadata_json: string }>(
+      "SELECT content, metadata_json FROM ai_conversation_messages WHERE conversation_id = ? AND role = 'assistant' ORDER BY created_at DESC LIMIT 1",
+      conversationId
+    );
+    expect(suspendedAssistant?.content).toBe("已向你提出问题，等待回答后继续。");
+    expect(JSON.parse(String(suspendedAssistant?.metadata_json ?? "{}")).toolCalls).toMatchObject([
+      { name: "ask_user_question", status: "completed" }
+    ]);
     const questions = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}`).expect(200);
     const questionId = String(questions.body.data.questions[0].id);
     expect(questions.body.data.questions[0]).toMatchObject({ status: "pending", resumeState: "pending" });
