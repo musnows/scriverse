@@ -3843,7 +3843,8 @@ export class Store {
       `WITH RECURSIVE annotation_lines(line, end_line) AS (
          SELECT annotation.start_line, annotation.end_line
          FROM chapter_annotations annotation
-         WHERE annotation.chapter_id = ? AND annotation.deleted_at IS NULL${kindFilter.sql}
+         WHERE annotation.chapter_id = ? AND annotation.deleted_at IS NULL
+           AND NOT (annotation.kind = 'todo' AND annotation.status = 'resolved')${kindFilter.sql}
          UNION ALL
          SELECT line + 1, end_line
          FROM annotation_lines
