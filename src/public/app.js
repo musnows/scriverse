@@ -14350,9 +14350,10 @@ function field(name, label, type = "text", value = "", options = []) {
     const valueAriaLabel = config.valueAriaLabel ?? "扩展属性内容";
     const removeLabel = config.removeLabel ?? "删除此扩展属性";
     const addLabel = config.addLabel ?? "添加属性";
+    const multilineValue = config.multilineValue ?? false;
     const values = normalizeCharacterDetails(value);
     const rows = values.length ? values : [{ label: "", value: "" }];
-    return `<div class="form-field structured-list-field character-profile-detail-list"><span>${esc(label)}</span><div class="structured-list-rows" data-structured-list-rows data-kind="key-value">${rows.map((item) => `<div class="structured-list-row key-value-list-row"><input name="${esc(keyName)}" value="${esc(item.label)}" placeholder="${esc(keyPlaceholder)}" aria-label="${esc(keyAriaLabel)}"><input name="${esc(valueName)}" value="${esc(item.value)}" placeholder="${esc(valuePlaceholder)}" aria-label="${esc(valueAriaLabel)}"><button type="button" data-structured-list-remove aria-label="${esc(removeLabel)}">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-structured-list-add>${esc(addLabel)}</button></div>`;
+    return `<div class="form-field structured-list-field character-profile-detail-list"><span>${esc(label)}</span><div class="structured-list-rows" data-structured-list-rows data-kind="key-value">${rows.map((item) => `<div class="structured-list-row key-value-list-row"><input name="${esc(keyName)}" value="${esc(item.label)}" placeholder="${esc(keyPlaceholder)}" aria-label="${esc(keyAriaLabel)}">${multilineValue ? `<textarea class="key-value-list-value" name="${esc(valueName)}" rows="1" placeholder="${esc(valuePlaceholder)}" aria-label="${esc(valueAriaLabel)}" data-auto-grow>${esc(item.value)}</textarea>` : `<input name="${esc(valueName)}" value="${esc(item.value)}" placeholder="${esc(valuePlaceholder)}" aria-label="${esc(valueAriaLabel)}">`}<button type="button" data-structured-list-remove aria-label="${esc(removeLabel)}">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-structured-list-add>${esc(addLabel)}</button></div>`;
   }
   if (type === "section-list") {
     const values = normalizeCharacterSections(value);
@@ -14425,6 +14426,10 @@ function renderKnowledgeMarkdownSections() {
 }
 
 function bindDynamicListControls(container) {
+  resizeAutoGrowingTextareas(container);
+  container.addEventListener("input", (event) => {
+    if (event.target.matches?.("textarea[data-auto-grow]")) resizeAutoGrowingTextarea(event.target);
+  });
   container.querySelectorAll("[data-item-list-add]").forEach((button) => button.addEventListener("click", () => {
     const rows = button.previousElementSibling;
     const row = document.createElement("div");
@@ -14446,6 +14451,7 @@ function bindDynamicListControls(container) {
     const row = rows.lastElementChild.cloneNode(true);
     row.querySelectorAll("input, textarea").forEach((control) => { control.value = ""; });
     rows.append(row);
+    resizeAutoGrowingTextareas(row);
     row.querySelector("input").focus();
   }));
   container.onclick = (event) => {
@@ -14453,10 +14459,53 @@ function bindDynamicListControls(container) {
     if (!remove) return;
     const row = remove.closest(".item-list-row, .structured-list-row");
     const rows = row.parentElement;
-    if (rows.children.length === 1) row.querySelectorAll("input, textarea").forEach((control) => { control.value = ""; });
+    if (rows.children.length === 1) {
+      row.querySelectorAll("input, textarea").forEach((control) => { control.value = ""; });
+      resizeAutoGrowingTextareas(row);
+    }
     else row.remove();
   };
 }
+
+const supportsNativeTextareaContentSizing = typeof CSS !== "undefined" && CSS.supports("field-sizing", "content");
+
+function resizeAutoGrowingTextarea(textarea) {
+  if (supportsNativeTextareaContentSizing) {
+    textarea.style.removeProperty("height");
+    return;
+  }
+  textarea.style.height = "0px";
+  const minimumHeight = Number.parseFloat(getComputedStyle(textarea).minHeight) || 0;
+  textarea.style.height = `${Math.max(minimumHeight, textarea.scrollHeight)}px`;
+}
+
+const autoGrowingTextareaWidths = new WeakMap();
+const autoGrowingTextareaObserver = typeof ResizeObserver === "function"
+  ? new ResizeObserver((entries) => {
+    entries.forEach(({ target }) => {
+      const width = target.getBoundingClientRect().width;
+      if (autoGrowingTextareaWidths.get(target) === width) return;
+      autoGrowingTextareaWidths.set(target, width);
+      resizeAutoGrowingTextarea(target);
+    });
+  })
+  : null;
+
+function resizeAutoGrowingTextareas(container) {
+  container?.querySelectorAll("textarea[data-auto-grow]").forEach((textarea) => {
+    resizeAutoGrowingTextarea(textarea);
+    autoGrowingTextareaObserver?.observe(textarea);
+  });
+}
+
+let autoGrowingTextareaResizeFrame = null;
+window.addEventListener("resize", () => {
+  if (autoGrowingTextareaResizeFrame !== null) cancelAnimationFrame(autoGrowingTextareaResizeFrame);
+  autoGrowingTextareaResizeFrame = requestAnimationFrame(() => {
+    autoGrowingTextareaResizeFrame = null;
+    resizeAutoGrowingTextareas(document);
+  });
+});
 
 function appendRelationshipKeywordChips(editor, values) {
   const input = editor.querySelector("[data-keyword-input]");
@@ -15139,6 +15188,7 @@ function activateCharacterEditorTab(key) {
     button.tabIndex = active ? 0 : -1;
   });
   document.querySelectorAll("[data-character-editor-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.characterEditorPanel !== key));
+  resizeAutoGrowingTextareas(document.querySelector(`[data-character-editor-panel="${key}"]`));
   if (
     key === "relationships"
     && characterEditorItem?.id
@@ -16137,7 +16187,7 @@ function renderCharacterEditorFields(item) {
       field("summary", "人物简介", "textarea", item?.profile?.summary) +
       '<div class="form-field"><span>人设摘要</span><small>关系扮演时作为公开人设注入对方可见的角色卡，不会包含私密档案或 Markdown 章节。</small><textarea name="personaSummary" maxlength="20000" aria-label="人设摘要">' + esc(item?.profile?.personaSummary ?? "") + "</textarea></div>"),
     characterEditorSection("settings", "扩展设定", "可用短属性和 Markdown 长章节承载形态、能力、生态、经历与研究记录。",
-      field("details", "扩展属性", "key-value-list", item?.attributes?.details) +
+      field("details", "扩展属性", "key-value-list", item?.attributes?.details, { multilineValue: true }) +
       '<div id="character-markdown-sections" class="character-markdown-sections"></div>'),
     characterEditorSection("state", "状态与约束", "维护任意当前状态，并明确禁止 AI 自行覆盖的字段。",
       field("isDead", "标记为已死亡", "checkbox", item?.isDead ?? false) +
