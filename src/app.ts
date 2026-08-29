@@ -54,6 +54,7 @@ import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./goog
 import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH, readableHybridSearchTypes } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { MAX_CHAPTER_LINE_IDS } from "./chapter-annotation-anchor.js";
+import { isChapterNumberTemplate } from "./chapter-title-numbering.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes, WORK_AGENT_TOOL_IDS } from "./store.js";
 import { composeRoleplayStoredUserContent } from "./roleplay-turn.js";
 import {
@@ -2244,6 +2245,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       z.object({ type: z.literal("move"), volumeId: identifier }).strict(),
       z.object({ type: z.literal("setType"), chapterType: chapterTypeSchema }).strict(),
       z.object({ type: z.literal("setAnalysisExclusion"), excludedFromAnalysis: z.boolean() }).strict(),
+      z.object({
+        type: z.literal("renumberTitles"),
+        template: z.string().min(1).max(50).refine(isChapterNumberTemplate, "标题格式必须且只能包含一个 {n} 占位符，且不能包含换行或控制字符"),
+        numberStyle: z.enum(["arabic", "chinese"]),
+        startAt: z.number().int().min(1).max(999_999)
+      }).strict(),
       z.object({ type: z.literal("delete") }).strict()
     ]);
     const input = parse(z.object({ chapters: selectedChapters, action }).strict(), request.body);

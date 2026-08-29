@@ -86,9 +86,17 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain(".chapter-batch-button svg");
     expect(application.text).toContain("async function submitChapterBatch(");
     expect(application.text).toContain("批量删除需要再次确认");
+    expect(application.text).toContain("重排标题需要再次确认");
+    expect(application.text).toContain('type: "renumberTitles"');
     expect(styles.text).toContain(".chapter-batch-controls");
     expect(styles.text).toContain(".chapter-batch-controls select {");
+    expect(styles.text).toContain(".chapter-batch-controls input {");
     expect(styles.text).toContain(".chapter-batch-controls select:focus-visible");
+    expect(page.text).toContain('<option value="renumberTitles">重排标题序号</option>');
+    expect(page.text).toContain('id="chapter-batch-template" type="text" value="第{n}章"');
+    expect(page.text).toContain('id="chapter-batch-number-style"');
+    expect(page.text).toContain('id="chapter-batch-start" type="number" value="1"');
+    expect(page.text).toContain("feature=chapter-title-renumber-v1");
     expect(page.text).toContain('id="chapter-batch-search" type="search"');
     expect(page.text).toContain('id="chapter-batch-search-count"');
     expect(styles.text).toContain(".chapter-batch-search-field input");
