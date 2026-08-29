@@ -3442,7 +3442,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         selectedOptionLabel: typeof continuation.selectedOptionLabel === "string" ? continuation.selectedOptionLabel : null,
         supplementalAnswer: typeof continuation.customAnswer === "string" ? continuation.customAnswer : "",
         ...(typeof continuation.modelId === "string" && continuation.modelId ? { modelId: continuation.modelId } : {}),
-        ...(typeof continuation.toolCallId === "string" && continuation.toolCallId ? { toolCallId: continuation.toolCallId } : {})
+        ...(typeof continuation.toolCallId === "string" && continuation.toolCallId ? { toolCallId: continuation.toolCallId } : {}),
+        ...(typeof continuation.assistantMessageRequestId === "string" && continuation.assistantMessageRequestId
+          ? { assistantMessageRequestId: continuation.assistantMessageRequestId }
+          : {}),
+        ...(continuation.questionView && typeof continuation.questionView === "object" && !Array.isArray(continuation.questionView)
+          ? { questionView: continuation.questionView as Record<string, unknown> }
+          : {}),
+        ...(typeof continuation.round === "number" ? { round: continuation.round } : {}),
+        ...(Array.isArray(continuation.toolMessages) ? { toolMessages: continuation.toolMessages } : {})
       });
       aiWritePlanManager.finishQuestionContinuation(questionId, { callId: resumed.callId ?? null, completed: true });
     } catch (error) {

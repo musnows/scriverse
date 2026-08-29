@@ -285,6 +285,7 @@ function buildQuestionCard(model, actions) {
   const status = question?.status ?? "";
   const statusLabel = question ? (question.statusLabel ?? aiQuestionStatusLabel(status)) : "";
   const card = cardShell("question", `${INTERACTIVE_AI_TOOL_NAMES.ask_user_question}`, model.name);
+  if (question?.id) card.dataset.questionId = String(question.id);
   const head = card.querySelector(".ai-interactive-card-head");
   if (statusLabel) head.append(statusBadge(statusLabel, statusTone(status)));
 
@@ -310,10 +311,11 @@ function buildQuestionCard(model, actions) {
     card.append(list);
   }
 
-  const expiresAt = question?.expiresAt;
-  if (expiresAt) {
-    card.append(metaRow([["有效期至", formatDateTime(expiresAt)]]));
-  }
+  const questionMeta = [];
+  if (question?.expiresAt) questionMeta.push(["有效期至", formatDateTime(question.expiresAt)]);
+  if (status === "answered" && question?.answerText) questionMeta.push(["工具结果", question.answerText]);
+  if (question?.decidedAt) questionMeta.push(["处理时间", formatDateTime(question.decidedAt)]);
+  if (questionMeta.length > 0) card.append(metaRow(questionMeta));
 
   const actionsBar = document.createElement("div");
   actionsBar.className = "ai-interactive-actions";
@@ -329,9 +331,13 @@ function buildQuestionCard(model, actions) {
 
   const note = document.createElement("p");
   note.className = "ai-interactive-note";
-  note.textContent = model.ok
-    ? "选择一个预设选项后仍可填写补充信息，也可以只填写自定义回答；不作答时该问题会过期。"
-    : "本次提问未能创建。";
+  note.textContent = !model.ok
+    ? "本次提问未能创建。"
+    : status === "answered"
+      ? "作者回答已作为 ask_user_question 的工具结果返回，Agent 已继续原工作流。"
+      : status === "rejected" || status === "expired"
+        ? "未获得作者回答，Agent 不得依赖该选择继续写入。"
+        : "选择一个预设选项后仍可填写补充信息，也可以只填写自定义回答；不作答时该问题会过期。";
   card.append(note);
   return card;
 }

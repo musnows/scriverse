@@ -2669,7 +2669,8 @@ export class AiWritePlanManager {
       selectedOption: answer.selectedOption,
       selectedOptionLabel: answer.selectedOptionLabel,
       customAnswer: answer.customAnswer,
-      toolCallId: row.tool_call_id
+      toolCallId: row.tool_call_id,
+      questionView: this.toQuestionView(row)
     };
   }
 

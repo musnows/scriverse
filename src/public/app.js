@@ -46,7 +46,7 @@ import {
   renderWritePlanDetailMarkup,
   isInteractiveToolPending,
   aiFormatDateTime
-} from "/ai-interactive.js?v=20260829-question-supplement-v4";
+} from "/ai-interactive.js?v=20260829-question-tool-result-v5";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
@@ -3232,25 +3232,51 @@ async function openAiUserQuestionDialog(questionId) {
   }
 }
 
-function beginAiQuestionContinuationUi(conversationId) {
+function beginAiQuestionContinuationUi(conversationId, questionId) {
   const tab = conversationId ? aiChatTabManager.findByConversation(conversationId) : null;
   if (!tab) return null;
-  const message = document.createElement("div");
-  message.className = "assistant-message is-streaming ai-question-continuation-message";
-  message.innerHTML = '<div class="message-body" aria-live="polite" aria-busy="true"><p>正在根据你的回答继续处理…</p></div><div class="message-meta">正在继续原工作流</div>';
-  attachMessageHeading(message, aiAssistantLabel("正在生成", tab.roleplayCharacter), undefined, tab);
-  tab.feed.append(message);
+  const card = questionId
+    ? tab.feed.querySelector(`.ai-question-card[data-question-id="${CSS.escape(String(questionId))}"]`)
+    : null;
+  const note = card?.querySelector(".ai-interactive-note") ?? null;
+  const status = card?.querySelector(".ai-status-chip") ?? null;
+  const previousNote = note?.textContent ?? "";
+  const previousStatus = status?.textContent ?? "";
+  const controlStates = card
+    ? [...card.querySelectorAll("button")].map((button) => ({ button, disabled: button.disabled }))
+    : [];
+  if (card) {
+    card.classList.add("is-resuming");
+    card.setAttribute("aria-busy", "true");
+    controlStates.forEach(({ button }) => { button.disabled = true; });
+    if (status) status.textContent = "处理中";
+    if (note) note.textContent = "回答已作为工具结果提交，正在根据你的回答继续处理…";
+  }
   aiQuestionContinuationTabIds.add(tab.id);
   setAiChatTabStatus(tab, "streaming");
   if (isActiveAiChatTab(tab)) syncAiRequestControls();
   scrollAiFeedToBottom(tab.feed);
-  return { tab, message };
+  return {
+    tab,
+    card,
+    note,
+    status,
+    previousNote,
+    previousStatus,
+    controlStates
+  };
 }
 
 function finishAiQuestionContinuationUi(continuationUi, failed = false) {
   if (!continuationUi) return;
   aiQuestionContinuationTabIds.delete(continuationUi.tab.id);
-  if (continuationUi.message.isConnected) continuationUi.message.remove();
+  if (continuationUi.card?.isConnected) {
+    continuationUi.card.classList.remove("is-resuming");
+    continuationUi.card.removeAttribute("aria-busy");
+    continuationUi.controlStates.forEach(({ button, disabled }) => { button.disabled = disabled; });
+    if (continuationUi.note) continuationUi.note.textContent = continuationUi.previousNote;
+    if (continuationUi.status) continuationUi.status.textContent = continuationUi.previousStatus;
+  }
   if (aiChatTabManager.get(continuationUi.tab.id)) setAiChatTabStatus(continuationUi.tab, failed ? "error" : "ready");
   if (isActiveAiChatTab(continuationUi.tab)) syncAiRequestControls();
 }
@@ -3283,7 +3309,7 @@ async function respondAiUserQuestion(questionId, payload) {
     const conversationId = typeof knownQuestion?.conversationId === "string" ? knownQuestion.conversationId : null;
     if (questionDialog.open) questionDialog.close();
     if (approvalCenterDialog.open) approvalCenterDialog.close();
-    continuationUi = beginAiQuestionContinuationUi(conversationId);
+    continuationUi = beginAiQuestionContinuationUi(conversationId, questionId);
     let question;
     if (payload.action === "reject") {
       question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/reject`), { method: "POST" });

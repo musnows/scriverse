@@ -4507,16 +4507,27 @@ describe("AI 供应商、模型与建议 API", () => {
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
-      const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        messages?: Array<{
+          role?: string;
+          content?: string;
+          tool_call_id?: string;
+          tool_calls?: Array<{ id?: string; function?: { name?: string } }>;
+        }>;
+      };
       if (completionCount === 1) {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
           { id: "ask-once", type: "function", function: { name: "ask_user_question", arguments: { question: "采用哪个方向？", options: ["甲", "乙"] } } },
           { id: "must-not-run", type: "function", function: { name: "propose_write_plan", arguments: { aiSummary: "不应提前执行", operations: [{ opType: "create_entry", entityType: "setting", input: { title: "未确认", category: "地点", content: "内容" } }] } } }
         ] } }] }), { status: 200 });
       }
-      expect(body.messages?.map((message) => message.content ?? "").join("\n")).toContain('"toolCallId":"ask-once"');
-      expect(body.messages?.map((message) => message.content ?? "").join("\n")).toContain('"selectedOption":"甲"');
-      expect(body.messages?.map((message) => message.content ?? "").join("\n")).toContain('"supplementalAnswer":"补充采用冷色调"');
+      const assistantToolMessage = body.messages?.find((message) => message.role === "assistant" && message.tool_calls?.length);
+      expect(assistantToolMessage?.tool_calls).toEqual([
+        expect.objectContaining({ id: "ask-once", function: expect.objectContaining({ name: "ask_user_question" }) })
+      ]);
+      const toolResult = body.messages?.find((message) => message.role === "tool" && message.tool_call_id === "ask-once");
+      expect(toolResult?.content).toContain('"selectedOption":"甲"');
+      expect(toolResult?.content).toContain('"supplementalAnswer":"补充采用冷色调"');
       return new Response(JSON.stringify({ choices: [{ message: { content: "已按真实回答继续。" } }] }), { status: 200 });
     });
 
@@ -4556,6 +4567,16 @@ describe("AI 供应商、模型与建议 API", () => {
       resumeState: "completed"
     });
     expect(completionCount).toBe(2);
+    const completedMessages = runtime.database.all<{ role: string; content: string; metadata_json: string }>(
+      "SELECT role, content, metadata_json FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+      conversationId
+    );
+    expect(completedMessages).toHaveLength(2);
+    expect(completedMessages[1]).toMatchObject({ role: "assistant", content: "已按真实回答继续。" });
+    const completedMetadata = JSON.parse(String(completedMessages[1]?.metadata_json ?? "{}"));
+    expect(completedMetadata.toolCalls).toMatchObject([
+      { id: "ask-once", name: "ask_user_question", result: { question: { status: "answered", answerText: "甲\n补充信息：补充采用冷色调" } } }
+    ]);
     await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`).send({ selectedOption: 0 }).expect(409);
     expect(completionCount).toBe(2);
   });

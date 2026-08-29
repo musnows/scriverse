@@ -93,11 +93,16 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain("function syncAiQuestionOptionPresentation()");
     expect(application).toContain('label.classList.toggle("is-selected", isSelected);');
     expect(application).toContain('label.dataset.recommended === "true" && (!checked || isSelected)');
-    expect(application).toContain("function beginAiQuestionContinuationUi(conversationId)");
+    expect(application).toContain("function beginAiQuestionContinuationUi(conversationId, questionId)");
     expect(application).toContain("正在根据你的回答继续处理…");
+    expect(application).toContain("card.setAttribute(\"aria-busy\", \"true\")");
+    expect(application).not.toContain("ai-question-continuation-message");
     expect(application).toContain("if (questionDialog.open) questionDialog.close();");
     expect(application).toContain("if (approvalCenterDialog.open) approvalCenterDialog.close();");
     expect(application).toContain("await reloadAiQuestionConversation(question.conversationId ?? conversationId);");
+    expect(application).toContain('from "/ai-interactive.js?v=20260829-question-tool-result-v5"');
+    expect(page).toContain("feature=ai-question-tool-result-v1");
+    expect(await readFile(join(publicPath, "ai-interactive.js"), "utf8")).toContain("作者回答已作为 ask_user_question 的工具结果返回");
     expect(application).toContain('...(supplementalAnswer ? { customAnswer: supplementalAnswer } : {})');
     expect(styles).toContain(".ai-interactive-actions :is(button.ghost-button, button.primary-button) { min-width: 0; min-height: 24px; padding: 3px 7px; font-size: calc(9px * var(--ai-font-scale)); line-height: 1.35; }");
     expect(styles).toContain(".card-actions:is(.ai-plan-actions, .ai-question-actions) { flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 0; padding: 14px 24px 20px; }");

@@ -435,6 +435,7 @@ type GenerateInput = {
   conversationImageAttachments?: ReadonlyMap<string, ChatImageAttachment[]>;
   sceneDirection?: string;
   runtime?: DesktopLocalAiGenerateRuntime;
+  toolContinuation?: QuestionToolContinuation;
   onPrepared?: (contextUsage: Record<string, unknown>) => void;
 };
 
@@ -1181,6 +1182,123 @@ export type AiProcessStep = {
   summaryChars: number;
   createdAt: string;
 };
+
+type QuestionToolContinuation = {
+  assistantMessageId: string;
+  assistantMessageRequestId: string;
+  toolCallId: string;
+  toolResult: Record<string, unknown>;
+  round: number;
+  previousToolCalls: AgentToolCallResult[];
+  previousProcessSteps: AiProcessStep[];
+  previousOutputTokens: number;
+  previousProcessDurationMs: number;
+  messages: CompletionMessage[];
+};
+
+function storedAgentToolCall(value: unknown): AgentToolCallResult | null {
+  const record = traceRecord(value);
+  const status = record.status === "failed" ? "failed" : record.status === "completed" ? "completed" : null;
+  if (typeof record.id !== "string" || typeof record.name !== "string" || !status) return null;
+  const argumentsValue = record.arguments === null ? null : traceRecord(record.arguments);
+  return {
+    id: record.id,
+    name: record.name,
+    calledAt: typeof record.calledAt === "string" ? record.calledAt : "",
+    arguments: argumentsValue,
+    status,
+    result: traceRecord(record.result)
+  };
+}
+
+function storedAiProcessStep(value: unknown): AiProcessStep | null {
+  const record = traceRecord(value);
+  const round = Number.isFinite(record.round) ? Math.max(1, Math.round(Number(record.round))) : 1;
+  const createdAt = typeof record.createdAt === "string" ? record.createdAt : "";
+  if ((record.type === "thinking" || record.type === "intermediate") && typeof record.content === "string") {
+    return { id: String(record.id ?? ""), type: record.type, round, content: record.content, createdAt };
+  }
+  if (record.type === "tool") {
+    const toolCall = storedAgentToolCall(record.toolCall);
+    return toolCall ? { id: String(record.id ?? ""), type: "tool", round, toolCall, createdAt } : null;
+  }
+  if (record.type === "context_compaction") {
+    return {
+      id: String(record.id ?? ""),
+      type: "context_compaction",
+      round,
+      sourceMessageCount: Math.max(0, Math.round(Number(record.sourceMessageCount) || 0)),
+      sourceChars: Math.max(0, Math.round(Number(record.sourceChars) || 0)),
+      summaryChars: Math.max(0, Math.round(Number(record.summaryChars) || 0)),
+      createdAt
+    };
+  }
+  return null;
+}
+
+function storedCompletionMessage(value: unknown): CompletionMessage | null {
+  const record = traceRecord(value);
+  if (record.role === "system" && typeof record.content === "string") {
+    return { role: "system", content: record.content };
+  }
+  if (record.role === "user") {
+    if (typeof record.content === "string") return { role: "user", content: record.content };
+    if (Array.isArray(record.content)) return { role: "user", content: record.content.map((block) => structuredClone(traceRecord(block))) };
+    return null;
+  }
+  if (record.role === "tool" && typeof record.tool_call_id === "string" && typeof record.content === "string") {
+    return { role: "tool", tool_call_id: record.tool_call_id, content: record.content };
+  }
+  if (record.role !== "assistant" || (record.content !== null && typeof record.content !== "string")) return null;
+  const toolCalls: CompletionToolCall[] = (Array.isArray(record.tool_calls) ? record.tool_calls : []).flatMap((value) => {
+    const toolCall = traceRecord(value);
+    const fn = traceRecord(toolCall.function);
+    if (typeof toolCall.id !== "string" || typeof fn.name !== "string") return [];
+    return [{
+      id: toolCall.id,
+      type: "function" as const,
+      function: { name: fn.name, arguments: fn.arguments ?? "{}" }
+    }];
+  });
+  const anthropicContent = Array.isArray(record.anthropic_content)
+    ? record.anthropic_content.map((block) => structuredClone(traceRecord(block)))
+    : [];
+  return {
+    role: "assistant",
+    content: record.content,
+    ...(typeof record.reasoning_content === "string" ? { reasoning_content: record.reasoning_content } : {}),
+    ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+    ...(anthropicContent.length > 0 ? { anthropic_content: anthropicContent } : {})
+  };
+}
+
+function normalizeToolContinuationMessages(messages: CompletionMessage[]): CompletionMessage[] {
+  const completedToolCallIds = new Set(messages.flatMap((message) => (
+    message.role === "tool" ? [message.tool_call_id] : []
+  )));
+  return messages.map((message) => {
+    if (message.role !== "assistant") return message;
+    const originalToolCalls = "tool_calls" in message ? message.tool_calls : undefined;
+    const originalAnthropicContent = "anthropic_content" in message ? message.anthropic_content : undefined;
+    const toolCalls = originalToolCalls?.filter((toolCall) => completedToolCallIds.has(toolCall.id)) ?? [];
+    const anthropicContent = originalAnthropicContent?.filter((block) => (
+      block.type !== "tool_use" || (typeof block.id === "string" && completedToolCallIds.has(block.id))
+    )) ?? [];
+    return {
+      ...message,
+      ...(originalToolCalls ? { tool_calls: toolCalls } : {}),
+      ...(originalAnthropicContent ? { anthropic_content: anthropicContent } : {})
+    };
+  });
+}
+
+function resolvedQuestionToolMessages(continuation: QuestionToolContinuation): CompletionMessage[] {
+  return continuation.messages.map((message) => (
+    message.role === "tool" && message.tool_call_id === continuation.toolCallId
+      ? { ...message, content: JSON.stringify(continuation.toolResult) }
+      : structuredClone(message)
+  ));
+}
 
 const MAX_AGENT_TOOL_CALLS = 12;
 const TOOL_CONTEXT_COMPACT_MAX_TOKENS = 1_024;
@@ -5568,14 +5686,28 @@ export class AiManager {
     }
     const processDurationMs = Math.min(86_400_000, Math.max(0, Math.round(Number(process.hrtime.bigint() - processStartedAt) / 1_000_000)));
     const modelDisplayName = typeof generated.model.displayName === "string" ? generated.model.displayName : undefined;
+    const continuedToolCalls = input.toolContinuation
+      ? input.toolContinuation.previousToolCalls.map((toolCall) => (
+          toolCall.id === input.toolContinuation?.toolCallId
+            ? { ...toolCall, result: structuredClone(input.toolContinuation.toolResult) }
+            : toolCall
+        ))
+      : [];
+    const continuedProcessSteps = input.toolContinuation
+      ? input.toolContinuation.previousProcessSteps.map((step) => (
+          step.type === "tool" && step.toolCall.id === input.toolContinuation?.toolCallId
+            ? { ...step, toolCall: { ...step.toolCall, result: structuredClone(input.toolContinuation.toolResult) } }
+            : step
+        ))
+      : [];
     const generatedMessageMetadata = {
       ...(modelDisplayName ? { modelDisplayName } : {}),
-      outputTokens: generated.outputTokens,
-      processDurationMs,
+      outputTokens: generated.outputTokens + (input.toolContinuation?.previousOutputTokens ?? 0),
+      processDurationMs: processDurationMs + (input.toolContinuation?.previousProcessDurationMs ?? 0),
       ...(generated.reasoningContent === undefined ? {} : { reasoningContent: generated.reasoningContent }),
       ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
-      toolCalls: generated.toolCalls,
-      processSteps: generated.processSteps
+      toolCalls: [...continuedToolCalls, ...generated.toolCalls],
+      processSteps: [...continuedProcessSteps, ...generated.processSteps]
     };
     if (generated.suspendedQuestionId) {
       const suspendedContent = streamedConversationContent.trim()
@@ -5629,7 +5761,9 @@ export class AiManager {
         generated.content,
         {
           ...generatedMessageMetadata,
-          ...(generated.anthropicContent?.length ? { anthropicContent: generated.anthropicContent } : {})
+          ...(input.toolContinuation
+            ? { anthropicContent: generated.anthropicContent ?? [] }
+            : generated.anthropicContent?.length ? { anthropicContent: generated.anthropicContent } : {})
         },
         true
       )
@@ -5695,6 +5829,10 @@ export class AiManager {
     selectedOptionLabel?: string | null;
     supplementalAnswer?: string;
     toolCallId?: string;
+    assistantMessageRequestId?: string;
+    questionView?: Record<string, unknown>;
+    round?: number;
+    toolMessages?: unknown[];
   }): Promise<Record<string, unknown>> {
     const controlledResult = input.status === "answered"
       ? {
@@ -5704,18 +5842,97 @@ export class AiManager {
           supplementalAnswer: input.supplementalAnswer || null
         }
       : { status: input.status, answer: null };
+    const toolCallId = input.toolCallId?.trim() ?? "";
+    if (!toolCallId) throw new AppError(409, "AI_QUESTION_CONTINUATION_MISSING", "提问缺少原工具调用标识");
+    const toolResult = {
+      ok: true,
+      question: input.questionView ?? { id: input.questionId, ...controlledResult },
+      result: controlledResult,
+      message: input.status === "answered" ? "作者已回答问题，继续原工作流。" : "作者未提供答案，停止依赖该选择。"
+    };
+    const toolContinuation = this.resolveQuestionToolContinuation({
+      conversationId: input.conversationId,
+      assistantMessageRequestId: input.assistantMessageRequestId,
+      toolCallId,
+      toolResult,
+      round: input.round,
+      toolMessages: input.toolMessages
+    });
     return this.createStreamingChat({
       workId: input.workId,
       conversationId: input.conversationId,
-      assistantMessageRequestId: `question-resume:${input.questionId}`,
-      instruction: [
-        "以下内容是此前 ask_user_question 工具调用的唯一真实结果。继续原工作流时只能使用该结果；answer 为 null 时必须停止依赖该选择的写操作。",
-        JSON.stringify({ toolCallId: input.toolCallId ?? null, ...controlledResult })
-      ].join("\n"),
+      assistantMessageRequestId: toolContinuation.assistantMessageRequestId,
+      instruction: "",
       scope: input.scope,
       ...(input.modelId ? { modelId: input.modelId } : {}),
-      disableTools: input.status !== "answered"
+      disableTools: input.status !== "answered",
+      toolContinuation
     }, () => undefined);
+  }
+
+  private resolveQuestionToolContinuation(input: {
+    conversationId: string;
+    assistantMessageRequestId?: string;
+    toolCallId: string;
+    toolResult: Record<string, unknown>;
+    round?: number;
+    toolMessages?: unknown[];
+  }): QuestionToolContinuation {
+    const rows = this.store.db.all<Record<string, unknown>>(
+      `SELECT id, request_id, metadata_json FROM ai_conversation_messages
+       WHERE conversation_id = ? AND role = 'assistant'
+       ORDER BY created_at DESC, rowid DESC`,
+      input.conversationId
+    );
+    for (const row of rows) {
+      const requestId = typeof row.request_id === "string" ? row.request_id : "";
+      if (input.assistantMessageRequestId && requestId !== input.assistantMessageRequestId) continue;
+      const metadata = json<Record<string, unknown>>(typeof row.metadata_json === "string" ? row.metadata_json : "{}", {});
+      const previousToolCalls = (Array.isArray(metadata.toolCalls) ? metadata.toolCalls : [])
+        .map(storedAgentToolCall)
+        .filter((toolCall): toolCall is AgentToolCallResult => toolCall !== null);
+      if (!previousToolCalls.some((toolCall) => toolCall.id === input.toolCallId && toolCall.name === "ask_user_question")) continue;
+      if (typeof row.id !== "string" || !requestId) break;
+      const previousProcessSteps = (Array.isArray(metadata.processSteps) ? metadata.processSteps : [])
+        .map(storedAiProcessStep)
+        .filter((step): step is AiProcessStep => step !== null);
+      const storedMessages = normalizeToolContinuationMessages(
+        (input.toolMessages ?? [])
+          .map(storedCompletionMessage)
+          .filter((message): message is CompletionMessage => message !== null)
+      );
+      const fallbackAssistantMessage: CompletionMessage = {
+        role: "assistant",
+        content: null,
+        tool_calls: previousToolCalls.map((toolCall) => ({
+          id: toolCall.id,
+          type: "function",
+          function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments ?? {}) }
+        }))
+      };
+      return {
+        assistantMessageId: row.id,
+        assistantMessageRequestId: requestId,
+        toolCallId: input.toolCallId,
+        toolResult: structuredClone(input.toolResult),
+        round: Math.max(1, Math.round(Number(input.round) || 1)),
+        previousToolCalls,
+        previousProcessSteps,
+        previousOutputTokens: Math.max(0, Math.round(Number(metadata.outputTokens) || 0)),
+        previousProcessDurationMs: Math.max(0, Math.round(Number(metadata.processDurationMs) || 0)),
+        messages: storedMessages.length > 0
+          ? storedMessages
+          : [
+              fallbackAssistantMessage,
+              ...previousToolCalls.map((toolCall) => ({
+                role: "tool" as const,
+                tool_call_id: toolCall.id,
+                content: JSON.stringify(toolCall.result)
+              }))
+            ]
+      };
+    }
+    throw new AppError(409, "AI_QUESTION_CONTINUATION_MISSING", "找不到提问对应的原工具调用消息");
   }
 
   private async generateConversationTitle(
@@ -6822,7 +7039,7 @@ export class AiManager {
   }
 
   private buildMessages(
-    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds" | "imageAttachments" | "conversationImageAttachments" | "sceneDirection">,
+    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds" | "imageAttachments" | "conversationImageAttachments" | "sceneDirection" | "toolContinuation">,
     context: string,
     existingConversation?: AiConversationContext | null
   ): CompletionMessage[] {
@@ -6999,10 +7216,11 @@ export class AiManager {
     }
     // 本轮 user 侧 XML 注入：普通任务使用 story_context / author_instruction；角色扮演使用 scene_context / user_message。
     // 已有 message list 里的历史 user/assistant content 必须原样上行，禁止改写，否则破坏 prompt cache。
-    const conversationMessages: CompletionMessage[] = conversation?.messages.map((message) => {
+    let continuationMessageFound = input.toolContinuation === undefined;
+    const conversationMessages: CompletionMessage[] = conversation?.messages.flatMap((message): CompletionMessage[] => {
       if (message.role === "user") {
         const imageAttachments = input.conversationImageAttachments?.get(message.id) ?? [];
-        return {
+        return [{
           role: "user",
           content: imageAttachments.length > 0
             ? [
@@ -7013,7 +7231,11 @@ export class AiManager {
               }))
             ]
             : message.content
-        };
+        }];
+      }
+      if (input.toolContinuation && message.id === input.toolContinuation.assistantMessageId) {
+        continuationMessageFound = true;
+        return resolvedQuestionToolMessages(input.toolContinuation);
       }
       const reasoningContent = typeof message.metadata.reasoningContent === "string" && message.metadata.reasoningContent.length > 0
         ? message.metadata.reasoningContent
@@ -7021,13 +7243,16 @@ export class AiManager {
       const anthropicContent = Array.isArray(message.metadata.anthropicContent)
         ? message.metadata.anthropicContent.filter((block): block is Record<string, unknown> => Boolean(block && typeof block === "object" && !Array.isArray(block)))
         : [];
-      return {
+      return [{
         role: "assistant",
         content: message.content,
         ...(reasoningContent === undefined ? {} : { reasoning_content: reasoningContent }),
         ...(anthropicContent.length > 0 ? { anthropic_content: structuredClone(anthropicContent) } : {})
-      };
+      }];
     }) ?? [];
+    if (!continuationMessageFound) {
+      throw new AppError(409, "AI_QUESTION_CONTINUATION_MISSING", "提问对应的原工具调用消息已不在当前对话上下文中");
+    }
     const conversationMemory = conversation?.summary
       ? wrapAiContextRegion(
         "conversation_memory",
@@ -7047,7 +7272,7 @@ export class AiManager {
       // 历史在前、本轮注入在后：保证多轮前缀（system + memory + history）稳定，便于命中 prompt cache
       ...conversationMessages,
       { role: "user", content: renderedContext },
-      { role: "user", content: currentInstructionContent }
+      ...(input.toolContinuation ? [] : [{ role: "user" as const, content: currentInstructionContent }])
     ];
   }
 
@@ -9376,8 +9601,8 @@ export class AiManager {
         this.store.getWorkAiSettings(input.workId).agentToolCallGlobalMultiplier ?? DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER
       );
       const globalToolCallLimit = agentToolCallGlobalLimit(agentToolCallLimit, agentToolCallGlobalMultiplier);
-      let toolCallQuotaUsed = 0;
-      let globalToolCallUsed = 0;
+      let toolCallQuotaUsed = input.toolContinuation?.previousToolCalls.length ?? 0;
+      let globalToolCallUsed = input.toolContinuation?.previousToolCalls.length ?? 0;
       let toolContextCompactCount = 0;
       // 配额与全局熔断只控制循环是否继续，不得改写 tools 定义、tool_choice 或系统前缀（否则破坏 prompt cache）。
       const compactToolContext = async (additionalMessages: CompletionMessage[] = [], round = 1): Promise<void> => {
@@ -9514,7 +9739,7 @@ export class AiManager {
           input.onProcessStep?.(step);
         }
       };
-      let toolRound = 0;
+      let toolRound = input.toolContinuation?.round ?? 0;
       let suspendedQuestionId: string | null = null;
       while (choice?.message?.tool_calls?.length) {
         const round = toolRound + 1;
@@ -9601,6 +9826,12 @@ export class AiManager {
               scope: input.scope,
               modelId: input.modelId ?? stringValue(model, "id"),
               toolCallId: toolCall.id,
+              assistantMessageRequestId: input.assistantMessageRequestId ?? null,
+              toolMessages: sanitizeCompletionTraceMessages([
+                ...(input.toolContinuation ? resolvedQuestionToolMessages(input.toolContinuation) : []),
+                ...(compactedToolContextMessage ? [compactedToolContextMessage] : completionMessages.slice(baseMessageCount)),
+                ...currentRoundMessages
+              ]),
               round,
               createdAt: now()
             });

@@ -173,7 +173,7 @@ describe("Anthropic Messages 供应商", () => {
     });
   });
 
-  it("回答挂起提问时不把未配对的 Anthropic tool_use 写回请求", async () => {
+  it("回答挂起提问时把作者回答作为原 Anthropic tool_result 继续同一消息", async () => {
     await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({
       tools: { ask_user_questions: true, settings: true }
     }).expect(200);
@@ -233,16 +233,27 @@ describe("Anthropic Messages 供应商", () => {
     expect(questionRequestBodies[0]?.tools?.some((tool) => tool.name === "ask_user_question")).toBe(true);
     const resumedBody = questionRequestBodies[1];
     expect(resumedBody).toBeDefined();
-    const hasHistoricalToolUse = resumedBody?.messages.some((message) => (
-      message.role === "assistant" && message.content.some((block) => block.type === "tool_use")
-    ));
-    expect(hasHistoricalToolUse).toBe(false);
-    const resumedText = resumedBody?.messages.flatMap((message) => message.content)
-      .filter((block) => block.type === "text")
-      .map((block) => String(block.text ?? ""))
-      .join("\n");
-    expect(resumedText).toContain('"toolCallId":"toolu_question"');
-    expect(resumedText).toContain('"selectedOption":"甲"');
+    const assistantIndex = resumedBody?.messages.findIndex((message) => (
+      message.role === "assistant" && message.content.some((block) => block.type === "tool_use" && block.id === "toolu_question")
+    )) ?? -1;
+    expect(assistantIndex).toBeGreaterThanOrEqual(0);
+    const toolResultMessage = resumedBody?.messages[assistantIndex + 1];
+    expect(toolResultMessage?.role).toBe("user");
+    expect(toolResultMessage?.content[0]).toMatchObject({ type: "tool_result", tool_use_id: "toolu_question" });
+    expect(String(toolResultMessage?.content[0]?.content ?? "")).toContain('"selectedOptionLabel":"甲"');
+    const completedMessages = runtime.database.all<{ role: string; content: string; metadata_json: string }>(
+      "SELECT role, content, metadata_json FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+      conversationId
+    );
+    expect(completedMessages).toHaveLength(2);
+    expect(completedMessages[1]).toMatchObject({ role: "assistant", content: "已按回答继续。" });
+    const completedMetadata = JSON.parse(String(completedMessages[1]?.metadata_json ?? "{}"));
+    expect(completedMetadata.toolCalls).toMatchObject([
+      { id: "toolu_question", name: "ask_user_question", result: { question: { status: "answered", answerText: "甲" } } }
+    ]);
+    expect(completedMetadata.anthropicContent).toEqual([
+      { type: "text", text: "已按回答继续。" }
+    ]);
   });
 
   it("模型连通性测试通过 Anthropic output_config 透传自动思考强度", async () => {
