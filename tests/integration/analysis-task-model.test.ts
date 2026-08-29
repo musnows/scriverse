@@ -11,6 +11,43 @@ describe("AI 分析任务模型", () => {
     runtime = null;
   });
 
+  it("专用 embedding 与 rerank 模型不会进入对话和分析模型列表", async () => {
+    runtime = createTestRuntime();
+    const work = await request(runtime.app).post("/api/works").send({ title: "专用模型类型测试" }).expect(201);
+    const workId = String(work.body.data.id);
+    const provider = runtime.ai.createProvider({
+      name: "语义模型服务",
+      baseUrl: "https://semantic-model.test/v1",
+      apiKey: "sk-semantic-model-test",
+      status: "enabled"
+    });
+    runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = ?", String(provider.id));
+    const chatModel = await request(runtime.app).post(`/api/providers/${provider.id}/models`).send({
+      displayName: "Chat 模型",
+      modelId: "chat-model",
+      modelKind: "chat"
+    }).expect(201);
+    const embeddingModel = await request(runtime.app).post(`/api/providers/${provider.id}/models`).send({
+      displayName: "Embedding 模型",
+      modelId: "embedding-model",
+      modelKind: "embedding"
+    }).expect(201);
+    const rerankModel = await request(runtime.app).post(`/api/providers/${provider.id}/models`).send({
+      displayName: "Rerank 模型",
+      modelId: "rerank-model",
+      modelKind: "rerank"
+    }).expect(201);
+
+    const models = await request(runtime.app).get(`/api/works/${workId}/models`).expect(200);
+    expect(models.body.data.map((model: { id: string }) => model.id)).toEqual([chatModel.body.data.id]);
+    await request(runtime.app).put(`/api/works/${workId}/task-defaults/chat`).send({
+      modelId: embeddingModel.body.data.id
+    }).expect(400).expect(({ body }) => expect(body.error.code).toBe("MODEL_KIND_UNSUPPORTED"));
+    await request(runtime.app).put(`/api/works/${workId}/task-defaults/chat`).send({
+      modelId: rerankModel.body.data.id
+    }).expect(400).expect(({ body }) => expect(body.error.code).toBe("MODEL_KIND_UNSUPPORTED"));
+  });
+
   it("创建任务时固化本书默认模型并允许单任务覆盖", async () => {
     const requestedModels: string[] = [];
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {

@@ -125,6 +125,14 @@ export function providerCompletionEndpoint(baseUrl: string, protocol: AiProvider
   return `${normalized}/chat/completions`;
 }
 
+export function providerEmbeddingEndpoint(baseUrl: string): string {
+  return appendVersionedResource(baseUrl, "embeddings");
+}
+
+export function providerLegacyCompletionEndpoint(baseUrl: string): string {
+  return appendVersionedResource(baseUrl, "completions");
+}
+
 export function providerModelEndpoints(baseUrl: string, protocol: AiProviderProtocol): string[] {
   const normalized = normalizeProviderBaseUrl(baseUrl);
   if (usesOpenAiChatCompletionsShape(protocol) || usesOpenAiResponsesShape(protocol)) return [`${normalized}/models`];
