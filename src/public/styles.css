@@ -2705,7 +2705,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-inline-save > .config-checkbox-field { display: inline-flex !important; align-items: center; gap: 8px; min-height: 32px; margin: 0; color: var(--muted); font-size: calc(11px * var(--ui-font-scale)); line-height: 1.4; white-space: nowrap; }
 .config-inline-save > .config-checkbox-field input[type="checkbox"] { width: 18px; min-width: 18px; height: 18px; }
 .agent-tool-call-global-multiplier-toggle button { width: 32px; min-width: 32px; height: 30px; min-height: 30px; padding: 0; font-family: var(--font-latin), monospace; font-size: 11px; font-variant-numeric: tabular-nums; }
-.relationship-index-summary, .semantic-index-summary { display: grid; gap: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.relationship-index-summary { display: grid; gap: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.semantic-index-summary { display: grid; gap: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .relationship-index-state-row { display: flex; align-items: center; gap: 12px 18px; flex-wrap: wrap; color: var(--muted); font-size: 10px; }
 .relationship-index-state-row strong { color: var(--ink); font-family: var(--font-latin), monospace; font-weight: 600; }
 .relationship-index-state { display: inline-flex; align-items: center; min-height: 23px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--muted); font-size: 10px; font-weight: 650; }
