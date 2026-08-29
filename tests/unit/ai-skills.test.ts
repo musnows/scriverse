@@ -48,36 +48,33 @@ describe("AI writing skills", () => {
     expect(aiSkillPromptText(`<system_prompt>\n<skills>\n${active}\n</skills>\n</system_prompt>`)).toBe(active);
   });
 
-  it("force-loads one referenced skill with /skills without using @ mentions", () => {
-    const canonical = resolveAiWritingSkill("/skills continue-writing\n写一段夜航正文");
-    expect(canonical).toMatchObject({
+  it("force-loads one referenced skill with a direct slash command without using @ mentions", () => {
+    const continuation = resolveAiWritingSkill("/continue-writing\n写一段夜航正文");
+    expect(continuation).toMatchObject({
       skill: { name: "continue-writing" },
       explicitSkillNames: ["continue-writing"],
-      unknownSkillNames: [],
       cleanedInstruction: "写一段夜航正文"
     });
-    const chinese = resolveAiWritingSkill("请处理当前选区 /skills 润色。");
-    expect(chinese).toMatchObject({
+    const polish = resolveAiWritingSkill("请处理当前选区 /polish-writing。");
+    expect(polish).toMatchObject({
       skill: { name: "polish-writing" },
       explicitSkillNames: ["polish-writing"],
       cleanedInstruction: "请处理当前选区。"
     });
-    expect(renderAiSkillsPrompt("/skills polish-writing\n让表达更顺畅")).toContain("# 润色选中文本");
-    expect(renderAiSkillsPrompt("/skills polish-writing\n让表达更顺畅")).not.toContain("# 续写正文");
+    expect(renderAiSkillsPrompt("/polish-writing\n让表达更顺畅")).toContain("# 润色选中文本");
+    expect(renderAiSkillsPrompt("/polish-writing\n让表达更顺畅")).not.toContain("# 续写正文");
     expect(resolveAiWritingSkill("第一轮：北港有什么约束？").cleanedInstruction).toBe("第一轮：北港有什么约束？");
   });
 
-  it("reports unknown and conflicting explicit skill references", () => {
-    expect(resolveAiWritingSkill("/skills missing-skill")).toMatchObject({
+  it("ignores unrelated slash commands and reports conflicting writing skill references", () => {
+    expect(resolveAiWritingSkill("/missing-skill")).toMatchObject({
       skill: null,
       explicitSkillNames: [],
-      unknownSkillNames: ["missing-skill"],
-      cleanedInstruction: ""
+      cleanedInstruction: "/missing-skill"
     });
-    expect(resolveAiWritingSkill("/skills continue-writing\n/skills polish-writing")).toMatchObject({
+    expect(resolveAiWritingSkill("/continue-writing\n/polish-writing")).toMatchObject({
       skill: { name: "continue-writing" },
-      explicitSkillNames: ["continue-writing", "polish-writing"],
-      unknownSkillNames: []
+      explicitSkillNames: ["continue-writing", "polish-writing"]
     });
   });
 });

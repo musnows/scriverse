@@ -32,7 +32,6 @@ import {
 } from "./ai-protocol.js";
 import { estimateLiteLlmUsageCost, type LiteLlmPriceCache, type ModelTokenUsage } from "./ai-model-pricing.js";
 import {
-  AI_WRITING_SKILL_NAMES,
   aiSkillPromptText,
   renderAiSkillsPrompt,
   resolveAiWritingSkill,
@@ -5956,11 +5955,6 @@ export class AiManager {
 
   resolveWritingSkillInstruction(instruction: string): { skillName: AiWritingSkillName | null; instruction: string } {
     const resolution = resolveAiWritingSkill(instruction);
-    if (resolution.unknownSkillNames.length > 0) {
-      throw new AppError(400, "AI_SKILL_NOT_FOUND", `找不到 Skill：${resolution.unknownSkillNames.join("、")}`, {
-        availableSkills: AI_WRITING_SKILL_NAMES
-      });
-    }
     if (resolution.explicitSkillNames.length > 1) {
       throw new AppError(400, "MULTIPLE_WRITING_SKILLS_UNSUPPORTED", "同一轮只能强制加载一个写作 Skill");
     }

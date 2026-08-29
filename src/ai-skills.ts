@@ -14,7 +14,6 @@ export type AiSkill = {
 export type AiWritingSkillResolution = {
   skill: AiSkill | null;
   explicitSkillNames: AiWritingSkillName[];
-  unknownSkillNames: string[];
   cleanedInstruction: string;
 };
 
@@ -33,15 +32,7 @@ const DISCUSSION_ONLY_PATTERNS = [
   /(?:为什么|怎么用|有没有意义).*(?:续写|润色)|(?:续写|润色).*(?:为什么|怎么用|有没有意义)/u,
   /(?:评价|分析|比较|讨论|解释|说明)(?:这次|这个|一下)?(?:续写|润色)/u
 ];
-const AI_SKILL_REFERENCE_PATTERN = /(^|\s)\/skills[ \t]+([^\s，。！？；：,.!?;:]+)/gimu;
-const AI_WRITING_SKILL_ALIASES: Readonly<Record<string, AiWritingSkillName>> = {
-  "continue-writing": "continue-writing",
-  "续写": "continue-writing",
-  "续写正文": "continue-writing",
-  "polish-writing": "polish-writing",
-  "润色": "polish-writing",
-  "润色选中文本": "polish-writing"
-};
+const AI_SKILL_REFERENCE_PATTERN = /(^|\s)\/(continue-writing|polish-writing)(?=$|[\s，。！？；：,.!?;:])/gimu;
 
 function parseFrontmatter(frontmatter: string): Record<string, string> {
   const result: Record<string, string> = {};
@@ -102,17 +93,11 @@ function semanticallyMatchedAiWritingSkill(instruction: string): AiSkill | null 
 
 export function resolveAiWritingSkill(instruction: string): AiWritingSkillResolution {
   const explicitSkillNames: AiWritingSkillName[] = [];
-  const unknownSkillNames: string[] = [];
   const cleanedInstruction = instruction.replace(
     AI_SKILL_REFERENCE_PATTERN,
     (_matched, prefix: string, referencedName: string) => {
-      const normalizedName = referencedName.normalize("NFKC").trim().toLocaleLowerCase("zh-CN");
-      const skillName = AI_WRITING_SKILL_ALIASES[normalizedName];
-      if (skillName) {
-        if (!explicitSkillNames.includes(skillName)) explicitSkillNames.push(skillName);
-      } else if (!unknownSkillNames.includes(referencedName)) {
-        unknownSkillNames.push(referencedName);
-      }
+      const skillName = referencedName.normalize("NFKC").trim().toLocaleLowerCase("zh-CN") as AiWritingSkillName;
+      if (!explicitSkillNames.includes(skillName)) explicitSkillNames.push(skillName);
       return prefix;
     }
   ).replace(/[ \t]+\n/gu, "\n")
@@ -125,7 +110,6 @@ export function resolveAiWritingSkill(instruction: string): AiWritingSkillResolu
       ? AI_SKILLS.find((skill) => skill.name === matchedName) ?? null
       : semanticallyMatchedAiWritingSkill(cleanedInstruction),
     explicitSkillNames,
-    unknownSkillNames,
     cleanedInstruction
   };
 }
