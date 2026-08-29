@@ -79,6 +79,33 @@ describe("AI 模型配置", () => {
     });
   });
 
+  it("区分 chat、embedding 与 rerank 模型并清除专用模型的聊天能力", () => {
+    expect(modelFormValues({ modelKind: "embedding", purposes: ["chat"], multimodalEnabled: true })).toMatchObject({
+      modelKind: "embedding",
+      purposes: []
+    });
+    expect(modelPayload({
+      ...modelFormValues(),
+      displayName: "嵌入模型",
+      modelId: "embedding-model",
+      modelKind: "embedding",
+      purposes: ["chat"],
+      multimodalEnabled: true,
+      imageToolDefault: true
+    })).toMatchObject({
+      modelKind: "embedding",
+      purposes: [],
+      multimodalEnabled: false,
+      imageToolDefault: false
+    });
+    expect(modelPayload({
+      ...modelFormValues(),
+      displayName: "重排模型",
+      modelId: "rerank-model",
+      modelKind: "rerank"
+    }).modelKind).toBe("rerank");
+  });
+
   it("Kimi 模型默认温度为 1 并允许手动调整", () => {
     expect(isKimiModelId("kimi-for-coding")).toBe(true);
     expect(modelFormValues({ modelId: "kimi-for-coding" }).temperature).toBe(1);

@@ -147,9 +147,13 @@ type ProviderInput = {
   monthlyTokenQuota?: number | null;
 };
 
+export const AI_MODEL_KINDS = ["chat", "embedding", "rerank"] as const;
+export type AiModelKind = (typeof AI_MODEL_KINDS)[number];
+
 type ModelInput = {
   displayName: string;
   modelId: string;
+  modelKind?: AiModelKind;
   purposes?: string[];
   contextNote?: string;
   contextWindow?: number;
@@ -399,6 +403,7 @@ type ModelRow = Row & {
   provider_id: string;
   display_name: string;
   model_id: string;
+  model_kind?: string;
   enabled: number;
 };
 
@@ -732,6 +737,11 @@ function providerProtocol(provider: Row): AiProviderProtocol {
   const value = stringValue(provider, "protocol");
   if (isAiProviderProtocol(value)) return value;
   throw new AppError(500, "INVALID_PROVIDER_PROTOCOL", `不支持的供应商协议：${value || "(empty)"}`);
+}
+
+function modelKind(model: Row): AiModelKind {
+  const value = stringValue(model, "model_kind") || "chat";
+  return (AI_MODEL_KINDS as readonly string[]).includes(value) ? value as AiModelKind : "chat";
 }
 
 function providerThinkingType(provider: Row): AiThinkingType {
@@ -4567,8 +4577,15 @@ export class AiManager {
     const provider = this.getProviderRow(providerId);
     const modelId = id("model");
     const timestamp = now();
+    const nextModelKind = input.modelKind ?? "chat";
     const multimodalEnabled = input.multimodalEnabled ?? false;
     const enabled = input.enabled ?? true;
+    if (nextModelKind !== "chat" && multimodalEnabled) {
+      throw new AppError(400, "MODEL_KIND_MULTIMODAL_UNSUPPORTED", "Embedding 与 rerank 模型不能启用多模态能力");
+    }
+    if (nextModelKind !== "chat" && input.imageToolDefault) {
+      throw new AppError(400, "MODEL_KIND_IMAGE_TOOL_UNSUPPORTED", "只有 chat 模型才能设为默认读图模型");
+    }
     if (multimodalEnabled && !supportsMultimodalProviderProtocol(provider)) {
       throw new AppError(400, "MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED", "当前接口协议不支持多模态模型");
     }
@@ -4583,13 +4600,14 @@ export class AiManager {
     }
     this.store.db.transaction(() => {
       this.store.db.run(
-        `INSERT INTO models (id, provider_id, display_name, model_id, purposes_json, context_note, context_window, output_note,
-         preset_json, thinking_enabled, thinking_effort, multimodal_enabled, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO models (id, provider_id, display_name, model_id, model_kind, purposes_json, context_note, context_window, output_note,
+         preset_json, thinking_enabled, thinking_effort, multimodal_enabled, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         modelId,
         providerId,
         input.displayName,
         input.modelId,
-        JSON.stringify(input.purposes ?? []),
+        nextModelKind,
+        JSON.stringify(nextModelKind === "chat" ? input.purposes ?? [] : []),
         input.contextNote ?? "",
         input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
         input.outputNote ?? "",
@@ -4655,7 +4673,7 @@ export class AiManager {
     return this.store.db.all(
       `SELECT m.*, p.name AS provider_name, p.status AS provider_status, p.connection_status AS provider_connection_status
        FROM models m JOIN providers p ON p.id = m.provider_id
-       WHERE p.work_id = ? AND p.status = 'enabled' AND p.connection_status = 'success' AND m.enabled = 1
+       WHERE p.work_id = ? AND p.status = 'enabled' AND p.connection_status = 'success' AND m.enabled = 1 AND m.model_kind = 'chat'
        ORDER BY p.created_at, m.created_at`,
       PLATFORM_AI_WORK_ID
     ).map((row) => ({
@@ -4672,7 +4690,7 @@ export class AiManager {
     const rows = this.store.db.all(
       `SELECT m.*, p.name AS provider_name, p.status AS provider_status, p.connection_status AS provider_connection_status
        FROM models m JOIN providers p ON p.id = m.provider_id
-       WHERE p.work_id = ? AND p.status = 'enabled' AND p.connection_status = 'success' AND m.enabled = 1
+       WHERE p.work_id = ? AND p.status = 'enabled' AND p.connection_status = 'success' AND m.enabled = 1 AND m.model_kind = 'chat'
        ORDER BY p.created_at, m.created_at${page.sql}`,
       PLATFORM_AI_WORK_ID,
       ...page.params
@@ -4694,9 +4712,16 @@ export class AiManager {
     const row = this.getModelRow(modelId);
     const provider = this.getProviderRow(stringValue(row, "provider_id"));
     const nextModelId = input.modelId ?? stringValue(row, "model_id");
+    const nextModelKind = input.modelKind ?? modelKind(row);
     const preset = normalizeModelPreset(input.preset ?? safeJsonObject(stringValue(row, "preset_json")), nextModelId);
     const multimodalEnabled = input.multimodalEnabled ?? boolValue(row, "multimodal_enabled");
     const enabled = input.enabled ?? boolValue(row, "enabled");
+    if (nextModelKind !== "chat" && multimodalEnabled) {
+      throw new AppError(400, "MODEL_KIND_MULTIMODAL_UNSUPPORTED", "Embedding 与 rerank 模型不能启用多模态能力");
+    }
+    if (nextModelKind !== "chat" && input.imageToolDefault) {
+      throw new AppError(400, "MODEL_KIND_IMAGE_TOOL_UNSUPPORTED", "只有 chat 模型才能设为默认读图模型");
+    }
     if (multimodalEnabled && !supportsMultimodalProviderProtocol(provider)) {
       throw new AppError(400, "MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED", "当前接口协议不支持多模态模型");
     }
@@ -4708,11 +4733,12 @@ export class AiManager {
     }
     this.store.db.transaction(() => {
       this.store.db.run(
-        `UPDATE models SET display_name = ?, model_id = ?, purposes_json = ?, context_note = ?, context_window = ?, output_note = ?,
+        `UPDATE models SET display_name = ?, model_id = ?, model_kind = ?, purposes_json = ?, context_note = ?, context_window = ?, output_note = ?,
          preset_json = ?, thinking_enabled = ?, thinking_effort = ?, multimodal_enabled = ?, enabled = ?, note = ?, updated_at = ? WHERE id = ?`,
         input.displayName ?? stringValue(row, "display_name"),
         nextModelId,
-        JSON.stringify(input.purposes ?? json(stringValue(row, "purposes_json"), [])),
+        nextModelKind,
+        JSON.stringify(nextModelKind === "chat" ? input.purposes ?? json(stringValue(row, "purposes_json"), []) : []),
         input.contextNote ?? stringValue(row, "context_note"),
         input.contextWindow ?? (numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW),
         input.outputNote ?? stringValue(row, "output_note"),
@@ -4725,7 +4751,17 @@ export class AiManager {
         now(),
         modelId
       );
-      if (!multimodalEnabled || !enabled) this.clearImageToolModelReferences(modelId);
+      if (nextModelKind !== "chat") {
+        this.clearImageToolModelReferences(modelId);
+        this.store.db.run("DELETE FROM task_defaults WHERE model_id = ?", modelId);
+        this.store.db.run("UPDATE work_ai_settings SET title_generation_model_id = NULL WHERE title_generation_model_id = ?", modelId);
+      } else if (!multimodalEnabled || !enabled) this.clearImageToolModelReferences(modelId);
+      if (nextModelKind !== "embedding") {
+        this.store.db.run("UPDATE work_ai_settings SET semantic_embedding_model_id = NULL, semantic_search_enabled = 0 WHERE semantic_embedding_model_id = ?", modelId);
+      }
+      if (nextModelKind !== "rerank") {
+        this.store.db.run("UPDATE work_ai_settings SET semantic_rerank_model_id = NULL WHERE semantic_rerank_model_id = ?", modelId);
+      }
       if (input.imageToolDefault === true) this.setPlatformImageToolModel(modelId);
       else if (input.imageToolDefault === false) {
         this.store.db.run("UPDATE platform_ai_settings SET image_tool_model_id = NULL WHERE image_tool_model_id = ?", modelId);
@@ -4752,6 +4788,7 @@ export class AiManager {
     const model = this.getModelRow(modelId);
     const provider = this.getProviderRow(stringValue(model, "provider_id"));
     if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "模型不属于平台 AI 配置");
+    if (modelKind(model) !== "chat") throw new AppError(400, "MODEL_KIND_UNSUPPORTED", "Embedding 与 rerank 模型不能用于 AI 对话或分析任务");
     this.assertAvailable(provider, model);
     this.store.db.run(
       `INSERT INTO task_defaults (work_id, task_type, model_id) VALUES (?, ?, ?)
@@ -4769,6 +4806,7 @@ export class AiManager {
     if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) {
       throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "模型不属于平台 AI 配置");
     }
+    if (modelKind(model) !== "chat") throw new AppError(400, "MODEL_KIND_UNSUPPORTED", "Embedding 与 rerank 模型不能用于 AI 对话或分析任务");
     this.assertAvailable(provider, model);
   }
 
@@ -14494,6 +14532,7 @@ export class AiManager {
     const model = this.getModelRow(modelId);
     const provider = this.getProviderRow(stringValue(model, "provider_id"));
     if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "模型不属于平台 AI 配置");
+    if (modelKind(model) !== "chat") throw new AppError(400, "MODEL_KIND_UNSUPPORTED", "Embedding 与 rerank 模型不能用于 AI 对话或分析任务");
     this.assertAvailable(provider, model);
     return { model, provider };
   }
@@ -14622,6 +14661,7 @@ export class AiManager {
     if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) {
       throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "模型不属于平台 AI 配置");
     }
+    if (modelKind(model) !== "chat") throw new AppError(400, "MODEL_KIND_UNSUPPORTED", "只有 chat 模型可用作多模态读图模型");
     if (!boolValue(model, "multimodal_enabled")) {
       throw new AppError(400, "MODEL_NOT_MULTIMODAL", "模型未启用多模态能力");
     }
@@ -14793,6 +14833,7 @@ export class AiManager {
       providerId: stringValue(row, "provider_id"),
       displayName: stringValue(row, "display_name"),
       modelId: stringValue(row, "model_id"),
+      modelKind: modelKind(row),
       purposes: json(stringValue(row, "purposes_json"), []),
       contextNote: stringValue(row, "context_note"),
       contextWindow: numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW,

@@ -180,10 +180,14 @@ function normalizePageSizes(value) {
   ]));
 }
 
-function isSelectableModel(model) {
+function isAvailableConfiguredModel(model) {
   return Boolean(model?.enabled)
     && model?.providerStatus === "enabled"
     && model?.providerConnectionStatus === "success";
+}
+
+function isSelectableModel(model) {
+  return (model?.modelKind ?? "chat") === "chat" && isAvailableConfiguredModel(model);
 }
 
 const state = {
@@ -12465,16 +12469,17 @@ function renderProviderCards(providers, models, protocolOptions) {
     <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol, protocolOptions))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
     ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n思考类型：${esc(provider.thinkingType ?? "enabled")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}\n分析请求超时：${Number(provider.analysisTimeoutSeconds ?? DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS).toLocaleString("zh-CN")} 秒\n每日 Token 额度：${provider.dailyTokenQuota === null || provider.dailyTokenQuota === undefined ? "未限制" : Number(provider.dailyTokenQuota).toLocaleString("zh-CN")} · 每月 Token 额度：${provider.monthlyTokenQuota === null || provider.monthlyTokenQuota === undefined ? "未限制" : Number(provider.monthlyTokenQuota).toLocaleString("zh-CN")}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
     <div class="provider-models">${providerModels.map((model) => {
-      const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
+      const modelUnavailable = !isAvailableConfiguredModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
       const modelStatus = !model.enabled
         ? `<span class="model-status-badge is-disabled">模型已停用</span>`
         : provider.connectionStatus !== "success"
           ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
           : "";
+      const kindLabel = model.modelKind === "embedding" ? "Embedding" : model.modelKind === "rerank" ? "Rerank" : "Chat";
       const capability = model.multimodalEnabled ? " · 多模态" : "";
       const defaultBadge = model.imageToolDefault ? " · 默认读图模型" : "";
       const thinkingEffortLabel = MODEL_THINKING_EFFORT_OPTIONS.find(([value]) => value === model.thinkingEffort)?.[1] ?? "模型默认";
-      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"}${capability}${defaultBadge} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 思考强度 ${esc(thinkingEffortLabel)} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
+      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${esc(kindLabel)} · ${model.enabled ? "启用" : "停用"}${capability}${defaultBadge}${model.modelKind === "chat" ? ` · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 思考强度 ${esc(thinkingEffortLabel)} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}` : ""}</button>${modelStatus}</div>`;
     }).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button><button data-import-provider-models="${esc(provider.id)}">获取模型</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
   }).join("")}</div>`
@@ -12598,7 +12603,7 @@ function renderTaskDefaults(models, providers, taskDefaults, settings, protocolO
       <option value="" ${settings.titleGenerationModelId ? "" : "selected"}>使用提示词前 15 个字</option>
       ${models.map((model) => {
         const provider = providerById.get(model.providerId);
-        const available = model.enabled && provider?.status === "enabled" && provider?.connectionStatus === "success";
+        const available = isSelectableModel({ ...model, providerStatus: provider?.status, providerConnectionStatus: provider?.connectionStatus });
         return `<option value="${esc(model.id)}" ${model.id === settings.titleGenerationModelId ? "selected" : ""} ${available || model.id === settings.titleGenerationModelId ? "" : "disabled"}>${esc(modelOptionLabel({ ...model, providerName: model.providerName || provider?.name }))}</option>`;
       }).join("")}
     </select></td></tr>${taskTypeLabels.map(([taskType, label]) => {
@@ -17125,11 +17130,16 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
 
 function openModelDialog(providerId, item = null, provider = null, protocolOptions = platformAiProtocolOptions) {
   const values = modelFormValues(item);
+  const modelKindFields = `<div class="form-field model-kind-fields" role="group" aria-labelledby="model-kind-heading"><span id="model-kind-heading">专用模型类型</span><label class="checkbox-field model-capability-option"><input id="model-kind-embedding" name="embeddingModel" type="checkbox" ${values.modelKind === "embedding" ? "checked" : ""}><span><strong>这是一个 embedding 模型</strong><small>只用于语义向量，不会出现在 chat 框或 AI 分析任务中。</small></span></label><label class="checkbox-field model-capability-option"><input id="model-kind-rerank" name="rerankModel" type="checkbox" ${values.modelKind === "rerank" ? "checked" : ""}><span><strong>这是一个 rerank 模型</strong><small>只用于语义候选重排，不会出现在 chat 框或 AI 分析任务中。</small></span></label><small>两项都不勾选时，该模型按普通 chat 模型使用。</small></div>`;
   const imageDefaultSupported = supportsMultimodalModelProtocol(provider?.protocol, protocolOptions);
   const multimodalFields = imageDefaultSupported ? `<div class="form-field model-multimodal-fields" role="group" aria-labelledby="model-multimodal-heading"><span id="model-multimodal-heading" class="model-multimodal-heading">模型能力</span><label class="checkbox-field model-capability-option"><input id="model-multimodal-enabled" name="multimodalEnabled" type="checkbox" ${values.multimodalEnabled ? "checked" : ""}><span><strong>支持多模态图片理解</strong><small>启用后可用于读取设定库中的图片附件。</small></span></label><label id="model-image-tool-default-field" class="checkbox-field model-capability-option ${values.multimodalEnabled ? "" : "hidden"}"><input id="model-image-tool-default" name="imageToolDefault" type="checkbox" ${values.imageToolDefault ? "checked" : ""}><span><strong>设为多模态读图工具默认模型</strong><small>支持多模态的接口协议都可以作为默认读图模型。</small></span></label><small class="model-multimodal-note">当前供应商支持多模态读图工具默认模型。</small></div>` : "";
   const contextWindowField = `<div class="form-field model-context-window-field"><label for="model-context-window">模型上下文令牌总量<input id="model-context-window" name="contextWindow" type="number" value="${esc(values.contextWindow)}" min="${MIN_MODEL_CONTEXT_WINDOW}" max="2000000" step="1" required aria-describedby="model-context-window-hint"></label><small id="model-context-window-hint" class="model-context-window-hint" hidden>低于 128K 的模型在小说创作场景不太适用，建议使用支持更长上下文的模型。</small></div>`;
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;
-  const connectionTestDescription = values.multimodalEnabled && imageDefaultSupported
+  const connectionTestDescription = values.modelKind === "embedding"
+    ? "使用当前供应商凭据调用 OpenAI-compatible embeddings 接口并校验向量。"
+    : values.modelKind === "rerank"
+      ? "使用 Qwen reranker 的 yes/no 模板发起最小相关性判定。"
+      : values.multimodalEnabled && imageDefaultSupported
     ? "使用当前已保存的模型标识符、思考设置和供应商凭据，并发送一张测试图片验证图片请求。"
     : "使用当前已保存的模型标识符、思考设置和供应商凭据发起最小请求。";
   const connectionTest = item && item.providerStatus === "enabled"
@@ -17138,8 +17148,9 @@ function openModelDialog(providerId, item = null, provider = null, protocolOptio
         <button class="ghost-button" type="button" data-test-model="${esc(item.id)}">测试连接</button>
       </section>`
     : "";
-  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("thinkingEffort", "思考强度（模型默认时不发送强度参数）", "select", values.thinkingEffort, MODEL_THINKING_EFFORT_OPTIONS) + multimodalFields + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
-    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", thinkingEffort: form.get("thinkingEffort") ?? thinkingEffortSelect.value, multimodalEnabled: form.get("multimodalEnabled") === "on", imageToolDefault: form.get("imageToolDefault") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + modelKindFields + `<div data-chat-model-fields>` + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("thinkingEffort", "思考强度（模型默认时不发送强度参数）", "select", values.thinkingEffort, MODEL_THINKING_EFFORT_OPTIONS) + multimodalFields + `</div>` + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
+    const modelKind = form.get("embeddingModel") === "on" ? "embedding" : form.get("rerankModel") === "on" ? "rerank" : "chat";
+    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), modelKind, purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", thinkingEffort: form.get("thinkingEffort") ?? thinkingEffortSelect.value, multimodalEnabled: form.get("multimodalEnabled") === "on", imageToolDefault: form.get("imageToolDefault") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();
@@ -17157,6 +17168,17 @@ function openModelDialog(providerId, item = null, provider = null, protocolOptio
   const multimodalInput = $("#model-multimodal-enabled");
   const imageDefaultField = $("#model-image-tool-default-field");
   const imageDefaultInput = $("#model-image-tool-default");
+  const embeddingModelInput = $("#model-kind-embedding");
+  const rerankModelInput = $("#model-kind-rerank");
+  const chatModelFields = $("#dialog-fields [data-chat-model-fields]");
+  const syncModelKindFields = (changedInput = null) => {
+    if (changedInput?.checked) {
+      const other = changedInput === embeddingModelInput ? rerankModelInput : embeddingModelInput;
+      if (other) other.checked = false;
+    }
+    const specialized = Boolean(embeddingModelInput?.checked || rerankModelInput?.checked);
+    chatModelFields?.classList.toggle("hidden", specialized);
+  };
   const syncMultimodalFields = () => {
     if (!multimodalInput || !imageDefaultField || !imageDefaultInput) return;
     const hideImageDefault = !multimodalInput.checked || !imageDefaultSupported;
@@ -17183,6 +17205,8 @@ function openModelDialog(providerId, item = null, provider = null, protocolOptio
   contextWindowInput.addEventListener("input", syncModelContextWindowGuidance);
   thinkingEnabledInput.addEventListener("change", syncThinkingEffort);
   multimodalInput?.addEventListener("change", syncMultimodalFields);
+  embeddingModelInput?.addEventListener("change", () => syncModelKindFields(embeddingModelInput));
+  rerankModelInput?.addEventListener("change", () => syncModelKindFields(rerankModelInput));
   $("#dialog-fields [data-test-model]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
@@ -17206,6 +17230,7 @@ function openModelDialog(providerId, item = null, provider = null, protocolOptio
   syncKimiTemperature();
   syncThinkingEffort();
   syncMultimodalFields();
+  syncModelKindFields();
 }
 
 async function sendAi() {

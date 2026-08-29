@@ -23,7 +23,7 @@ import {
 } from "./ai-stream-timeout.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { attachmentDownloadFileName, inlineContentDisposition } from "./attachment-download.js";
-import { AiManager } from "./ai.js";
+import { AI_MODEL_KINDS, AiManager } from "./ai.js";
 import { LiteLlmPriceCache } from "./ai-model-pricing.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import {
@@ -576,6 +576,7 @@ const providerUpdateSchema = providerBaseSchema.partial().superRefine((value, ct
 const modelSchema = z.object({
   displayName: nonEmpty.max(200),
   modelId: nonEmpty.max(300),
+  modelKind: z.enum(AI_MODEL_KINDS).optional(),
   purposes: optionalStrings,
   contextNote: z.string().max(10_000).optional(),
   contextWindow: z.number().int().min(32_768, "模型上下文不能低于 32768 Token").max(2_000_000).optional(),

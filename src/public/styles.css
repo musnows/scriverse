@@ -3399,7 +3399,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .provider-token-quota-toggle { color: var(--ink) !important; font-size: 10px !important; }
 .provider-token-quota-input { display: grid; gap: 5px; min-width: 0; }
 .provider-token-quota-input input:disabled { opacity: .58; }
-.model-multimodal-fields { gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.model-multimodal-fields, .model-kind-fields { gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.model-kind-fields .model-capability-option { display: grid !important; grid-template-columns: 16px minmax(0, 1fr); align-items: start; gap: 9px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink) !important; }
 .model-multimodal-heading { color: var(--ink); font-size: 12px; font-weight: 600; }
 .model-multimodal-fields .model-capability-option { display: grid !important; grid-template-columns: 16px minmax(0, 1fr); align-items: start; gap: 9px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink) !important; transition: border-color .15s ease, background-color .15s ease; }
 .model-multimodal-fields .model-capability-option[hidden], .model-multimodal-fields .model-capability-option.hidden { display: none !important; }
