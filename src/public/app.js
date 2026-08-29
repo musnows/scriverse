@@ -3147,6 +3147,16 @@ async function fetchAiUserQuestion(questionId) {
   return question;
 }
 
+function syncAiQuestionOptionPresentation() {
+  const checked = document.querySelector('input[name="ai-question-choice"]:checked');
+  for (const label of document.querySelectorAll(".ai-question-option-item")) {
+    const input = label.querySelector('input[name="ai-question-choice"]');
+    const isSelected = Boolean(input && checked === input);
+    label.classList.toggle("is-selected", isSelected);
+    label.classList.toggle("is-recommended", label.dataset.recommended === "true" && (!checked || isSelected));
+  }
+}
+
 function renderAiUserQuestionOptions(question) {
   const host = $("#ai-question-options");
   const customInput = $("#ai-question-custom-answer");
@@ -3155,7 +3165,7 @@ function renderAiUserQuestionOptions(question) {
   for (const option of question.options ?? []) {
     const label = document.createElement("label");
     label.className = "ai-question-option-item";
-    label.classList.toggle("is-recommended", option.recommended === true);
+    label.dataset.recommended = String(option.recommended === true);
     const input = document.createElement("input");
     input.type = "radio";
     input.name = "ai-question-choice";
@@ -3181,6 +3191,7 @@ function renderAiUserQuestionOptions(question) {
   host.append(customLabel);
   customInput.value = question.customAnswer ?? (question.selectedOption == null && question.isCustomAnswer ? (question.answerText ?? "") : "");
   customInput.disabled = !isPending;
+  syncAiQuestionOptionPresentation();
   // 提交按钮由选择状态驱动：待回答且已选择（或输入）时才可提交。
   if (isPending) syncAiQuestionSubmitState();
   else $("#ai-question-submit").disabled = true;
@@ -20257,6 +20268,7 @@ $("#ai-question-form").addEventListener("change", (event) => {
   const isCustom = control.value === "custom";
   const customInput = $("#ai-question-custom-answer");
   if (isCustom && !control.disabled) customInput.focus();
+  syncAiQuestionOptionPresentation();
   syncAiQuestionSubmitState();
 });
 $("#ai-question-custom-answer").addEventListener("input", () => {
@@ -20266,6 +20278,7 @@ $("#ai-question-custom-answer").addEventListener("input", () => {
     const customRadio = document.querySelector('input[name="ai-question-choice"][value="custom"]');
     if (customRadio && !customRadio.disabled) customRadio.checked = true;
   }
+  syncAiQuestionOptionPresentation();
   syncAiQuestionSubmitState();
 });
 $("#ai-question-submit").addEventListener("click", () => {

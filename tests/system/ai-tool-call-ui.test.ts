@@ -84,13 +84,18 @@ describe("AI 工具调用记录界面", () => {
     expect(page).toContain("feature=ai-write-plan-actions-footer-v1");
     expect(page).toContain("feature=ai-question-actions-footer-v1");
     expect(page).toContain("feature=ai-question-option-supplement-v1");
+    expect(page).toContain("feature=ai-question-selection-highlight-v1");
     expect(page).toContain('class="card-actions ai-question-actions"');
     expect(page).toContain("自定义回答 / 补充信息");
     expect(application).toContain("customInput.disabled = !isPending;");
     expect(application).toContain("if (isPending) syncAiQuestionSubmitState();");
+    expect(application).toContain("function syncAiQuestionOptionPresentation()");
+    expect(application).toContain('label.classList.toggle("is-selected", isSelected);');
+    expect(application).toContain('label.dataset.recommended === "true" && (!checked || isSelected)');
     expect(application).toContain('...(supplementalAnswer ? { customAnswer: supplementalAnswer } : {})');
     expect(styles).toContain(".ai-interactive-actions :is(button.ghost-button, button.primary-button) { min-width: 0; min-height: 24px; padding: 3px 7px; font-size: calc(9px * var(--ai-font-scale)); line-height: 1.35; }");
     expect(styles).toContain(".card-actions:is(.ai-plan-actions, .ai-question-actions) { flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 0; padding: 14px 24px 20px; }");
+    expect(styles).toContain(".ai-question-option-item:is(.is-recommended, .is-selected)");
     expect(styles).not.toContain("padding: 30px 12px 12px;");
     expect(styles).not.toContain("ai-stream-cursor");
     expect(styles).not.toContain(".is-streaming .message-body:empty::after");
