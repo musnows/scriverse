@@ -21,7 +21,7 @@ describe("AI 分析任务模型", () => {
       apiKey: "sk-semantic-model-test",
       status: "enabled"
     });
-    runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = ?", provider.id);
+    runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = ?", String(provider.id));
     const chatModel = await request(runtime.app).post(`/api/providers/${provider.id}/models`).send({
       displayName: "Chat 模型",
       modelId: "chat-model",

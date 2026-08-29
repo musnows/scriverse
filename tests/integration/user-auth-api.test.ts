@@ -717,6 +717,54 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("主动语义检索校验登录、CSRF、AI 对话和内容模块权限", async () => {
+    const owner = await register(runtime, "semantic_search_owner");
+    const viewer = await register(runtime, "semantic_search_viewer");
+    const restricted = await register(runtime, "semantic_search_restricted");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "主动语义检索权限测试" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: viewer.user.userId, role: "viewer" })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: restricted.user.userId, role: "viewer" })
+      .expect(201);
+    const permissions = Object.fromEntries([
+      "prose", "comments", "todos", "drafts", "settings", "characters", "races", "organizations",
+      "timeline", "relationships", "outlines", "reviews", "ai-chat", "ai-analysis", "ai-settings"
+    ].map((module) => [module, module === "settings" ? "read" : "none"]));
+    await owner.agent.patch(`/api/works/${workId}/members/${restricted.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions })
+      .expect(200);
+
+    await request(runtime.app).post(`/api/works/${workId}/semantic-search`).send({ query: "北港" }).expect(401);
+    await viewer.agent.post(`/api/works/${workId}/semantic-search`).send({ query: "北港" }).expect(403)
+      .expect(({ body }) => expect(body.error.code).toBe("CSRF_TOKEN_INVALID"));
+    await viewer.agent.post(`/api/works/${workId}/semantic-search`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ query: "北港" })
+      .expect(200)
+      .expect(({ body }) => expect(body.data).toMatchObject({ status: "disabled", semanticUsed: false }));
+    await restricted.agent.post(`/api/works/${workId}/semantic-search`)
+      .set("X-CSRF-Token", restricted.csrfToken)
+      .send({ query: "北港", types: ["setting"] })
+      .expect(403);
+    await viewer.agent.post(`/api/works/${workId}/semantic-search/snapshots`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ query: "北港", entryIds: ["semanticChunk_missing"] })
+      .expect(403);
+    await owner.agent.post(`/api/works/${workId}/semantic-search/snapshots`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ query: "北港", entryIds: ["semanticChunk_missing"] })
+      .expect(409);
+  });
+
   it("角色收藏接口校验登录、CSRF 和角色写权限", async () => {
     const owner = await register(runtime, "character_favorite_owner");
     const viewer = await register(runtime, "character_favorite_viewer");

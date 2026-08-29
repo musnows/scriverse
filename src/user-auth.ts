@@ -1304,6 +1304,7 @@ export function workModuleRequirements(request: Request, write: boolean, annotat
     [/^\/api\/works\/[^/]+\/(?:outlines|outline-board|foreshadows)(?:\/|$)/u, "outlines"],
     [/^\/api\/(?:foreshadows|foreshadow-occurrences)\/[^/]+(?:\/|$)/u, "outlines"],
     [/^\/api\/works\/[^/]+\/ai-settings(?:\/|$)/u, "ai-settings"],
+    [/^\/api\/works\/[^/]+\/semantic-models$/u, "ai-settings"],
     [/^\/api\/works\/[^/]+\/task-defaults(?:\/|$)/u, "ai-settings"]
   ];
   for (const [pattern, module] of rules) if (pattern.test(pathname)) return direct(module);
@@ -1315,6 +1316,13 @@ export function workModuleRequirements(request: Request, write: boolean, annotat
   // 审批中心与提问接口：属于 AI 对话交互面；受影响模块的真实权限在执行前由计划引擎再校验。
   if (/^\/api\/works\/[^/]+\/ai\/(?:write-plans|questions)(?:\/|$)/u.test(pathname)) {
     return write ? { write: ["ai-chat"] } : { read: ["ai-chat"] };
+  }
+  if (/^\/api\/works\/[^/]+\/semantic-search\/snapshots$/u.test(pathname)) {
+    return { anyRead: [...contentPermissionModules], write: ["ai-chat"] };
+  }
+  if (/^\/api\/works\/[^/]+\/semantic-search$/u.test(pathname)) {
+    const chapterRead = typeof requestBodyRecord(request).currentChapterId === "string" ? ["prose" as const] : [];
+    return { read: ["ai-chat", ...chapterRead], anyRead: [...contentPermissionModules] };
   }
 
   if (write && /^\/api\/reviews\/[^/]+\/character-resolution$/u.test(pathname)) {

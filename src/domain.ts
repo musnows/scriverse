@@ -103,6 +103,8 @@ export type ContextScope = {
   settingIds?: string[];
   raceIds?: string[];
   organizationIds?: string[];
+  /** 用户主动选择的语义检索结果快照；仅对携带该标识的当前请求生效。 */
+  semanticSnapshotId?: string;
   includeBookSummary?: boolean;
   /** 正文范围内是否注入锁定设定、组织/种族简表等；缺省为 true。设定库范围忽略此字段。 */
   includeSettingInfo?: boolean;

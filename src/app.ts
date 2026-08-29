@@ -26,6 +26,7 @@ import { attachmentDownloadFileName, inlineContentDisposition } from "./attachme
 import { AI_MODEL_KINDS, AiManager } from "./ai.js";
 import { LiteLlmPriceCache } from "./ai-model-pricing.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
+import { SEMANTIC_SOURCE_TYPES, type SemanticSourceType } from "./semantic-search.js";
 import {
   CHARACTER_EXTRACTION_MAX_ALIASES,
   CHARACTER_EXTRACTION_MAX_CANDIDATES,
@@ -757,6 +758,33 @@ const workAiSettingsSchema = z.object({
   imageToolModelId: identifier.nullable().optional()
 }).strict();
 
+const semanticSearchSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  embeddingModelId: identifier.nullable().optional(),
+  rerankModelId: identifier.nullable().optional(),
+  vectorDimension: z.number().int().min(1).max(65_536).optional(),
+  recallLimit: z.number().int().min(1).max(200).optional(),
+  resultLimit: z.number().int().min(1).max(100).optional(),
+  budgetTokens: z.number().int().min(256).max(100_000).optional(),
+  channelWeight: z.number().min(0.1).max(5).optional()
+}).strict();
+
+const semanticSearchRequestSchema = z.object({
+  query: z.string().trim().min(1).max(2_000),
+  types: z.array(z.enum(SEMANTIC_SOURCE_TYPES)).max(SEMANTIC_SOURCE_TYPES.length).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  includeKeyword: z.boolean().optional(),
+  currentChapterId: identifier.optional(),
+  selection: z.string().max(4_000).optional()
+}).strict();
+
+const semanticSnapshotSchema = z.object({
+  query: z.string().trim().min(1).max(2_000),
+  entryIds: z.array(identifier).min(1).max(30),
+  scope: jsonObject.optional(),
+  conversationId: identifier.optional()
+}).strict();
+
 const contextSchema = z.object({
   type: z.enum(["none", "selection", "chapter", "volume", "book", "settings-catalog", "entities"]),
   chapterId: identifier.optional(),
@@ -769,6 +797,7 @@ const contextSchema = z.object({
   settingIds: optionalStrings,
   raceIds: optionalStrings,
   organizationIds: optionalStrings,
+  semanticSnapshotId: identifier.optional(),
   includeBookSummary: z.boolean().optional(),
   includeSettingInfo: z.boolean().optional()
 });
@@ -3136,6 +3165,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId/ai-settings/relationship-search-index", (request, response) => {
     data(response, ai.getRelationshipSearchIndexStatus(request.params.workId));
   });
+  app.get("/api/works/:workId/ai-settings/semantic-search-index", (request, response) => {
+    data(response, ai.getSemanticSearchIndexStatus(request.params.workId));
+  });
+  app.patch("/api/works/:workId/ai-settings/semantic-search", async (request, response) => {
+    data(response, await ai.updateSemanticSearchSettings(
+      request.params.workId,
+      parse(semanticSearchSettingsSchema, request.body)
+    ));
+  });
+  app.post("/api/works/:workId/ai-settings/semantic-search-index/sync", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, ai.syncSemanticSearchIndex(request.params.workId), 202);
+  });
+  app.post("/api/works/:workId/ai-settings/semantic-search-index/rebuild", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, ai.rebuildSemanticSearchIndex(request.params.workId), 202);
+  });
   app.post("/api/works/:workId/ai-settings/relationship-search-index/sync", (request, response) => {
     const workId = request.params.workId;
     const result = ai.syncRelationshipSearchIndex(workId);
@@ -3519,6 +3565,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const pagination = parsePagination(request.query);
     data(response, pagination ? ai.listWorkModelsPage(request.params.workId, pagination) : ai.listWorkModels(request.params.workId));
   });
+  app.get("/api/works/:workId/semantic-models", (request, response) => {
+    data(response, ai.listWorkSemanticModels(request.params.workId));
+  });
   app.get("/api/works/:workId/task-defaults", (request, response) => {
     const pagination = parsePagination(request.query);
     data(response, pagination ? ai.listTaskDefaultsPage(request.params.workId, pagination) : ai.listTaskDefaults(request.params.workId));
@@ -3776,11 +3825,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           content: storedUserContent,
           citations,
           ...(input.currentMessageId ? { existingMessageId: input.currentMessageId } : {}),
-          ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length || input.imageAttachmentIds?.length) ? { metadata: {
+          ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length || input.imageAttachmentIds?.length || input.scope.semanticSnapshotId) ? { metadata: {
             ...(modelId ? { modelId } : {}),
             ...(mentionCharacterIds.length ? { mentionCharacterIds } : {}),
             ...(mentionRaceIds.length ? { mentionRaceIds } : {}),
             ...(mentionOrganizationIds.length ? { mentionOrganizationIds } : {}),
+            ...(input.scope.semanticSnapshotId ? { semanticSnapshotId: input.scope.semanticSnapshotId } : {}),
             ...(input.imageAttachmentIds?.length ? { chatImageAttachmentIds: [...new Set(input.imageAttachmentIds)] } : {})
           } } : {})
         }
@@ -3951,6 +4001,26 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       allowedTypes: readableHybridSearchTypes(permissions),
       conversationOwnerUserId: request.authUser?.userId
     }));
+  });
+  app.post("/api/works/:workId/semantic-search", async (request, response) => {
+    const input = parse(semanticSearchRequestSchema, request.body);
+    const permissions = requestPermissions(request, request.params.workId);
+    const allowedTypes = readableHybridSearchTypes(permissions)
+      .filter((type): type is SemanticSourceType => (SEMANTIC_SOURCE_TYPES as readonly string[]).includes(type));
+    data(response, await ai.semanticSearchStory(request.params.workId, input.query, {
+      allowedTypes,
+      types: input.types,
+      limit: input.limit,
+      includeKeyword: input.includeKeyword,
+      conversationOwnerUserId: request.authUser?.userId,
+      currentChapterId: input.currentChapterId,
+      selection: input.selection
+    }));
+  });
+  app.post("/api/works/:workId/semantic-search/snapshots", (request, response) => {
+    const input = parse(semanticSnapshotSchema, request.body);
+    if (input.conversationId) assertRequestAiConversationOwner(request, input.conversationId);
+    data(response, ai.createSemanticContextSnapshot(request.params.workId, input), 201);
   });
   app.head("/api/works/:workId/export", (request, response) => {
     parse(z.enum(["epub"]), request.query.format ?? "epub");

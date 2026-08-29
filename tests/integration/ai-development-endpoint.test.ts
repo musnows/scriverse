@@ -90,6 +90,73 @@ describe("私有网络 AI 供应商地址", () => {
     expect(result.requestedUrls).toEqual([]);
   });
 
+  it("语义检索配置在保存时复用 SSRF 边界", async () => {
+    const runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "test-master-secret-with-at-least-32-characters",
+      disableUserAuth: true,
+      serveUi: false,
+      security: { allowPrivateAiEndpoints: false, enforceSameOrigin: false }
+    });
+    runtimes.push(runtime);
+    const work = runtime.store.createWork({ title: "语义 SSRF 测试" });
+    const provider = runtime.ai.createProvider({
+      name: "本机 Embedding",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "lm-studio",
+      status: "enabled"
+    });
+    runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = ?", String(provider.id));
+    const model = runtime.ai.createModel(String(provider.id), {
+      displayName: "本机 Embedding",
+      modelId: "text-embedding-qwen3-embedding-0.6b",
+      modelKind: "embedding"
+    });
+
+    await request(runtime.app)
+      .patch(`/api/works/${work.id}/ai-settings/semantic-search`)
+      .send({ enabled: true, embeddingModelId: model.id, vectorDimension: 1024 })
+      .expect(400)
+      .expect(({ body }) => expect(body.error).toMatchObject({ code: "UNSAFE_PROVIDER_ENDPOINT" }));
+    expect(runtime.store.getWorkAiSettings(String(work.id))).toMatchObject({
+      semanticSearchEnabled: false,
+      semanticEmbeddingModelId: null
+    });
+  });
+
+  it("显式开启私有 AI 地址后允许保存本机语义配置", async () => {
+    const runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "test-master-secret-with-at-least-32-characters",
+      disableUserAuth: true,
+      serveUi: false,
+      security: { allowPrivateAiEndpoints: true, enforceSameOrigin: false }
+    });
+    runtimes.push(runtime);
+    const work = runtime.store.createWork({ title: "本机语义配置测试" });
+    const provider = runtime.ai.createProvider({
+      name: "本机 Embedding",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "lm-studio",
+      status: "enabled"
+    });
+    runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = ?", String(provider.id));
+    const model = runtime.ai.createModel(String(provider.id), {
+      displayName: "本机 Embedding",
+      modelId: "text-embedding-qwen3-embedding-0.6b",
+      modelKind: "embedding"
+    });
+
+    await request(runtime.app)
+      .patch(`/api/works/${work.id}/ai-settings/semantic-search`)
+      .send({ enabled: true, embeddingModelId: model.id, vectorDimension: 1024 })
+      .expect(200)
+      .expect(({ body }) => expect(body.data).toMatchObject({
+        semanticSearchEnabled: true,
+        semanticEmbeddingModelId: model.id
+      }));
+  });
+
   it("开启私有地址后允许本机连接并返回提示", async () => {
     const result = await testProviderConnection({
       developmentServer: false,
