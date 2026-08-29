@@ -2134,6 +2134,29 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-agent-tools strong { color: var(--ink); font-size: 12px; font-weight: 600; }
 .ai-agent-tools small { display: block; margin-top: 2px; font-size: 10px; }
 .ai-agent-tools-section + .empty-state { margin-top: 24px; border-top: 1px solid var(--line); }
+.remote-mcp-config-field { display: grid; gap: 7px; }
+.remote-mcp-config-field > span { color: var(--ink); font-size: 11px; font-weight: 600; }
+.remote-mcp-config-field textarea {
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+  overflow: auto;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-family: var(--font-latin), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+}
+.remote-mcp-config-help { display: block; margin-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.remote-mcp-status { margin: 10px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+@media (max-width: 700px) {
+  .remote-mcp-config-field textarea { min-height: 220px; font-size: 10px; }
+}
 .default-model-select { min-width: 260px; padding: 7px 9px; font-size: 11px; }
 .empty-state { padding: 70px 30px; text-align: center; color: var(--muted); border: 1px dashed var(--line); }
 .empty-state b { display: block; color: var(--ink); margin-bottom: 8px; }
