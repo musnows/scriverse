@@ -29,6 +29,7 @@ describe("全书概要上下文引用", () => {
     expect(page.text).not.toContain('<option value="selection">选中文本</option>');
     expect(page.text).not.toContain('id="ai-book-summary-reference"');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
+    expect(page.text).toContain('feature=ai-write-tools-v3');
     expect(application.text).toContain('id="save-agent-tools"');
     expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('class="config-inline-save"');

@@ -353,6 +353,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(page.text).toContain('feature=ai-provider-thinking-type-v1');
     expect(page.text).toContain('feature=ai-provider-analysis-timeout-v1');
+    expect(page.text).toContain('feature=ai-write-tools-v2');
+    expect(page.text).toContain('feature=ai-write-tools-v3');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -921,8 +923,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".left-actions { display: block; margin: 0 0 15px; }");
     expect(styles.text).toContain(".file-button { min-height: 30px; font-size: 11px;");
     expect(styles.text).toContain(".panel-heading { display: flex; align-items: center; gap: 8px; padding: 15px 0 9px 7px;");
-    expect(application.text).toContain('const stateName = sending ? "stop" : switching ? "switching" : "send";');
-    expect(application.text).toContain('button.disabled = switching;');
+    expect(application.text).toContain('const stateName = sending ? "stop" : (switching || continuingQuestion) ? "switching" : "send";');
+    expect(application.text).toContain('button.disabled = switching || continuingQuestion;');
     expect(application.text).toContain('button.classList.toggle("is-stop", sending);');
     expect(application.text).toContain('const content = $("#chapter-content").value;');
     expect(application.text).toContain('...(lineIds.length <= MAX_CHAPTER_LINE_IDS ? { lineIds } : {})');

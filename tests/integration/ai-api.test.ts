@@ -4494,4 +4494,139 @@ describe("AI 供应商、模型与建议 API", () => {
     await vi.advanceTimersByTimeAsync(30_001);
     await rejection;
   });
+
+  it("AskUserQuestions 必选提示随对话工具快照冻结且只影响新对话", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({
+      tools: { ask_user_questions: true }
+    }).expect(200);
+    const captured: Array<{ systemPrompt: string; toolNames: string[] }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        messages?: Array<{ role?: string; content?: string }>;
+        tools?: Array<{ function?: { name?: string } }>;
+      };
+      captured.push({
+        systemPrompt: String(body.messages?.find((message) => message.role === "system")?.content ?? ""),
+        toolNames: (body.tools ?? []).flatMap((tool) => typeof tool.function?.name === "string" ? [tool.function.name] : [])
+      });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "无需向作者提问。" } }] }), { status: 200 });
+    });
+
+    const frozenConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const frozenConversationId = String(frozenConversation.body.data.id);
+    const send = (conversationId: string, instruction: string) => request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction,
+      scope: { type: "chapter", chapterId },
+      modelId,
+      conversationId
+    }).expect(200);
+    await send(frozenConversationId, "第一轮无需提问");
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({
+      tools: { ask_user_questions: false }
+    }).expect(200);
+    await send(frozenConversationId, "关闭开关后的同一对话");
+
+    const newConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const newConversationId = String(newConversation.body.data.id);
+    await send(newConversationId, "关闭开关后的新对话");
+
+    expect(captured).toHaveLength(3);
+    const mandatoryGuidance = "只要你需要向作者提出任何问题";
+    expect(captured[0]?.systemPrompt).toContain(mandatoryGuidance);
+    expect(captured[0]?.systemPrompt).toContain("禁止在普通回复正文中直接写出问题");
+    expect(captured[0]?.toolNames).toContain("ask_user_question");
+    expect(captured[1]?.systemPrompt).toBe(captured[0]?.systemPrompt);
+    expect(captured[1]?.toolNames).toContain("ask_user_question");
+    expect(captured[2]?.systemPrompt).not.toContain(mandatoryGuidance);
+    expect(captured[2]?.toolNames).not.toContain("ask_user_question");
+  });
+
+  it("AskUserQuestions 持久化挂起 Agent loop 并在回答后只恢复一次", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({
+      tools: { ask_user_questions: true, settings: true }
+    }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        messages?: Array<{
+          role?: string;
+          content?: string;
+          tool_call_id?: string;
+          tool_calls?: Array<{ id?: string; function?: { name?: string } }>;
+        }>;
+      };
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
+          { id: "ask-once", type: "function", function: { name: "ask_user_question", arguments: { question: "采用哪个方向？", options: ["甲", "乙"] } } },
+          { id: "must-not-run", type: "function", function: { name: "propose_write_plan", arguments: { aiSummary: "不应提前执行", operations: [{ opType: "create_entry", entityType: "setting", input: { title: "未确认", category: "地点", content: "内容" } }] } } }
+        ] } }] }), { status: 200 });
+      }
+      const assistantToolMessage = body.messages?.find((message) => message.role === "assistant" && message.tool_calls?.length);
+      expect(assistantToolMessage?.tool_calls).toEqual([
+        expect.objectContaining({ id: "ask-once", function: expect.objectContaining({ name: "ask_user_question" }) })
+      ]);
+      const toolResult = body.messages?.find((message) => message.role === "tool" && message.tool_call_id === "ask-once");
+      expect(toolResult?.content).toContain('"selectedOption":"甲"');
+      expect(toolResult?.content).toContain('"supplementalAnswer":"补充采用冷色调"');
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已按真实回答继续。" } }] }), { status: 200 });
+    });
+
+    const suspended = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "先询问再继续",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      conversationId
+    }).expect(200);
+    expect(suspended.text).toContain('"name":"ask_user_question"');
+    expect(suspended.text).toContain("已向你提出问题，等待回答后继续。");
+    expect(suspended.text).toMatch(/"messageId":"message_[^"]+"/u);
+    expect(suspended.text).not.toContain('"name":"propose_write_plan"');
+    expect(completionCount).toBe(1);
+    const suspendedAssistant = runtime.database.get<{ content: string; metadata_json: string }>(
+      "SELECT content, metadata_json FROM ai_conversation_messages WHERE conversation_id = ? AND role = 'assistant' ORDER BY created_at DESC LIMIT 1",
+      conversationId
+    );
+    expect(suspendedAssistant?.content).toBe("已向你提出问题，等待回答后继续。");
+    const suspendedMetadata = JSON.parse(String(suspendedAssistant?.metadata_json ?? "{}"));
+    expect(suspendedMetadata.toolCalls).toMatchObject([
+      { name: "ask_user_question", status: "completed" }
+    ]);
+    expect(suspendedMetadata).not.toHaveProperty("anthropicContent");
+    const questions = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}`).expect(200);
+    const questionId = String(questions.body.data.questions[0].id);
+    expect(questions.body.data.questions[0]).toMatchObject({ status: "pending", resumeState: "pending" });
+
+    const answered = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
+      .send({ selectedOption: 0, customAnswer: "补充采用冷色调" })
+      .expect(200);
+    expect(answered.body.data).toMatchObject({
+      status: "answered",
+      selectedOptionLabel: "甲",
+      customAnswer: "补充采用冷色调",
+      answerText: "甲\n补充信息：补充采用冷色调",
+      resumeState: "completed"
+    });
+    expect(completionCount).toBe(2);
+    const completedMessages = runtime.database.all<{ role: string; content: string; metadata_json: string }>(
+      "SELECT role, content, metadata_json FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+      conversationId
+    );
+    expect(completedMessages).toHaveLength(2);
+    expect(completedMessages[1]).toMatchObject({ role: "assistant", content: "已按真实回答继续。" });
+    const completedMetadata = JSON.parse(String(completedMessages[1]?.metadata_json ?? "{}"));
+    expect(completedMetadata.toolCalls).toMatchObject([
+      { id: "ask-once", name: "ask_user_question", result: { question: { status: "answered", answerText: "甲\n补充信息：补充采用冷色调" } } }
+    ]);
+    await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`).send({ selectedOption: 0 }).expect(409);
+    expect(completionCount).toBe(2);
+  });
 });

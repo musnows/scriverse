@@ -33,6 +33,17 @@ import {
   CHARACTER_EXTRACTION_MAX_NAME_LENGTH,
   CHARACTER_EXTRACTION_MAX_SPECIES_LENGTH
 } from "./character-extraction.js";
+import {
+  AiWritePlanManager,
+  AI_USER_QUESTION_STATUSES,
+  AI_WRITE_PLAN_STATUSES,
+  aiWriteToolDescriptions,
+  aiWriteToolLabels,
+  aiWriteToolsUpdateSchema,
+  answerAiUserQuestionSchema,
+  resolveAiWritePlanMaxOperations,
+  type PlanViewer
+} from "./ai-write-plans.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
@@ -1582,6 +1593,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       allowPrivateAiEndpoints: options.security?.allowPrivateAiEndpoints === true
     }
   );
+  // AI 可写工具与审批工作流：计划创建只能由侧边栏 AI 发起，确认入口只接收审批 ID。
+  const aiWritePlanManager = new AiWritePlanManager({
+    database,
+    store,
+    auth,
+    resolveAnalysisTask: (workId, input) => ai.resolveTaskInput(workId, input),
+    startAnalysisTask: (workId, input) => store.createTask(workId, input)
+  });
+  ai.attachWritePlanManager(aiWritePlanManager);
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -3338,6 +3358,125 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.setRoleplayMemoryArchived(request.params.memoryId, false, input.expectedVersion));
   });
 
+  // ---------------------------------------------------------------- AI 可写工具与审批中心
+
+  const planViewer = (): PlanViewer => {
+    const actor = currentRequestActor();
+    return actor ? { userId: actor.userId, role: actor.role } : null;
+  };
+
+  app.get("/api/works/:workId/ai/tools", (request, response) => {
+    store.getWork(request.params.workId);
+    data(response, {
+      tools: aiWritePlanManager.getEnabledTools(request.params.workId),
+      labels: aiWriteToolLabels,
+      descriptions: aiWriteToolDescriptions,
+      maxOperations: resolveAiWritePlanMaxOperations(process.env.AI_WRITE_PLAN_MAX_OPERATIONS)
+    });
+  });
+  app.put("/api/works/:workId/ai/tools", (request, response) => {
+    const input = parse(aiWriteToolsUpdateSchema, request.body ?? {});
+    data(response, {
+      tools: aiWritePlanManager.updateToolSettings(request.params.workId, input.tools, currentRequestActor()?.userId ?? null)
+    });
+  });
+
+  app.get("/api/works/:workId/ai/write-plans", (request, response) => {
+    const status = typeof request.query.status === "string"
+      ? parse(z.enum(AI_WRITE_PLAN_STATUSES), request.query.status)
+      : undefined;
+    const limit = Number.parseInt(typeof request.query.limit === "string" ? request.query.limit : "", 10);
+    data(response, {
+      plans: aiWritePlanManager.listPlansForWork(request.params.workId, planViewer(), {
+        status,
+        ...(Number.isFinite(limit) ? { limit } : {})
+      })
+    });
+  });
+  app.get("/api/works/:workId/ai/write-plans/:planId", (request, response) => {
+    data(response, aiWritePlanManager.getPlanDetail(request.params.planId, request.params.workId, planViewer()));
+  });
+  app.post("/api/works/:workId/ai/write-plans/:planId/confirm", async (request, response) => {
+    data(response, await aiWritePlanManager.confirmPlan(request.params.planId, request.params.workId, planViewer()));
+  });
+  app.post("/api/works/:workId/ai/write-plans/:planId/reject", (request, response) => {
+    data(response, aiWritePlanManager.rejectPlan(request.params.planId, request.params.workId, planViewer()));
+  });
+  app.post("/api/works/:workId/ai/write-plans/:planId/undo", (request, response) => {
+    data(response, aiWritePlanManager.createUndoPlan(request.params.planId, request.params.workId, planViewer()), 201);
+  });
+
+  app.get("/api/works/:workId/ai/questions", (request, response) => {
+    const conversationId = typeof request.query.conversationId === "string"
+      ? parse(identifier, request.query.conversationId)
+      : undefined;
+    const status = typeof request.query.status === "string"
+      ? parse(z.enum(AI_USER_QUESTION_STATUSES), request.query.status)
+      : undefined;
+    const limit = Number.parseInt(typeof request.query.limit === "string" ? request.query.limit : "", 10);
+    data(response, {
+      questions: aiWritePlanManager.listQuestions(request.params.workId, planViewer(), {
+        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(Number.isFinite(limit) ? { limit } : {})
+      })
+    });
+  });
+  app.get("/api/works/:workId/ai/questions/:questionId", (request, response) => {
+    data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, planViewer()));
+  });
+  const resumeQuestionWorkflow = async (questionId: string, workId: string, viewer: PlanViewer): Promise<void> => {
+    const continuation = aiWritePlanManager.claimQuestionContinuation(questionId, workId, viewer);
+    if (!continuation) return;
+    try {
+      const conversationId = typeof continuation.conversationId === "string" ? continuation.conversationId : "";
+      if (!conversationId) throw new AppError(409, "AI_QUESTION_CONTINUATION_MISSING", "提问缺少可恢复的对话状态");
+      const scope = parse(contextSchema, continuation.scope ?? { type: "none" }) as ContextScope;
+      const resumed = await ai.resumeUserQuestion({
+        questionId,
+        workId,
+        conversationId,
+        scope,
+        status: String(continuation.status ?? "rejected"),
+        answerText: String(continuation.answerText ?? ""),
+        selectedOptionLabel: typeof continuation.selectedOptionLabel === "string" ? continuation.selectedOptionLabel : null,
+        supplementalAnswer: typeof continuation.customAnswer === "string" ? continuation.customAnswer : "",
+        ...(typeof continuation.modelId === "string" && continuation.modelId ? { modelId: continuation.modelId } : {}),
+        ...(typeof continuation.toolCallId === "string" && continuation.toolCallId ? { toolCallId: continuation.toolCallId } : {}),
+        ...(typeof continuation.assistantMessageRequestId === "string" && continuation.assistantMessageRequestId
+          ? { assistantMessageRequestId: continuation.assistantMessageRequestId }
+          : {}),
+        ...(continuation.questionView && typeof continuation.questionView === "object" && !Array.isArray(continuation.questionView)
+          ? { questionView: continuation.questionView as Record<string, unknown> }
+          : {}),
+        ...(typeof continuation.round === "number" ? { round: continuation.round } : {}),
+        ...(Array.isArray(continuation.toolMessages) ? { toolMessages: continuation.toolMessages } : {})
+      });
+      aiWritePlanManager.finishQuestionContinuation(questionId, { callId: resumed.callId ?? null, completed: true });
+    } catch (error) {
+      aiWritePlanManager.finishQuestionContinuation(questionId, { message: error instanceof Error ? error.message : "恢复失败" }, true);
+      throw error;
+    }
+  };
+  app.post("/api/works/:workId/ai/questions/:questionId/answer", async (request, response) => {
+    const input = parse(answerAiUserQuestionSchema, request.body ?? {});
+    const viewer = planViewer();
+    aiWritePlanManager.answerQuestion(
+      request.params.questionId,
+      request.params.workId,
+      viewer,
+      { ...(input.selectedOption !== undefined ? { selectedOption: input.selectedOption } : {}), ...(input.customAnswer !== undefined ? { customAnswer: input.customAnswer } : {}) }
+    );
+    await resumeQuestionWorkflow(request.params.questionId, request.params.workId, viewer);
+    data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, viewer));
+  });
+  app.post("/api/works/:workId/ai/questions/:questionId/reject", async (request, response) => {
+    const viewer = planViewer();
+    aiWritePlanManager.rejectQuestion(request.params.questionId, request.params.workId, viewer);
+    await resumeQuestionWorkflow(request.params.questionId, request.params.workId, viewer);
+    data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, viewer));
+  });
+
   app.get("/api/works/:workId/providers", (request, response) => {
     store.getWork(request.params.workId);
     data(response, ai.listProviders());
@@ -3685,6 +3824,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }
       const currentMessageId = String(begun.userMessage?.id ?? input.currentMessageId ?? "");
       if (begun.userMessage) sendEvent("user_message", { message: redactAiConversationMessage(begun.userMessage, permissions) });
+      if (aiWritePlanManager.latestPendingQuestion(conversationId)) {
+        throw new AppError(409, "AI_QUESTION_PENDING", "当前对话仍有待回答问题，请先回答或拒绝后再继续");
+      }
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: resolvedInstruction,

@@ -1196,7 +1196,8 @@ function syncPushWriteModules(request: Request): WorkPermissionModule[] {
   return [...modules];
 }
 
-function workModuleRequirements(request: Request, write: boolean, annotationAccess?: { kind: "note" | "todo"; createdByUserId: string | null }): WorkAuthorizationRequirements {
+/** 按 URL 与方法推导作品模块权限要求；导出供测试校验路径映射。 */
+export function workModuleRequirements(request: Request, write: boolean, annotationAccess?: { kind: "note" | "todo"; createdByUserId: string | null }): WorkAuthorizationRequirements {
   const pathname = normalizeApiPath(request.path);
   const direct = (module: WorkPermissionModule, extraWrite: WorkPermissionModule[] = []): WorkAuthorizationRequirements => (
     write ? { write: [module, ...extraWrite] } : { read: [module] }
@@ -1306,6 +1307,15 @@ function workModuleRequirements(request: Request, write: boolean, annotationAcce
     [/^\/api\/works\/[^/]+\/task-defaults(?:\/|$)/u, "ai-settings"]
   ];
   for (const [pattern, module] of rules) if (pattern.test(pathname)) return direct(module);
+
+  // AI 可写工具开关：查看要求 AI 设置读取权限，修改要求其编辑权限。
+  if (/^\/api\/works\/[^/]+\/ai\/tools$/u.test(pathname)) {
+    return write ? { write: ["ai-settings"] } : { read: ["ai-settings"] };
+  }
+  // 审批中心与提问接口：属于 AI 对话交互面；受影响模块的真实权限在执行前由计划引擎再校验。
+  if (/^\/api\/works\/[^/]+\/ai\/(?:write-plans|questions)(?:\/|$)/u.test(pathname)) {
+    return write ? { write: ["ai-chat"] } : { read: ["ai-chat"] };
+  }
 
   if (write && /^\/api\/reviews\/[^/]+\/character-resolution$/u.test(pathname)) {
     const merging = requestBodyRecord(request).action === "merge";

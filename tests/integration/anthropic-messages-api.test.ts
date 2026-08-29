@@ -173,6 +173,89 @@ describe("Anthropic Messages 供应商", () => {
     });
   });
 
+  it("回答挂起提问时把作者回答作为原 Anthropic tool_result 继续同一消息", async () => {
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({
+      tools: { ask_user_questions: true, settings: true }
+    }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    let questionCompletionCount = 0;
+    const questionRequestBodies: Array<{
+      messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+      tools?: Array<{ name?: string }>;
+    }> = [];
+    fetchMock.mockImplementation(async (_input, init) => {
+      questionCompletionCount += 1;
+      const body = JSON.parse(String(init?.body)) as {
+        messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+        tools?: Array<{ name?: string }>;
+      };
+      questionRequestBodies.push(body);
+      if (questionCompletionCount === 1) {
+        return new Response([
+          'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":20}}}',
+          'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_question","name":"ask_user_question","input":{"question":"采用哪个方向？","options":["甲","乙"]}}}',
+          'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+          'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":8}}',
+          'event: message_stop\ndata: {"type":"message_stop"}'
+        ].join("\n\n"), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+      }
+
+      return new Response([
+        'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":30}}}',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"已按回答继续。"}}',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":6}}',
+        'event: message_stop\ndata: {"type":"message_stop"}'
+      ].join("\n\n"), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "先询问再继续",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      conversationId
+    }).expect(200);
+    const questions = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}`).expect(200);
+    const questionId = String(questions.body.data.questions[0].id);
+    const suspendedAssistant = runtime.database.get<{ metadata_json: string }>(
+      "SELECT metadata_json FROM ai_conversation_messages WHERE conversation_id = ? AND role = 'assistant' ORDER BY created_at DESC LIMIT 1",
+      conversationId
+    );
+    expect(JSON.parse(String(suspendedAssistant?.metadata_json ?? "{}"))).not.toHaveProperty("anthropicContent");
+
+    const answered = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
+      .send({ selectedOption: 0 })
+      .expect(200);
+    expect(answered.body.data).toMatchObject({ status: "answered", resumeState: "completed", selectedOptionLabel: "甲" });
+    expect(questionCompletionCount).toBe(2);
+    expect(questionRequestBodies[0]?.tools?.some((tool) => tool.name === "ask_user_question")).toBe(true);
+    const resumedBody = questionRequestBodies[1];
+    expect(resumedBody).toBeDefined();
+    const assistantIndex = resumedBody?.messages.findIndex((message) => (
+      message.role === "assistant" && message.content.some((block) => block.type === "tool_use" && block.id === "toolu_question")
+    )) ?? -1;
+    expect(assistantIndex).toBeGreaterThanOrEqual(0);
+    const toolResultMessage = resumedBody?.messages[assistantIndex + 1];
+    expect(toolResultMessage?.role).toBe("user");
+    expect(toolResultMessage?.content[0]).toMatchObject({ type: "tool_result", tool_use_id: "toolu_question" });
+    expect(String(toolResultMessage?.content[0]?.content ?? "")).toContain('"selectedOptionLabel":"甲"');
+    const completedMessages = runtime.database.all<{ role: string; content: string; metadata_json: string }>(
+      "SELECT role, content, metadata_json FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+      conversationId
+    );
+    expect(completedMessages).toHaveLength(2);
+    expect(completedMessages[1]).toMatchObject({ role: "assistant", content: "已按回答继续。" });
+    const completedMetadata = JSON.parse(String(completedMessages[1]?.metadata_json ?? "{}"));
+    expect(completedMetadata.toolCalls).toMatchObject([
+      { id: "toolu_question", name: "ask_user_question", result: { question: { status: "answered", answerText: "甲" } } }
+    ]);
+    expect(completedMetadata.anthropicContent).toEqual([
+      { type: "text", text: "已按回答继续。" }
+    ]);
+  });
+
   it("模型连通性测试通过 Anthropic output_config 透传自动思考强度", async () => {
     const updated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "auto" }).expect(200);
     expect(updated.body.data.thinkingEffort).toBe("auto");
