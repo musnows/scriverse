@@ -3204,7 +3204,7 @@ function renderAiUserQuestionOptions(question) {
   else $("#ai-question-submit").disabled = true;
   $("#ai-question-skip").disabled = !isPending;
   $("#ai-question-expiry").textContent = isPending
-    ? `有效期至 ${aiFormatDateTime(question.expiresAt)}；过期未回答将自动失效，AI 不允许在未获得回答时自行假定答案。`
+    ? `请选择一个预设选项，或填写自定义回答后提交。有效期至 ${aiFormatDateTime(question.expiresAt)}；过期未回答将自动失效，AI 不允许在未获得回答时自行假定答案。`
     : `该问题当前状态：${question.statusLabel}${question.answerText ? ` · 回答：${question.answerText}` : ""}`;
 }
 
@@ -20348,11 +20348,11 @@ function syncAiQuestionSubmitState() {
   const checked = document.querySelector('input[name="ai-question-choice"]:checked');
   const customInput = $("#ai-question-custom-answer");
   const submit = $("#ai-question-submit");
-  if (!checked || checked.disabled) {
-    submit.disabled = true;
-    return;
-  }
-  submit.disabled = checked.value === "custom" && !String(customInput.value).trim();
+  const disabled = !checked
+    || checked.disabled
+    || (checked.value === "custom" && !String(customInput.value).trim());
+  submit.disabled = disabled;
+  submit.title = disabled ? "请选择一个预设选项，或填写自定义回答后提交" : "";
 }
 $("#ai-question-form").addEventListener("change", (event) => {
   const control = event.target;
