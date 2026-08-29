@@ -76,6 +76,30 @@ const mockAi = createServer(async (request, response) => {
     response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "已收到的部分回复会被保留。" } }] })}\n\n`);
     return;
   }
+  if (latestUserMessage.includes("浏览器终止思考保留测试")) {
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive"
+    });
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "这段思考应该在人工终止后继续显示。" } }] })}\n\n`);
+    const keepAliveTimer = setInterval(() => {
+      if (!response.destroyed && !response.writableEnded) response.write(": keepalive\n\n");
+    }, 500);
+    const finishTimer = setTimeout(() => {
+      clearInterval(keepAliveTimer);
+      if (response.destroyed || response.writableEnded) return;
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "不应等到这段正文出现。" }, finish_reason: "stop" }] })}\n\n`);
+      response.end("data: [DONE]\n\n");
+    }, 15_000);
+    const stop = () => {
+      clearInterval(keepAliveTimer);
+      clearTimeout(finishTimer);
+    };
+    request.once("aborted", stop);
+    response.once("close", stop);
+    return;
+  }
   if (latestUserMessage.includes("浏览器工具测试")) {
     if (toolMessages.length === 0) {
       sendToolCalls(response, [
@@ -348,6 +372,11 @@ const fixture = runWithRequestActor(registered.session.user, () => {
     modelId: "browser-agent-model",
     contextWindow: 4_096
   });
+  const longContextModel = runtime.ai.createModel(String(provider.id), {
+    displayName: "浏览器长上下文模型",
+    modelId: "browser-agent-long-context-model",
+    contextWindow: 128_000
+  });
   runtime.ai.setTaskDefault(workId, "chat", String(model.id));
   runtime.ai.setTaskDefault(secondWorkId, "chat", String(model.id));
   runtime.store.updateWorkAiSettings(workId, { contextCompactThreshold: 50 });
@@ -358,6 +387,7 @@ const fixture = runWithRequestActor(registered.session.user, () => {
     secondWorkId,
     secondChapterId: String(secondChapter.id),
     modelId: String(model.id),
+    longContextModelId: String(longContextModel.id),
     characterExtractionTaskId: String(characterExtractionTask.id)
   };
 });
