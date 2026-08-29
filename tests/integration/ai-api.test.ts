@@ -4495,6 +4495,55 @@ describe("AI 供应商、模型与建议 API", () => {
     await rejection;
   });
 
+  it("AskUserQuestions 必选提示随对话工具快照冻结且只影响新对话", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({
+      tools: { ask_user_questions: true }
+    }).expect(200);
+    const captured: Array<{ systemPrompt: string; toolNames: string[] }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        messages?: Array<{ role?: string; content?: string }>;
+        tools?: Array<{ function?: { name?: string } }>;
+      };
+      captured.push({
+        systemPrompt: String(body.messages?.find((message) => message.role === "system")?.content ?? ""),
+        toolNames: (body.tools ?? []).flatMap((tool) => typeof tool.function?.name === "string" ? [tool.function.name] : [])
+      });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "无需向作者提问。" } }] }), { status: 200 });
+    });
+
+    const frozenConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const frozenConversationId = String(frozenConversation.body.data.id);
+    const send = (conversationId: string, instruction: string) => request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction,
+      scope: { type: "chapter", chapterId },
+      modelId,
+      conversationId
+    }).expect(200);
+    await send(frozenConversationId, "第一轮无需提问");
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({
+      tools: { ask_user_questions: false }
+    }).expect(200);
+    await send(frozenConversationId, "关闭开关后的同一对话");
+
+    const newConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const newConversationId = String(newConversation.body.data.id);
+    await send(newConversationId, "关闭开关后的新对话");
+
+    expect(captured).toHaveLength(3);
+    const mandatoryGuidance = "只要你需要向作者提出任何问题";
+    expect(captured[0]?.systemPrompt).toContain(mandatoryGuidance);
+    expect(captured[0]?.systemPrompt).toContain("禁止在普通回复正文中直接写出问题");
+    expect(captured[0]?.toolNames).toContain("ask_user_question");
+    expect(captured[1]?.systemPrompt).toBe(captured[0]?.systemPrompt);
+    expect(captured[1]?.toolNames).toContain("ask_user_question");
+    expect(captured[2]?.systemPrompt).not.toContain(mandatoryGuidance);
+    expect(captured[2]?.toolNames).not.toContain("ask_user_question");
+  });
+
   it("AskUserQuestions 持久化挂起 Agent loop 并在回答后只恢复一次", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
