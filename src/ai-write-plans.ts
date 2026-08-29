@@ -456,6 +456,7 @@ export type CreateAiWritePlanInput = z.infer<typeof createAiWritePlanInputSchema
 /** 提问选项数量限制：一次一个问题和 2-6 个预设选项。 */
 export const MIN_AI_QUESTION_OPTIONS = 2;
 export const MAX_AI_QUESTION_OPTIONS = 6;
+export const MAX_AI_QUESTION_ANSWER_CHARS = 3000;
 
 export const askAiUserQuestionInputSchema = z.object({
   question: z.string().trim().min(1).max(2000),
@@ -466,7 +467,7 @@ export const askAiUserQuestionInputSchema = z.object({
 
 export const answerAiUserQuestionSchema = z.object({
   selectedOption: z.number().int().min(0).optional(),
-  customAnswer: z.string().trim().min(1).max(2000).optional()
+  customAnswer: z.string().trim().min(1).max(MAX_AI_QUESTION_ANSWER_CHARS).optional()
 }).strict().refine(
   // 至少提供一种回答；选择预设项后仍可附带自定义补充信息。
   (input) => input.selectedOption !== undefined || input.customAnswer !== undefined,
@@ -2524,9 +2525,12 @@ export class AiWritePlanManager {
   answerQuestion(questionId: string, workId: string, respondent: PlanViewer, payload: { selectedOption?: number; customAnswer?: string }): QuestionView {
     const row = this.assertAnswerable(questionId, workId, respondent);
     const options = json<Array<string>>(row.options_json, []);
-    const customAnswer = payload.customAnswer?.trim().slice(0, 2000) ?? "";
+    const customAnswer = payload.customAnswer?.trim() ?? "";
     if (payload.customAnswer !== undefined && !customAnswer) {
       throw new AppError(400, "AI_QUESTION_CUSTOM_ANSWER_INVALID", "自定义回答不能为空");
+    }
+    if (customAnswer.length > MAX_AI_QUESTION_ANSWER_CHARS) {
+      throw new AppError(400, "AI_QUESTION_CUSTOM_ANSWER_TOO_LONG", `自定义回答不能超过 ${MAX_AI_QUESTION_ANSWER_CHARS} 个字符`);
     }
     let selectedOption: number | null = null;
     let selectedOptionLabel = "";

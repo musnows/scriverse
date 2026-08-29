@@ -88,8 +88,13 @@ describe("AI 工具调用记录界面", () => {
     expect(page).toContain("feature=ai-question-continuation-ui-v1");
     expect(page).toContain('class="card-actions ai-question-actions"');
     expect(page).toContain("自定义回答 / 补充信息");
+    expect(page).toContain('id="ai-question-answer-count"');
+    expect(page).toContain('maxlength="3000"');
+    expect(page).toContain("已填写 0 / 3000");
     expect(application).toContain("customInput.disabled = !isPending;");
     expect(application).toContain("if (isPending) syncAiQuestionSubmitState();");
+    expect(application).toContain("function syncAiQuestionAnswerCount()");
+    expect(application).toContain("`已填写 ${input.value.length} / ${maximum}`");
     expect(application).toContain("function syncAiQuestionOptionPresentation()");
     expect(application).toContain('label.classList.toggle("is-selected", isSelected);');
     expect(application).toContain('label.dataset.recommended === "true" && (!checked || isSelected)');
@@ -110,6 +115,8 @@ describe("AI 工具调用记录界面", () => {
     expect(styles).toContain(".card-actions:is(.ai-plan-actions, .ai-question-actions) { flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 0; padding: 14px 24px 20px; }");
     expect(styles).toContain(".ai-question-option-item.is-recommended");
     expect(styles).toContain(".ai-question-option-item.is-selected");
+    expect(styles).toContain(".ai-question-custom-heading output");
+    expect(page).toContain("feature=ai-question-answer-limit-v1");
     expect(page).toContain("feature=ai-question-submit-guidance-v1");
     expect(styles).not.toContain("padding: 30px 12px 12px;");
     expect(styles).not.toContain("ai-stream-cursor");

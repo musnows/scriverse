@@ -3164,6 +3164,12 @@ function syncAiQuestionOptionPresentation() {
   }
 }
 
+function syncAiQuestionAnswerCount() {
+  const input = $("#ai-question-custom-answer");
+  const maximum = Number(input.maxLength) || 3000;
+  $("#ai-question-answer-count").textContent = `已填写 ${input.value.length} / ${maximum}`;
+}
+
 function renderAiUserQuestionOptions(question) {
   const host = $("#ai-question-options");
   const customInput = $("#ai-question-custom-answer");
@@ -3198,6 +3204,7 @@ function renderAiUserQuestionOptions(question) {
   host.append(customLabel);
   customInput.value = question.customAnswer ?? (question.selectedOption == null && question.isCustomAnswer ? (question.answerText ?? "") : "");
   customInput.disabled = !isPending;
+  syncAiQuestionAnswerCount();
   syncAiQuestionOptionPresentation();
   // 提交按钮由选择状态驱动：待回答且已选择（或输入）时才可提交。
   if (isPending) syncAiQuestionSubmitState();
@@ -3223,6 +3230,7 @@ async function openAiUserQuestionDialog(questionId) {
   $("#ai-question-text").textContent = "";
   $("#ai-question-options").replaceChildren();
   $("#ai-question-custom-answer").value = "";
+  syncAiQuestionAnswerCount();
   $("#ai-question-expiry").textContent = "正在加载问题……";
   try {
     return await refreshAiQuestionDialog();
@@ -20365,6 +20373,7 @@ $("#ai-question-form").addEventListener("change", (event) => {
 });
 $("#ai-question-custom-answer").addEventListener("input", () => {
   const customInput = $("#ai-question-custom-answer");
+  syncAiQuestionAnswerCount();
   const checked = document.querySelector('input[name="ai-question-choice"]:checked');
   if (!checked && String(customInput.value).trim()) {
     const customRadio = document.querySelector('input[name="ai-question-choice"][value="custom"]');

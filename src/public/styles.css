@@ -2948,6 +2948,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-question-option-item.is-selected { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
 .ai-question-option-item input[type="radio"] { margin-top: 2px; accent-color: var(--accent); }
 .ai-question-custom-field { display: grid; gap: 5px; }
+.ai-question-custom-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.ai-question-custom-heading output { flex: 0 0 auto; color: var(--muted); font: 9px/1.4 var(--font-latin), monospace; font-variant-numeric: tabular-nums; }
 .ai-question-custom-field input[type="text"] { padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 11px; }
 .ai-question-custom-field input[type="text"]:disabled { background: var(--paper-deep); color: var(--muted); }
 #ai-question-expiry { margin: 4px 0 0; }

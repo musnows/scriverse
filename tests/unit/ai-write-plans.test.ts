@@ -514,6 +514,19 @@ describe("AiWritePlanManager 工具开关与审批流水线", () => {
       answerText: "第一个\n补充信息：但保留第二个方案的结尾",
       isCustomAnswer: true
     });
+
+    const limited = manager.createQuestion({
+      workId,
+      conversationId: "conv-1",
+      initiator: null,
+      recipientUserId: null,
+      question: "回答长度限制？",
+      options: ["第一个", "第二个"]
+    });
+    expect(() => manager.answerQuestion(limited.id, workId, null, { customAnswer: "界".repeat(3001) }))
+      .toThrowError(/不能超过 3000 个字符/u);
+    expect(manager.answerQuestion(limited.id, workId, null, { customAnswer: "界".repeat(3000) }).answerText)
+      .toHaveLength(3000);
   });
 
   it("待回答问题阻止写计划且 continuation 只能认领一次", async () => {
