@@ -4536,9 +4536,11 @@ describe("AI 供应商、模型与建议 API", () => {
       conversationId
     );
     expect(suspendedAssistant?.content).toBe("已向你提出问题，等待回答后继续。");
-    expect(JSON.parse(String(suspendedAssistant?.metadata_json ?? "{}")).toolCalls).toMatchObject([
+    const suspendedMetadata = JSON.parse(String(suspendedAssistant?.metadata_json ?? "{}"));
+    expect(suspendedMetadata.toolCalls).toMatchObject([
       { name: "ask_user_question", status: "completed" }
     ]);
+    expect(suspendedMetadata).not.toHaveProperty("anthropicContent");
     const questions = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}`).expect(200);
     const questionId = String(questions.body.data.questions[0].id);
     expect(questions.body.data.questions[0]).toMatchObject({ status: "pending", resumeState: "pending" });

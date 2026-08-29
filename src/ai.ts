@@ -5575,8 +5575,7 @@ export class AiManager {
       ...(generated.reasoningContent === undefined ? {} : { reasoningContent: generated.reasoningContent }),
       ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
       toolCalls: generated.toolCalls,
-      processSteps: generated.processSteps,
-      ...(generated.anthropicContent?.length ? { anthropicContent: generated.anthropicContent } : {})
+      processSteps: generated.processSteps
     };
     if (generated.suspendedQuestionId) {
       const suspendedContent = streamedConversationContent.trim()
@@ -5628,7 +5627,10 @@ export class AiManager {
         input.conversationId,
         input.assistantMessageRequestId,
         generated.content,
-        generatedMessageMetadata,
+        {
+          ...generatedMessageMetadata,
+          ...(generated.anthropicContent?.length ? { anthropicContent: generated.anthropicContent } : {})
+        },
         true
       )
       : persistedConversationMessage;
