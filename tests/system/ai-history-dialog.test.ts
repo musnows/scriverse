@@ -40,6 +40,8 @@ describe("AI 对话历史弹窗", () => {
     expect(page.text).not.toContain('<option value="continue">续写</option>');
     expect(page.text).not.toContain('<option value="polish">润色选中文本</option>');
     expect(page.text).toContain('提到续写或润色时会自动加载对应 Skill');
+    expect(page.text).toContain('/skills continue-writing 或 /skills polish-writing 强制加载');
+    expect(page.text).toContain('feature=ai-writing-skills-v2');
     expect(page.text).toContain('id="ai-history-previous"');
     expect(page.text).toContain('id="ai-history-next"');
     expect(page.text).not.toContain('id="ai-history-panel"');
@@ -58,6 +60,7 @@ describe("AI 对话历史弹窗", () => {
     expect(application.text).not.toContain('polish: "润色选中文本"');
     expect(application.text).toContain('writingChapterVersion: state.chapter.versionNo');
     expect(application.text).toContain('attachWritingSuggestion(assistantMessage, writingSuggestion');
+    expect(application.text).toContain('/skills continue-writing 或 /skills polish-writing 强制加载');
     expect(application.text).toContain("function syncAiHistoryActionMenu(conversation)");
     expect(application.text).toContain("async function copyAiConversationSessionId(conversation)");
     expect(application.text).toContain('if (action === "copy-session-id") {');

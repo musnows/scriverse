@@ -3502,7 +3502,7 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
 
     const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
-      instruction: "润色这段文字。",
+      instruction: "/skills polish-writing\n让当前选区的表达更顺畅。",
       scope: {
         type: "none",
         chapterId,
@@ -3513,6 +3513,7 @@ describe("AI 供应商、模型与建议 API", () => {
       },
       modelId
     }).expect(200);
+    expect(fetchMock.mock.calls.some((call) => String(call[1]?.body).includes("/skills polish-writing"))).toBe(false);
     const completed = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
       writingSuggestion: { id: string; taskType: string; action: string };
     };
@@ -3523,6 +3524,51 @@ describe("AI 供应商、模型与建议 API", () => {
       .send({})
       .expect(200);
     expect(accepted.body.data.chapter.content).toBe("重复句。中间段。夜色重复回响。");
+  });
+
+  it("usage 将 Skill 元数据和激活正文计入 skills，角色扮演保持为零", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "chat" }).expect(201);
+    const ordinary = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/context/prepare`).send({
+      instruction: "讨论下一段可以采用哪些方向。",
+      scope: { type: "none", chapterId, writingChapterVersion: 1 },
+      modelId
+    }).expect(200);
+    const forced = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/context/prepare`).send({
+      instruction: "/skills continue-writing\n沿当前情节继续创作。",
+      scope: { type: "none", chapterId, writingChapterVersion: 1 },
+      modelId
+    }).expect(200);
+    const ordinarySkillTokens = Number(ordinary.body.data.usage.tokenDistribution.skillsTokens);
+    const forcedSkillTokens = Number(forced.body.data.usage.tokenDistribution.skillsTokens);
+    expect(ordinarySkillTokens).toBeGreaterThan(0);
+    expect(forcedSkillTokens).toBeGreaterThan(ordinarySkillTokens);
+
+    const unknown = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/context/prepare`).send({
+      instruction: "/skills missing-skill",
+      scope: { type: "none", chapterId, writingChapterVersion: 1 },
+      modelId
+    }).expect(400);
+    expect(unknown.body.error.code).toBe("AI_SKILL_NOT_FOUND");
+    const multiple = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/context/prepare`).send({
+      instruction: "/skills continue-writing\n/skills polish-writing",
+      scope: { type: "none", chapterId, writingChapterVersion: 1 },
+      modelId
+    }).expect(400);
+    expect(multiple.body.error.code).toBe("MULTIPLE_WRITING_SKILLS_UNSUPPORTED");
+
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const roleplay = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "roleplay" }).expect(201);
+    await request(runtime.app).patch(`/api/ai-conversations/${roleplay.body.data.id}/roleplay`).send({
+      characterId: character.body.data.id
+    }).expect(200);
+    const roleplayUsage = await request(runtime.app).post(`/api/ai-conversations/${roleplay.body.data.id}/context/prepare`).send({
+      instruction: "/skills continue-writing\n继续当前互动。",
+      scope: { type: "none" },
+      modelId
+    }).expect(200);
+    expect(roleplayUsage.body.data.usage.tokenDistribution.skillsTokens).toBe(0);
   });
 
   it("侧栏问答通过 SSE 逐段输出并在完整读取后记录建议", async () => {

@@ -24,7 +24,6 @@ import {
 import { AttachmentStorage } from "./attachment-storage.js";
 import { attachmentDownloadFileName, inlineContentDisposition } from "./attachment-download.js";
 import { AI_MODEL_KINDS, AiManager } from "./ai.js";
-import { matchAiWritingSkill } from "./ai-skills.js";
 import { LiteLlmPriceCache } from "./ai-model-pricing.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import { SEMANTIC_SOURCE_TYPES, type SemanticSourceType } from "./semantic-search.js";
@@ -3378,10 +3377,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }).strict(), request.body ?? {});
     const conversation = store.getAiConversation(request.params.conversationId);
     const permissions = requestPermissions(request, String(conversation.workId));
-    if (!conversation.roleplayCharacter && matchAiWritingSkill(input.instruction) && !canReadWorkModule(permissions, "prose")) {
+    const writingSkillRequest = conversation.roleplayCharacter
+      ? { skillName: null, instruction: input.instruction }
+      : ai.resolveWritingSkillInstruction(input.instruction);
+    if (writingSkillRequest.skillName && !canReadWorkModule(permissions, "prose")) {
       throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取当前章节正文以使用写作 Skill 的权限");
     }
-    const citedInstruction = instructionWithCitations(input.instruction, input.citations ?? []);
+    const citedInstruction = instructionWithCitations(writingSkillRequest.instruction, input.citations ?? []);
     const preparedScope = conversation.roleplayCharacter
       ? input.scope
       : ai.resolveWritingSkillScope(String(conversation.workId), "chat", input.instruction, input.scope);
@@ -3744,10 +3746,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const storedUserContent = isRoleplay
       ? composeRoleplayStoredUserContent(sceneDirection, instructionText)
       : instructionText;
-    const resolvedInstruction = instructionWithCitations(instructionText, citations);
     const permissions = requestPermissions(request, request.params.workId);
-    const activeWritingSkill = isRoleplay ? null : matchAiWritingSkill(instructionText);
-    if (activeWritingSkill && !canReadWorkModule(permissions, "prose")) {
+    const writingSkillRequest = isRoleplay
+      ? { skillName: null, instruction: instructionText }
+      : ai.resolveWritingSkillInstruction(instructionText);
+    const resolvedInstruction = instructionWithCitations(writingSkillRequest.instruction, citations);
+    if (writingSkillRequest.skillName && !canReadWorkModule(permissions, "prose")) {
       throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取当前章节正文以使用写作 Skill 的权限");
     }
     const requestScope = isRoleplay

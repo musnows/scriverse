@@ -32,9 +32,10 @@ import {
 } from "./ai-protocol.js";
 import { estimateLiteLlmUsageCost, type LiteLlmPriceCache, type ModelTokenUsage } from "./ai-model-pricing.js";
 import {
+  AI_WRITING_SKILL_NAMES,
   aiSkillPromptText,
-  matchAiWritingSkill,
   renderAiSkillsPrompt,
+  resolveAiWritingSkill,
   type AiWritingSkillName
 } from "./ai-skills.js";
 import {
@@ -344,7 +345,10 @@ function writingSkillsPrompt(
 function completionSkillsTokens(messages: CompletionMessage[]): number {
   return messages
     .filter((message) => message.role === "system")
-    .reduce((total, message) => total + estimateAiTokens(aiSkillPromptText(completionMessageText(message.content))), 0);
+    .reduce((total, message) => {
+      const skillsPrompt = aiSkillPromptText(completionMessageText(message.content));
+      return skillsPrompt ? total + estimateAiTokens(skillsPrompt) : total;
+    }, 0);
 }
 
 // A small but non-transparent 128x128 PNG. The model test must exercise an actual image_url
@@ -5900,7 +5904,7 @@ export class AiManager {
     instruction: string,
     scope: ContextScope
   ): ContextScope {
-    const skillName = taskWritingSkillName(taskType) ?? matchAiWritingSkill(instruction)?.name;
+    const skillName = taskWritingSkillName(taskType) ?? this.resolveWritingSkillInstruction(instruction).skillName;
     if (!skillName) return scope;
     if (!scope.chapterId) {
       throw new AppError(400, "CHAPTER_REQUIRED", skillName === "polish-writing" ? "润色技能必须指定当前章节" : "续写技能必须指定当前章节");
@@ -5950,6 +5954,23 @@ export class AiManager {
     };
   }
 
+  resolveWritingSkillInstruction(instruction: string): { skillName: AiWritingSkillName | null; instruction: string } {
+    const resolution = resolveAiWritingSkill(instruction);
+    if (resolution.unknownSkillNames.length > 0) {
+      throw new AppError(400, "AI_SKILL_NOT_FOUND", `找不到 Skill：${resolution.unknownSkillNames.join("、")}`, {
+        availableSkills: AI_WRITING_SKILL_NAMES
+      });
+    }
+    if (resolution.explicitSkillNames.length > 1) {
+      throw new AppError(400, "MULTIPLE_WRITING_SKILLS_UNSUPPORTED", "同一轮只能强制加载一个写作 Skill");
+    }
+    const explicitlyLoaded = resolution.explicitSkillNames.length > 0;
+    return {
+      skillName: resolution.skill?.name ?? null,
+      instruction: resolution.cleanedInstruction || (explicitlyLoaded ? "执行本轮显式加载的写作 Skill。" : instruction)
+    };
+  }
+
   async createSuggestion(input: GenerateInput): Promise<Record<string, unknown>> {
     const action = input.taskType === "continue" ? "append" : input.taskType === "polish" ? "replace-selection" : "note";
     if (action === "replace-selection" && !input.scope.selection) {
@@ -5995,15 +6016,21 @@ export class AiManager {
     input: Omit<GenerateInput, "taskType">,
     onDelta: (delta: string) => void
   ): Promise<Record<string, unknown>> {
-    const activeWritingSkill = this.roleplayCharacterId(input.workId, input.conversationId)
-      ? null
-      : matchAiWritingSkill(input.skillInstruction ?? input.instruction);
-    const effectiveInput = activeWritingSkill
-      ? {
-          ...input,
-          scope: this.resolveWritingSkillScope(input.workId, "chat", input.instruction, input.scope)
-        }
+    const roleplayConversation = Boolean(this.roleplayCharacterId(input.workId, input.conversationId));
+    const skillInstruction = input.skillInstruction ?? input.instruction;
+    const writingSkillRequest = roleplayConversation
+      ? { skillName: null, instruction: input.instruction }
+      : this.resolveWritingSkillInstruction(skillInstruction);
+    const activeWritingSkillName = writingSkillRequest.skillName;
+    const skillInput = input.skillInstruction === undefined
+      ? { ...input, instruction: writingSkillRequest.instruction, skillInstruction }
       : input;
+    const effectiveInput = activeWritingSkillName
+      ? {
+          ...skillInput,
+          scope: this.resolveWritingSkillScope(input.workId, "chat", skillInstruction, input.scope)
+        }
+      : skillInput;
     const conversationBefore: AiConversationTitleContext | null = input.conversationId
       ? this.store.getAiConversationTitleContext(input.conversationId, input.workId)
       : null;
@@ -6110,12 +6137,12 @@ export class AiManager {
     }
     const chapter = effectiveInput.scope.chapterId ? this.store.getChapter(effectiveInput.scope.chapterId) : null;
     const suggestionId = id("suggestion");
-    const suggestionTaskType = activeWritingSkill?.name === "continue-writing"
+    const suggestionTaskType = activeWritingSkillName === "continue-writing"
       ? "continue"
-      : activeWritingSkill?.name === "polish-writing" ? "polish" : "chat";
-    const suggestionAction = activeWritingSkill?.name === "continue-writing"
+      : activeWritingSkillName === "polish-writing" ? "polish" : "chat";
+    const suggestionAction = activeWritingSkillName === "continue-writing"
       ? "append"
-      : activeWritingSkill?.name === "polish-writing" ? "replace-selection" : "note";
+      : activeWritingSkillName === "polish-writing" ? "replace-selection" : "note";
     this.store.db.run(
       `INSERT INTO ai_suggestions (id, call_id, work_id, chapter_id, chapter_version, task_type, instruction,
        source_text, content, action, status, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
@@ -6142,8 +6169,8 @@ export class AiManager {
         generated.content,
         {
           ...generatedMessageMetadata,
-          ...(activeWritingSkill ? {
-            activeSkills: [activeWritingSkill.name],
+          ...(activeWritingSkillName ? {
+            activeSkills: [activeWritingSkillName],
             writingSuggestionId: suggestionId
           } : {}),
           ...(input.toolContinuation
@@ -6779,7 +6806,8 @@ export class AiManager {
       input.conversationId,
       roleplayCharacterId
     )));
-    const skillsTokens = estimateAiTokens(writingSkillsPrompt(input, roleplayCharacterId));
+    const renderedSkillsPrompt = writingSkillsPrompt(input, roleplayCharacterId);
+    const skillsTokens = renderedSkillsPrompt ? estimateAiTokens(renderedSkillsPrompt) : 0;
     const workContextBudgetTokens = Math.max(256, availableInputTokens
       - Math.min(conversationTokens, conversationBudgetTokens)
       - Math.min(instructionTokens, Math.floor(availableInputTokens * 0.25))
