@@ -57,7 +57,8 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("image: \"读取设定图片\"");
     expect(page).toContain("feature=ai-roleplay-knowledge-tools-v1");
     expect(application).toContain("function syncAiTaskOptions()");
-    expect(application).toContain('const taskType = roleplaySelected ? "chat" : selectedTaskType;');
+    expect(application).toContain('const taskType = "chat";');
+    expect(application).toContain('const writingTarget = state.chapter && !roleplaySelected ? {');
     expect(application).toContain('message.querySelector(".message-heading > span").textContent = aiAssistantLabel("", tab.roleplayCharacter);');
     expect(page).toContain("feature=ai-roleplay-speaker-label-v1");
     expect(styles).toContain(".prompt-options .ai-roleplay-character { min-width: 0; }");

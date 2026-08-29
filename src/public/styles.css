@@ -2998,6 +2998,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 }
 
 .guard-card { margin-top: 10px; padding: 9px 10px; border: 1px solid var(--line); border-left: 3px solid var(--green); border-radius: 4px; background: var(--surface-soft); }
+.writing-suggestion-ui { display: contents; }
 .guard-card.warning { border-left-color: #c07b31; }.guard-card.failed { border-left-color: var(--accent); }
 .guard-card strong { display: block; margin-bottom: 5px; font-size: 10px; }.guard-card p { margin: 4px 0; color: var(--muted); font-size: 9px; line-height: 1.45; }.guard-card p b { color: var(--ink); }
 .message-actions { display: flex; gap: 7px; margin-top: 10px; }

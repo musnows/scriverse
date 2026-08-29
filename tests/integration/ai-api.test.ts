@@ -3150,8 +3150,8 @@ describe("AI 供应商、模型与建议 API", () => {
     });
   }, 20_000);
 
-  it("对话开始后锁定问答、角色扮演、续写和润色任务类型", async () => {
-    const taskTypes = ["chat", "roleplay", "continue", "polish"] as const;
+  it("对话只保留问答与角色扮演模式并拒绝旧写作模式", async () => {
+    const taskTypes = ["chat", "roleplay"] as const;
     const draftConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
       taskType: "chat"
     }).expect(201);
@@ -3182,7 +3182,19 @@ describe("AI 供应商、模型与建议 API", () => {
       }
     }
 
-    await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "analysis" }).expect(400);
+    for (const removedTaskType of ["continue", "polish", "analysis"]) {
+      await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: removedTaskType }).expect(400);
+    }
+
+    const legacy = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "chat" }).expect(201);
+    runtime.database.run("UPDATE ai_conversations SET task_type = 'continue' WHERE id = ?", legacy.body.data.id);
+    await request(runtime.app).post(`/api/ai-conversations/${legacy.body.data.id}/messages`).send({
+      role: "user",
+      content: "旧续写会话"
+    }).expect(201);
+    const normalizedLegacy = await request(runtime.app).get(`/api/ai-conversations/${legacy.body.data.id}`).expect(200);
+    expect(normalizedLegacy.body.data.taskType).toBe("chat");
+    await request(runtime.app).patch(`/api/ai-conversations/${legacy.body.data.id}/task-type`).send({ taskType: "chat" }).expect(200);
   });
 
   it("对话开始后锁定实际使用模型", async () => {
@@ -3395,6 +3407,122 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId
     }).expect(400);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("问答中自动加载续写 Skill 并保留一致性守卫与采纳链路", async () => {
+    const { providerId, modelId } = await configureAi();
+    let streamSystemPrompt = "";
+    let streamUserMessages = "";
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as {
+        stream?: boolean;
+        max_tokens?: number;
+        messages: Array<{ role: string; content: string }>;
+      };
+      if (body.max_tokens === 10) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200 });
+      }
+      if (body.stream) {
+        streamSystemPrompt = String(body.messages[0]?.content ?? "");
+        streamUserMessages = body.messages.slice(1).map((message) => String(message.content ?? "")).join("\n");
+        return new Response('data: {"choices":[{"delta":{"content":"飞船驶入夜色。"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" }
+        });
+      }
+      expect(body.messages.some((message) => String(message.content).includes("检查下面的续写候选"))).toBe(true);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200 });
+    });
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "续写当前章节，保持现在的节奏。",
+      scope: { type: "none", chapterId, writingChapterVersion: 1 },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(streamSystemPrompt).toContain("<available_skills>");
+    expect(streamSystemPrompt).toContain("<active_skills>");
+    expect(streamSystemPrompt).toContain("# 续写正文");
+    expect(streamSystemPrompt).not.toContain("# 润色选中文本");
+    expect(streamUserMessages).toContain("林舟启动了飞船。");
+    expect(streamUserMessages).toContain("跃迁后必须冷却十二小时。");
+    const completed = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      conversationId: string;
+      contextUsage: { tokenDistribution: { skillsTokens: number } };
+      writingSuggestion: Record<string, unknown>;
+    };
+    expect(completed.contextUsage.tokenDistribution.skillsTokens).toBeGreaterThan(0);
+    expect(completed.writingSuggestion).toMatchObject({
+      taskType: "continue",
+      action: "append",
+      status: "pending",
+      guard: { status: "clear" }
+    });
+    const conversation = await request(runtime.app).get(`/api/ai-conversations/${completed.conversationId}`).expect(200);
+    expect(conversation.body.data.taskType).toBe("chat");
+    expect(conversation.body.data.messages.at(-1).metadata).toMatchObject({
+      activeSkills: ["continue-writing"],
+      writingSuggestionId: completed.writingSuggestion.id
+    });
+
+    const accepted = await request(runtime.app)
+      .post(`/api/suggestions/${completed.writingSuggestion.id}/accept`)
+      .send({})
+      .expect(200);
+    expect(accepted.body.data.chapter.content).toBe("林舟启动了飞船。\n\n飞船驶入夜色。");
+    expect(accepted.body.data.chapter.versionNo).toBe(2);
+  });
+
+  it("问答中的润色 Skill 按本轮精确选区替换重复文本", async () => {
+    const { providerId, modelId } = await configureAi();
+    const original = "重复句。中间段。重复句。";
+    await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({ content: original }).expect(200);
+    const selection = "重复句。";
+    const selectionStart = original.lastIndexOf(selection);
+    const selectionEnd = selectionStart + selection.length;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean; max_tokens?: number; messages: Array<{ content: string }> };
+      if (body.max_tokens === 10) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200 });
+      }
+      expect(String(body.messages[0]?.content)).toContain("# 润色选中文本");
+      expect(JSON.stringify(body.messages)).toContain("当前选中文本（本次修改目标）");
+      return new Response('data: {"choices":[{"delta":{"content":"夜色重复回响。"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      });
+    });
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "润色这段文字。",
+      scope: {
+        type: "none",
+        chapterId,
+        writingChapterVersion: 2,
+        selection,
+        selectionStart,
+        selectionEnd
+      },
+      modelId
+    }).expect(200);
+    const completed = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      writingSuggestion: { id: string; taskType: string; action: string };
+    };
+    expect(completed.writingSuggestion).toMatchObject({ taskType: "polish", action: "replace-selection" });
+
+    const accepted = await request(runtime.app)
+      .post(`/api/suggestions/${completed.writingSuggestion.id}/accept`)
+      .send({})
+      .expect(200);
+    expect(accepted.body.data.chapter.content).toBe("重复句。中间段。夜色重复回响。");
   });
 
   it("侧栏问答通过 SSE 逐段输出并在完整读取后记录建议", async () => {

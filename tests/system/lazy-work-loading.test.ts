@@ -99,7 +99,8 @@ describe("作品工作台按需加载", () => {
     expect(createConversationSource).toContain("upsertAiConversationSummary(conversation);");
     expect(createConversationSource).not.toContain("loadAiConversations");
     expect(createConversationSource).not.toContain("ensureAiConversationsLoaded");
-    expect(sendAiSource).toContain('if (taskType !== "chat")');
+    expect(sendAiSource).not.toContain('/suggestions`');
+    expect(sendAiSource).toContain("writingSuggestion = streamed.writingSuggestion;");
     expect(sendAiSource).not.toContain("ensureAiConversationsLoaded");
     expect(sendAiSource).not.toContain("context/prepare");
     expect(sendAiSource).not.toContain("currentMessageId");
