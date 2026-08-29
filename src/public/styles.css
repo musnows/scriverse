@@ -1642,6 +1642,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .draft-type-filter-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .draft-type-filter-field select { width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; background: var(--surface); color: var(--ink); font-size: 11px; }
 .setting-filter-toolbar { grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(0, .8fr)) auto; }
+.chapter-comment-filter-toolbar { grid-template-columns: minmax(180px, .8fr) minmax(240px, 1.2fr) auto; }
 .setting-filter-field { display: grid; min-width: 0; }
 .setting-filter-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .setting-filter-field input, .setting-filter-field select { width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; background: var(--surface); color: var(--ink); font-size: 11px; }
@@ -3298,6 +3299,16 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-annotations-dialog { width: min(820px, 94vw); }
 .chapter-annotations-list { display: grid; gap: 10px; max-height: 62vh; overflow: auto; padding: 18px 24px; }
 .chapter-comment-module-list { display: grid; gap: 10px; }
+.chapter-comment-completed-group { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.chapter-comment-completed-group > summary { display: flex; min-height: 44px; align-items: center; gap: 9px; padding: 9px 13px; color: var(--muted); cursor: pointer; list-style: none; }
+.chapter-comment-completed-group > summary::-webkit-details-marker { display: none; }
+.chapter-comment-completed-group > summary::before { content: "›"; color: var(--accent-dark); font-family: var(--font-latin), monospace; font-size: 16px; line-height: 1; transition: transform .15s ease; }
+.chapter-comment-completed-group[open] > summary::before { transform: rotate(90deg); }
+.chapter-comment-completed-group > summary span { color: var(--ink); font-size: 11px; font-weight: 600; }
+.chapter-comment-completed-group > summary strong { display: inline-grid; min-width: 22px; height: 22px; padding: 0 6px; place-items: center; border: 1px solid var(--line); border-radius: 11px; color: var(--accent-dark); font-family: var(--font-latin), monospace; font-size: 9px; }
+.chapter-comment-completed-group > summary small { margin-left: auto; font-size: 9px; }
+.chapter-comment-completed-group[open] > summary { border-bottom: 1px solid var(--line); }
+.chapter-comment-completed-list { display: grid; gap: 10px; padding: 10px; }
 .chapter-annotation-card { display: grid; gap: 8px; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .chapter-annotation-card.is-resolved { opacity: .65; }
 .chapter-annotation-card header { display: flex; align-items: center; gap: 8px; }
@@ -3660,6 +3671,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .character-filter-toolbar-actions { justify-content: flex-start; }
   .draft-filter-toolbar { grid-template-columns: minmax(0, 1fr); }
   .setting-filter-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .chapter-comment-filter-toolbar { grid-template-columns: minmax(0, 1fr); }
 }
 .entity-editor-open { overflow: hidden; }
 .preview-record-card { cursor: pointer; }

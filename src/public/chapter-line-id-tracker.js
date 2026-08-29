@@ -84,6 +84,30 @@ export function normalizeChapterLineIdDraft(content, lineIds) {
   });
 }
 
+export function remapChapterLineCounts(beforeLineIdsValue, afterLineIdsValue, lineCountsValue) {
+  const counts = lineCountsValue instanceof Map ? lineCountsValue : new Map();
+  const beforeLineIds = Array.isArray(beforeLineIdsValue) ? beforeLineIdsValue : [];
+  const afterLineIds = Array.isArray(afterLineIdsValue) ? afterLineIdsValue : [];
+  if (beforeLineIds.length === 0 || afterLineIds.length === 0) return new Map(counts);
+
+  const countsByLineId = new Map();
+  counts.forEach((countValue, lineValue) => {
+    const line = Number(lineValue);
+    const count = Number(countValue);
+    const lineId = beforeLineIds[line - 1];
+    if (!Number.isInteger(line) || line < 1 || !Number.isInteger(count) || count < 1 || typeof lineId !== "string" || !lineId) return;
+    countsByLineId.set(lineId, count);
+  });
+
+  const remapped = new Map();
+  afterLineIds.forEach((lineId, index) => {
+    if (typeof lineId !== "string" || !lineId) return;
+    const count = countsByLineId.get(lineId);
+    if (count !== undefined) remapped.set(index + 1, count);
+  });
+  return remapped;
+}
+
 export function reconcileChapterLineIdDraft(beforeContentValue, afterContentValue, beforeLineIdsValue, hint = null) {
   const beforeContent = String(beforeContentValue ?? "").replace(/\r\n?/gu, "\n");
   const afterContent = String(afterContentValue ?? "").replace(/\r\n?/gu, "\n");
