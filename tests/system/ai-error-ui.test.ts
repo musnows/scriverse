@@ -92,8 +92,8 @@ describe("AI 错误详情界面", () => {
     expect(application).toContain('dot.classList.toggle("is-error", failed);');
     expect(application).toContain('setAiChatTabStatus(tab, "streaming");');
     expect(application).toContain('if (toolCall.status === "failed") setAiChatTabStatus(tab, "error");');
-    expect(application).toContain('const suggestionFailed = suggestion.guard?.status === "failed"');
-    expect(application).toContain('if (suggestionFailed) setAiChatTabStatus(tab, "error");');
+    expect(application).toContain('const writingSuggestionFailed = writingSuggestion?.guard?.status === "failed"');
+    expect(application).toContain('if (writingSuggestionFailed) setAiChatTabStatus(tab, "error");');
     expect(application).toContain('streamError = createClientError(payload, "AI 流式调用失败", response.status);');
     expect(styles).toContain('.status-dot.is-error { background: var(--accent);');
   });

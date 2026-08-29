@@ -3411,6 +3411,24 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(guards.body.data[0]).toMatchObject({ issues: [], contextRefs: {}, failure: null, restricted: true });
     expect(JSON.stringify(guards.body.data)).not.toContain("TOP_SECRET_");
 
+    const acceptDenied = await collaborator.agent.post(`/api/suggestions/${suggestionId}/accept`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({})
+      .expect(403);
+    expect(acceptDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+
+    const skillPrepareDenied = await collaborator.agent.post(`/api/ai-conversations/${conversationId}/context/prepare`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ instruction: "续写当前章节", scope: { type: "none", chapterId: "chapter_secret", writingChapterVersion: 1 } })
+      .expect(403);
+    expect(skillPrepareDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+
+    const skillStreamDenied = await collaborator.agent.post(`/api/works/${workId}/chat/stream`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ instruction: "润色这段文字", scope: { type: "none", chapterId: "chapter_secret", selection: "secret", selectionStart: 0, selectionEnd: 6, writingChapterVersion: 1 }, conversationId })
+      .expect(403);
+    expect(skillStreamDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+
     const conversation = await collaborator.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(conversation.body.data.title).toBe("（正文读取权限受限）");
     expect(conversation.body.data.messages[0].content).toBe("（正文读取权限受限）");

@@ -24,6 +24,7 @@ import {
 import { AttachmentStorage } from "./attachment-storage.js";
 import { attachmentDownloadFileName, inlineContentDisposition } from "./attachment-download.js";
 import { AiManager } from "./ai.js";
+import { matchAiWritingSkill } from "./ai-skills.js";
 import { LiteLlmPriceCache } from "./ai-model-pricing.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import {
@@ -762,6 +763,9 @@ const contextSchema = z.object({
   chapterId: identifier.optional(),
   volumeId: identifier.optional(),
   selection: z.string().max(200_000).optional(),
+  selectionStart: z.number().int().min(0).max(10_000_000).optional(),
+  selectionEnd: z.number().int().min(0).max(10_000_000).optional(),
+  writingChapterVersion: z.number().int().min(1).max(2_000_000_000).optional(),
   chapterIds: z.array(identifier).max(20).optional(),
   volumeIds: z.array(identifier).max(20).optional(),
   characterIds: optionalStrings,
@@ -1208,7 +1212,7 @@ function redactAiCallContext(record: Record<string, unknown>, permissions: WorkM
   const redactedScope = { ...scope };
   let restricted = false;
   if (permissions.prose === "none") {
-    for (const field of ["selection", "chapterId", "volumeId", "chapterIds", "includeBookSummary"] as const) {
+    for (const field of ["selection", "selectionStart", "selectionEnd", "writingChapterVersion", "chapterId", "volumeId", "chapterIds", "includeBookSummary"] as const) {
       if (field in redactedScope) {
         delete redactedScope[field];
         restricted = true;
@@ -3326,12 +3330,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       ignoreContextWarning: z.boolean().optional()
     }).strict(), request.body ?? {});
     const conversation = store.getAiConversation(request.params.conversationId);
+    const permissions = requestPermissions(request, String(conversation.workId));
+    if (!conversation.roleplayCharacter && matchAiWritingSkill(input.instruction) && !canReadWorkModule(permissions, "prose")) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取当前章节正文以使用写作 Skill 的权限");
+    }
+    const citedInstruction = instructionWithCitations(input.instruction, input.citations ?? []);
+    const preparedScope = conversation.roleplayCharacter
+      ? input.scope
+      : ai.resolveWritingSkillScope(String(conversation.workId), "chat", input.instruction, input.scope);
     data(response, await ai.prepareConversationContext({
       conversationId: request.params.conversationId,
       workId: String(conversation.workId),
       modelId: input.modelId,
-      scope: input.scope,
-      instruction: instructionWithCitations(input.instruction, input.citations ?? [])
+      scope: preparedScope,
+      instruction: citedInstruction,
+      skillInstruction: input.instruction
     }, { ignoreWarning: input.ignoreContextWarning === true }));
   });
   app.post("/api/ai-conversations/:conversationId/compact", async (request, response) => {
@@ -3682,9 +3695,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       ? composeRoleplayStoredUserContent(sceneDirection, instructionText)
       : instructionText;
     const resolvedInstruction = instructionWithCitations(instructionText, citations);
+    const permissions = requestPermissions(request, request.params.workId);
+    const activeWritingSkill = isRoleplay ? null : matchAiWritingSkill(instructionText);
+    if (activeWritingSkill && !canReadWorkModule(permissions, "prose")) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取当前章节正文以使用写作 Skill 的权限");
+    }
+    const requestScope = isRoleplay
+      ? input.scope as ContextScope
+      : ai.resolveWritingSkillScope(request.params.workId, "chat", instructionText, input.scope as ContextScope);
     const mentionSource = [sceneDirection, resolvedInstruction].filter(Boolean).join("\n");
     const modelId = resolveConversationModelId(request.params.workId, conversationId, input.modelId);
-    const permissions = requestPermissions(request, request.params.workId);
     const controller = new AbortController();
     let streamRequestId: string | null = null;
     let streamRequestFinished = false;
@@ -3739,8 +3759,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           conversationId,
           workId: request.params.workId,
           modelId,
-          scope: input.scope as ContextScope,
+          scope: requestScope,
           instruction: mentionSource,
+          skillInstruction: instructionText,
           excludeConversationMessageId: input.currentMessageId
         }, { ignoreWarning: input.ignoreContextWarning === true });
         preparedConversation = redactAiConversation(store.getAiConversationSummary(conversationId), permissions);
@@ -3761,12 +3782,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         }
       }
       const resolvedScope = input.currentMessageId
-        ? input.scope as ContextScope
+        ? requestScope
         : ai.resolveInstructionMentions({
           workId: request.params.workId,
           taskType: "chat",
           instruction: mentionSource,
-          scope: input.scope as ContextScope,
+          scope: requestScope,
           conversationId
         });
       const mentionCharacterIds = [...new Set([
@@ -3804,13 +3825,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         }
         if (begun.request.status === "completed" && begun.assistantMessage) {
           const content = String(begun.assistantMessage.content ?? "");
+          const assistantMetadata = begun.assistantMessage.metadata && typeof begun.assistantMessage.metadata === "object"
+            ? begun.assistantMessage.metadata as Record<string, unknown>
+            : {};
+          const writingSuggestionId = typeof assistantMetadata.writingSuggestionId === "string"
+            ? assistantMetadata.writingSuggestionId
+            : "";
+          const writingSuggestion = writingSuggestionId
+            ? redactSuggestion(ai.getSuggestion(writingSuggestionId), permissions)
+            : null;
           if (content) sendEvent("delta", { delta: content, replayed: true });
           sendEvent("complete", {
             replayed: true,
             conversationId,
             conversationTitle: store.getAiConversationSummary(conversationId).title,
             messageId: begun.assistantMessage.id,
-            messageCreatedAt: begun.assistantMessage.createdAt
+            messageCreatedAt: begun.assistantMessage.createdAt,
+            ...(writingSuggestion ? { writingSuggestion } : {})
           });
         } else {
           sendEvent("request_status", {
@@ -3840,9 +3871,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: resolvedInstruction,
+        skillInstruction: instructionText,
         ...(sceneDirection ? { sceneDirection } : {}),
         // 仍由生成路径基于原始范围持久化累计注入，保证预解析不会吞掉本轮自动命中。
-        scope: input.scope as ContextScope,
+        scope: requestScope,
         signal: controller.signal,
         onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),
         onProcessStep: (step) => sendEvent("process_step", step),
@@ -3875,6 +3907,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         contextUsage: suggestion.contextUsage,
         conversationId,
         conversationTitle: suggestion.conversationTitle,
+        ...(suggestion.action !== "note" ? { writingSuggestion: redactSuggestion(suggestion, permissions) } : {}),
         messageId: typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
           ? (suggestion.conversationMessage as Record<string, unknown>).id
           : undefined,
@@ -3932,6 +3965,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/suggestions/:suggestionId/accept", (request, response) => {
     const input = parse(z.object({ content: z.string().max(2_000_000).optional() }), request.body ?? {});
+    const suggestion = ai.getSuggestion(request.params.suggestionId);
+    const permissions = requestPermissions(request, String(suggestion.workId));
+    if (!canWriteWorkModule(permissions, "prose")) {
+      throw new AppError(403, "WORK_MODULE_WRITE_DENIED", "你没有将 AI 建议写入正文的权限");
+    }
     data(response, ai.acceptSuggestion(request.params.suggestionId, input.content));
   });
   app.post("/api/suggestions/:suggestionId/reject", (request, response) => {

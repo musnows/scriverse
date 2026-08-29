@@ -60,14 +60,13 @@ describe("全书概要上下文引用", () => {
     expect(application.text).toContain('<dt>已索引设定来源</dt>');
     expect(application.text).toContain('class="ai-agent-tools"');
     expect(application.text).toContain('class="config-section ai-agent-tools-section"');
-    expect(application.text).toContain('const includeBookSummary = scopeType === "chapter-summary";');
-    expect(application.text).toContain('const requiresChapter = taskType === "polish" || taskType === "continue" || (scopeType !== "none" && scopeType !== "settings-catalog");');
+    expect(application.text).toContain('scopeType !== "none" && scopeType !== "settings-catalog" && !state.chapter');
     expect(application.text).not.toContain('syncAiIncludeSettingInfoControl');
     expect(application.text).toContain('conversationScope.includeSettingInfo = false');
-    expect(application.text).toContain('mergeAiReferenceScope(conversationScope, state.aiReferences)');
+    expect(application.text).toContain('const referencedScope = mergeAiReferenceScope(conversationScope, state.aiReferences);');
     expect(application.text).toContain('if (!state.work) return toast("请先选择作品", "error");');
     expect(application.text).toContain('scopeType === "none" ? { type: "none"');
-    expect(application.text).toContain("if (includeBookSummary) conversationScope.includeBookSummary = true;");
+    expect(application.text).toContain('scopeType === "chapter-summary") conversationScope.includeBookSummary = true;');
     expect(application.text).toContain('scopeType === "settings-catalog" ? { type: "settings-catalog" }');
     expect(application.text).toContain('body.append("expectedVersionNo", String(state.work.versionNo));');
     expect(styles.text).not.toContain(".ai-book-summary-reference");

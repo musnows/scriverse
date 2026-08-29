@@ -14,7 +14,7 @@ describe("AI 对话标题生成设置", () => {
     expect(application).toContain("创作助手对话标题生成");
     expect(application).toContain("使用提示词前 15 个字");
     expect(application).toContain("titleGenerationModelId: select.value");
-    expect(application).toContain("applyAiConversationTitle(streamed.conversationTitle, request.conversationId)");
+    expect(application).toContain("applyAiConversationTitle(streamed.conversationTitle, streamedRequest.conversationId)");
     expect(application).toContain("conversationTitle = typeof payload.conversationTitle === \"string\"");
     expect(page).toContain('id="ai-conversation-title"');
   });

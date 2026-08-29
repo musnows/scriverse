@@ -78,11 +78,12 @@ describe("AI 对话上下文压缩", () => {
     expect(usage.tokenDistribution).toEqual(expect.objectContaining({
       systemPromptTokens: expect.any(Number),
       functionTokens: expect.any(Number),
-      skillsTokens: 0,
+      skillsTokens: expect.any(Number),
       contextTokens: expect.any(Number),
       outputTokens: expect.any(Number),
       leftTokens: expect.any(Number)
     }));
+    expect(usage.tokenDistribution.skillsTokens).toBeGreaterThan(0);
     expect(usage.tokenDistribution.systemPromptTokens + usage.tokenDistribution.functionTokens
       + usage.tokenDistribution.skillsTokens + usage.tokenDistribution.contextTokens
       + usage.tokenDistribution.outputTokens

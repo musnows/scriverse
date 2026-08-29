@@ -716,8 +716,13 @@ export type BeginAiConversationStreamRequestResult = {
   assistantMessage: Record<string, unknown> | null;
 };
 
-export const aiConversationTaskTypes = ["chat", "roleplay", "continue", "polish"] as const;
+export const aiConversationTaskTypes = ["chat", "roleplay"] as const;
 export type AiConversationTaskType = typeof aiConversationTaskTypes[number];
+
+function normalizeAiConversationTaskType(value: unknown, roleplayCharacterId?: string | null): AiConversationTaskType {
+  if (roleplayCharacterId || value === "roleplay") return "roleplay";
+  return "chat";
+}
 
 export function defaultAiConversationTitle(prompt: string): string {
   const normalized = roleplayUserTurnTitleSource(prompt).replace(/\s+/gu, " ").trim();
@@ -9770,7 +9775,7 @@ export class Store {
     const roleplayCharacterId = optionalString(conversation, "roleplay_character_id");
     return {
       workId,
-      taskType: (optionalString(conversation, "task_type") ?? (roleplayCharacterId ? "roleplay" : "chat")) as AiConversationTaskType,
+      taskType: normalizeAiConversationTaskType(optionalString(conversation, "task_type"), roleplayCharacterId),
       roleplayCharacterId,
       roleplayUserCharacterId: optionalString(conversation, "roleplay_user_character_id"),
       roleplayMemories: roleplayCharacterId ? this.getRoleplayMemoryPromptItems(workId, roleplayCharacterId) : [],
@@ -10058,7 +10063,7 @@ export class Store {
     if (!conversation) throw notFound("AI 对话");
     const workId = requiredString(conversation, "work_id");
     const previousCharacterId = optionalString(conversation, "roleplay_character_id");
-    const previousTaskType = optionalString(conversation, "task_type") ?? (previousCharacterId ? "roleplay" : "chat");
+    const previousTaskType = normalizeAiConversationTaskType(optionalString(conversation, "task_type"), previousCharacterId);
     if (previousTaskType === taskType) return this.getAiConversationSummary(conversationId);
     const messageCount = Number(this.db.get(
       "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?",
@@ -10488,7 +10493,7 @@ export class Store {
         workId,
         optionalString(conversation, "roleplay_character_id"),
         optionalString(conversation, "roleplay_user_character_id"),
-        optionalString(conversation, "task_type"),
+        normalizeAiConversationTaskType(optionalString(conversation, "task_type"), optionalString(conversation, "roleplay_character_id")),
         optionalString(conversation, "context_scope_json"),
         title.slice(0, 200),
         forkSummary,
@@ -10599,7 +10604,7 @@ export class Store {
       compactedMessageCount: numberValue(row, "compacted_message_count"),
       hasCompactedSummary: Boolean(requiredString(row, "compacted_summary")),
       contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
-      taskType: optionalString(row, "task_type") ?? (roleplayCharacterId ? "roleplay" : "chat"),
+      taskType: normalizeAiConversationTaskType(optionalString(row, "task_type"), roleplayCharacterId),
       ...(lockedModelId ? { modelId: lockedModelId } : {}),
       ...(hasImageAttachments ? { hasImageAttachments: true, modelLockedByImage: true } : {}),
       contextScope: json<ContextScope>(optionalString(row, "context_scope_json") ?? "", { type: "none" }),
