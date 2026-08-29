@@ -8638,11 +8638,21 @@ function renderChapterBatchDialog() {
 function updateChapterBatchControls() {
   const count = chapterBatchSelectedIds.size;
   const action = $("#chapter-batch-action").value;
+  const renumbering = action === "renumberTitles";
+  const template = $("#chapter-batch-template").value.trim();
+  const templateValid = template.split("{n}").length === 2;
+  const startAt = Number($("#chapter-batch-start").value);
+  const sequenceEnd = startAt + count - 1;
   $("#chapter-batch-count").textContent = `已选择 ${count} 章`;
-  $("#chapter-batch-apply").disabled = count === 0;
+  $("#chapter-batch-apply").disabled = count === 0 || (renumbering && (!templateValid || !Number.isInteger(startAt) || startAt < 1 || sequenceEnd > 999999));
   $("#chapter-batch-volume-field").classList.toggle("hidden", action !== "move");
   $("#chapter-batch-type-field").classList.toggle("hidden", action !== "setType");
-  $("#chapter-batch-apply").textContent = action === "delete" ? "软删除所选章节" : "应用到所选章节";
+  for (const id of ["chapter-batch-template-field", "chapter-batch-number-style-field", "chapter-batch-start-field", "chapter-batch-renumber-note"]) {
+    $(`#${id}`).classList.toggle("hidden", !renumbering);
+  }
+  $("#chapter-batch-apply").textContent = action === "delete"
+    ? "软删除所选章节"
+    : renumbering ? "重排所选章节" : "应用到所选章节";
 }
 
 function openChapterBatchDialog() {
@@ -8662,16 +8672,33 @@ async function submitChapterBatch(event) {
     ? { type: "move", volumeId: $("#chapter-batch-volume").value }
     : actionValue === "setType"
       ? { type: "setType", chapterType: $("#chapter-batch-type").value }
-      : actionValue === "exclude" || actionValue === "include"
-        ? { type: "setAnalysisExclusion", excludedFromAnalysis: actionValue === "exclude" }
-        : { type: "delete" };
+      : actionValue === "renumberTitles"
+        ? {
+            type: "renumberTitles",
+            template: $("#chapter-batch-template").value.trim(),
+            numberStyle: $("#chapter-batch-number-style").value,
+            startAt: Number($("#chapter-batch-start").value)
+          }
+        : actionValue === "exclude" || actionValue === "include"
+          ? { type: "setAnalysisExclusion", excludedFromAnalysis: actionValue === "exclude" }
+          : { type: "delete" };
   const dialog = $("#chapter-batch-dialog");
-  if (action.type === "delete") {
+  if (action.type === "renumberTitles" && (action.template.split("{n}").length !== 2 || !Number.isInteger(action.startAt) || action.startAt < 1 || action.startAt + chapters.length - 1 > 999999)) {
+    toast("标题格式必须且只能包含一个 {n}，且所选章节的序号不能超过 999999", "error");
+    $("#chapter-batch-template").focus();
+    return;
+  }
+  if (action.type === "delete" || action.type === "renumberTitles") {
     dialog.close();
-    const confirmed = await confirmToast(`所选 ${chapters.length} 个章节的正文、版本和关联资料会保留，后续可以恢复。仍要删除吗？`, {
-      title: "批量删除需要再次确认",
-      confirmLabel: "确认软删除"
-    });
+    const confirmed = action.type === "delete"
+      ? await confirmToast(`所选 ${chapters.length} 个章节的正文、版本和关联资料会保留，后续可以恢复。仍要删除吗？`, {
+          title: "批量删除需要再次确认",
+          confirmLabel: "确认软删除"
+        })
+      : await confirmToast(`将按目录顺序，把所选 ${chapters.length} 个章节从第 ${action.startAt} 个序号开始重排为“${action.template}”格式。每个改名章节都会保留版本，确认继续吗？`, {
+          title: "重排标题需要再次确认",
+          confirmLabel: "确认重排"
+        });
     if (!confirmed) {
       dialog.showModal();
       return;
@@ -8679,7 +8706,7 @@ async function submitChapterBatch(event) {
   }
   $("#chapter-batch-apply").disabled = true;
   try {
-    await api(`/api/works/${encodeURIComponent(state.work.id)}/chapters/batch`, {
+    const result = await api(`/api/works/${encodeURIComponent(state.work.id)}/chapters/batch`, {
       method: "POST",
       body: { chapters: chapters.map((chapter) => ({ id: chapter.id, expectedVersionNo: chapter.versionNo })), action }
     });
@@ -8693,7 +8720,9 @@ async function submitChapterBatch(event) {
     } else renderTree();
     if (dialog.open) dialog.close();
     chapterBatchSelectedIds.clear();
-    toast(`已批量处理 ${chapters.length} 个章节`);
+    toast(action.type === "renumberTitles"
+      ? `已按目录顺序重排 ${Number(result.updated ?? chapters.length)} 个章节标题`
+      : `已批量处理 ${chapters.length} 个章节`);
   } catch (error) {
     if (!dialog.open) dialog.showModal();
     $("#chapter-batch-apply").disabled = false;
@@ -19857,6 +19886,8 @@ $("#chapter-batch-button").addEventListener("click", openChapterBatchDialog);
 $("#chapter-batch-close").addEventListener("click", () => $("#chapter-batch-dialog").close());
 $("#chapter-batch-cancel").addEventListener("click", () => $("#chapter-batch-dialog").close());
 $("#chapter-batch-action").addEventListener("change", updateChapterBatchControls);
+$("#chapter-batch-template").addEventListener("input", updateChapterBatchControls);
+$("#chapter-batch-start").addEventListener("input", updateChapterBatchControls);
 $("#chapter-batch-search").addEventListener("input", renderChapterBatchDialog);
 $("#chapter-batch-select-all").addEventListener("click", () => {
   const searchQuery = $("#chapter-batch-search").value.trim().toLocaleLowerCase("zh-CN");

@@ -1211,6 +1211,16 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .send({ content: "越权修改。" })
       .expect(403);
     expect(chapterWrite.body.error.code).toBe("WORK_EDIT_DENIED");
+    const renumberBody = {
+      chapters: [{ id: chapter.body.data.id, expectedVersionNo: 1 }],
+      action: { type: "renumberTitles", template: "第{n}章", numberStyle: "chinese", startAt: 1 }
+    };
+    await owner.agent.post(`/api/works/${workId}/chapters/batch`).send(renumberBody).expect(403);
+    const renumberDenied = await viewer.agent.post(`/api/works/${workId}/chapters/batch`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send(renumberBody)
+      .expect(403);
+    expect(renumberDenied.body.error.code).toBe("WORK_EDIT_DENIED");
     await viewer.agent.post(`/api/works/${workId}/settings`)
       .set("X-CSRF-Token", viewer.csrfToken)
       .send({ title: "越权设定", category: "世界规则", content: "不应创建。" })
