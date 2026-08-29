@@ -29,11 +29,14 @@ describe("角色别名标签", () => {
     expect(application).toContain("[data-keyword-chip-remove]");
     expect(application).toContain('data-name="${esc(name)}" data-remove-label="${esc(chipLabel)}"');
     expect(styles).toContain(".keyword-chip-field { min-width: 0; }");
+    expect(styles).toContain(".character-editor-section-fields > .keyword-chip-field");
+    expect(styles).toContain(".keyword-chip-field, .character-editor-section-fields > .structured-list-field");
     expect(styles).toContain(".keyword-chip-editor { display: flex; flex-wrap: wrap;");
     expect(styles).toContain("min-width: min(140px, 100%);");
     expect(styles).toContain("max-width: 100%; box-sizing: border-box; min-height: 28px;");
     expect(styles).toContain(".keyword-chip > span { min-width: 0; overflow-wrap: anywhere; }");
     expect(styles).toContain(".keyword-chip:hover button, .keyword-chip:focus-within button");
+    expect(page).toMatch(/styles\.css[^"]+feature=character-alias-chips-v2/u);
     expect(page).toMatch(/app\.js[^"]+feature=character-alias-chips-v2/u);
   });
 });
