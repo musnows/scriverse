@@ -11,11 +11,12 @@ import {
 import { exportWorkDocx } from "./docx-export.js";
 import { createEpubArchive } from "./epub-export.js";
 import { AppError, notFound } from "./errors.js";
-import { documentParagraphLineRanges, normalizeWorkSearchQuery, type HybridSearchType } from "./hybrid-search.js";
+import { documentParagraphLineRanges, hybridSearchPermissionModule, normalizeWorkSearchQuery, type HybridSearchType } from "./hybrid-search.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
 import {
+  canReadWorkModule,
   canWriteWorkModule,
   classifyWorkModulePermissions,
   emptyWorkModulePermissions,
@@ -166,13 +167,14 @@ export const WORK_AGENT_TOOL_IDS = [
   "read_chapters",
   "grep",
   "search_story_entities",
+  "semantic_search_story",
   "read_character_sections",
   "search_drafts",
   "image",
   "calculate_time"
 ] as const;
 export type WorkAgentToolId = (typeof WORK_AGENT_TOOL_IDS)[number];
-const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_TOOL_IDS];
+const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = WORK_AGENT_TOOL_IDS.filter((toolId) => toolId !== "semantic_search_story");
 const LEGACY_DEFAULT_WORK_AGENT_TOOLS = [
   "story_index",
   "read_chapters",
@@ -1942,6 +1944,18 @@ export class Store {
       titleGenerationModelId: row?.title_generation_model_id === null || row?.title_generation_model_id === undefined
         ? null
         : String(row.title_generation_model_id),
+      semanticSearchEnabled: Number(row?.semantic_search_enabled ?? 0) === 1,
+      semanticEmbeddingModelId: row?.semantic_embedding_model_id === null || row?.semantic_embedding_model_id === undefined
+        ? null
+        : String(row.semantic_embedding_model_id),
+      semanticRerankModelId: row?.semantic_rerank_model_id === null || row?.semantic_rerank_model_id === undefined
+        ? null
+        : String(row.semantic_rerank_model_id),
+      semanticVectorDimension: Math.min(65_536, Math.max(1, Number(row?.semantic_vector_dimension ?? 1_024) || 1_024)),
+      semanticRecallLimit: Math.min(200, Math.max(1, Number(row?.semantic_recall_limit ?? 20) || 20)),
+      semanticResultLimit: Math.min(100, Math.max(1, Number(row?.semantic_result_limit ?? 12) || 12)),
+      semanticBudgetTokens: Math.min(100_000, Math.max(256, Number(row?.semantic_budget_tokens ?? 4_000) || 4_000)),
+      semanticChannelWeight: Math.min(5, Math.max(0.1, Number(row?.semantic_channel_weight ?? 1) || 1)),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
@@ -2069,6 +2083,119 @@ export class Store {
       titleGenerationModelId: nextTitleGenerationModelId
     });
     return this.getWorkAiSettings(workId);
+  }
+
+  updateWorkSemanticSearchSettings(workId: string, input: {
+    enabled?: boolean;
+    embeddingModelId?: string | null;
+    rerankModelId?: string | null;
+    vectorDimension?: number;
+    recallLimit?: number;
+    resultLimit?: number;
+    budgetTokens?: number;
+    channelWeight?: number;
+  }): Record<string, unknown> {
+    this.getWork(workId);
+    const current = this.getWorkAiSettings(workId);
+    const enabled = input.enabled ?? Boolean(current.semanticSearchEnabled);
+    const embeddingModelId = input.embeddingModelId === undefined
+      ? current.semanticEmbeddingModelId ? String(current.semanticEmbeddingModelId) : null
+      : input.embeddingModelId?.trim() || null;
+    const rerankModelId = input.rerankModelId === undefined
+      ? current.semanticRerankModelId ? String(current.semanticRerankModelId) : null
+      : input.rerankModelId?.trim() || null;
+    const vectorDimension = Math.min(65_536, Math.max(1, Math.trunc(input.vectorDimension ?? Number(current.semanticVectorDimension))));
+    const recallLimit = Math.min(200, Math.max(1, Math.trunc(input.recallLimit ?? Number(current.semanticRecallLimit))));
+    const resultLimit = Math.min(100, Math.max(1, Math.trunc(input.resultLimit ?? Number(current.semanticResultLimit))));
+    const budgetTokens = Math.min(100_000, Math.max(256, Math.trunc(input.budgetTokens ?? Number(current.semanticBudgetTokens))));
+    const channelWeight = Math.min(5, Math.max(0.1, Number(input.channelWeight ?? current.semanticChannelWeight)));
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO work_ai_settings (
+           work_id, semantic_search_enabled, semantic_embedding_model_id, semantic_rerank_model_id,
+           semantic_vector_dimension, semantic_recall_limit, semantic_result_limit,
+           semantic_budget_tokens, semantic_channel_weight, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(work_id) DO UPDATE SET
+           semantic_search_enabled = excluded.semantic_search_enabled,
+           semantic_embedding_model_id = excluded.semantic_embedding_model_id,
+           semantic_rerank_model_id = excluded.semantic_rerank_model_id,
+           semantic_vector_dimension = excluded.semantic_vector_dimension,
+           semantic_recall_limit = excluded.semantic_recall_limit,
+           semantic_result_limit = excluded.semantic_result_limit,
+           semantic_budget_tokens = excluded.semantic_budget_tokens,
+           semantic_channel_weight = excluded.semantic_channel_weight,
+           updated_at = excluded.updated_at`,
+        workId,
+        enabled ? 1 : 0,
+        embeddingModelId,
+        rerankModelId,
+        vectorDimension,
+        recallLimit,
+        resultLimit,
+        budgetTokens,
+        channelWeight,
+        timestamp
+      );
+      this.audit(workId, "semantic.settings.updated", "work-ai-settings", workId, {
+        enabled,
+        embeddingModelId,
+        rerankModelId,
+        vectorDimension,
+        recallLimit,
+        resultLimit,
+        budgetTokens,
+        channelWeight
+      });
+    });
+    return this.getWorkAiSettings(workId);
+  }
+
+  getSemanticContextSnapshot(snapshotId: string, workId: string): Record<string, unknown> {
+    const work = this.getWork(workId);
+    const row = this.db.get("SELECT * FROM semantic_context_snapshots WHERE id = ? AND work_id = ?", snapshotId, workId);
+    if (!row) throw notFound("语义上下文快照");
+    const actor = currentRequestActor();
+    const createdByUserId = row.created_by_user_id === null || row.created_by_user_id === undefined
+      ? null
+      : String(row.created_by_user_id);
+    if (actor?.userId && createdByUserId && actor.userId !== createdByUserId) {
+      throw new AppError(403, "SEMANTIC_SNAPSHOT_ACCESS_DENIED", "不能读取其他用户创建的语义上下文快照");
+    }
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    const items = this.db.all(
+      "SELECT * FROM semantic_context_snapshot_items WHERE snapshot_id = ? ORDER BY position",
+      snapshotId
+    ).flatMap((item) => {
+      const module = hybridSearchPermissionModule(String(item.source_type));
+      if (!module || !canReadWorkModule(permissions, module)) return [];
+      return [{
+        position: Number(item.position),
+        entryId: String(item.entry_id),
+        sourceType: String(item.source_type),
+        sourceId: String(item.source_id),
+        sectionId: String(item.section_id) || null,
+        sourceVersion: String(item.source_version),
+        sourceTitle: String(item.source_title),
+        startLine: Number(item.start_line),
+        endLine: Number(item.end_line),
+        content: String(item.content),
+        estimatedTokens: Number(item.estimated_tokens),
+        matchKinds: json<string[]>(String(item.match_kinds_json), ["semantic"])
+      }];
+    });
+    return {
+      id: String(row.id),
+      workId: String(row.work_id),
+      conversationId: row.conversation_id === null ? null : String(row.conversation_id),
+      query: String(row.query),
+      scope: json<Record<string, unknown>>(String(row.scope_json), {}),
+      configFingerprint: String(row.config_fingerprint),
+      createdByUserId,
+      createdAt: String(row.created_at),
+      items
+    };
   }
 
   clearAutoRunPause(workId: string): Record<string, unknown> {

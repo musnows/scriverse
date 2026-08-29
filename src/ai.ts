@@ -15,6 +15,8 @@ import {
   parseCompletionPayload,
   parseProviderModelListPage,
   providerCompletionEndpoint,
+  providerEmbeddingEndpoint,
+  providerLegacyCompletionEndpoint,
   providerModelListPageEndpoint,
   providerModelEndpoints,
   providerProtocolLabelText,
@@ -94,6 +96,7 @@ import {
   buildHybridSearchSnippet,
   documentParagraphLineRangesFromLines,
   fuseHybridSearchChannels,
+  hybridSearchPermissionModule,
   normalizeWorkSearchQuery,
   type DocumentParagraphLineRange,
   type HybridSearchCandidate,
@@ -118,6 +121,21 @@ import {
   type RoleplayMemoryCandidate
 } from "./roleplay-memory.js";
 import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
+import {
+  DEFAULT_SEMANTIC_CHUNK_MAXIMUM_CHARACTERS,
+  SEMANTIC_CHUNK_RULE_VERSION,
+  SEMANTIC_SOURCE_TYPES,
+  fuseSemanticSearchResults,
+  parseEmbeddingResponse,
+  parseRerankCompletion,
+  rankSemanticVectors,
+  semanticConfigurationFingerprint,
+  splitSemanticDocument,
+  type SearchChannelResult,
+  type SemanticSourceDocument,
+  type SemanticSourceType,
+  type SemanticVectorEntry
+} from "./semantic-search.js";
 import { buildWritingCalendar, buildWritingMonthCalendar, formatServerLocalClock, resolveServerTimeZone } from "./writing-progress-time.js";
 import {
   RELATIONSHIP_SEARCH_POLICY_VERSION,
@@ -153,9 +171,13 @@ type ProviderInput = {
   monthlyTokenQuota?: number | null;
 };
 
+export const AI_MODEL_KINDS = ["chat", "embedding", "rerank"] as const;
+export type AiModelKind = (typeof AI_MODEL_KINDS)[number];
+
 type ModelInput = {
   displayName: string;
   modelId: string;
+  modelKind?: AiModelKind;
   purposes?: string[];
   contextNote?: string;
   contextWindow?: number;
@@ -426,7 +448,28 @@ type ModelRow = Row & {
   provider_id: string;
   display_name: string;
   model_id: string;
+  model_kind?: string;
   enabled: number;
+};
+
+type ResolvedSemanticConfiguration = {
+  settings: Record<string, unknown>;
+  model: ModelRow;
+  provider: ProviderRow;
+  rerankModel: ModelRow | null;
+  rerankProvider: ProviderRow | null;
+  vectorDimension: number;
+  fingerprint: string;
+};
+
+type SemanticSearchOptions = {
+  allowedTypes?: readonly SemanticSourceType[];
+  types?: readonly SemanticSourceType[];
+  limit?: number;
+  includeKeyword?: boolean;
+  conversationOwnerUserId?: string;
+  currentChapterId?: string;
+  selection?: string;
 };
 
 export type ChatImageAttachment = {
@@ -763,6 +806,11 @@ function providerProtocol(provider: Row): AiProviderProtocol {
   throw new AppError(500, "INVALID_PROVIDER_PROTOCOL", `不支持的供应商协议：${value || "(empty)"}`);
 }
 
+function modelKind(model: Row): AiModelKind {
+  const value = stringValue(model, "model_kind") || "chat";
+  return (AI_MODEL_KINDS as readonly string[]).includes(value) ? value as AiModelKind : "chat";
+}
+
 function providerThinkingType(provider: Row): AiThinkingType {
   const value = stringValue(provider, "thinking_type");
   return (AI_THINKING_TYPES as readonly string[]).includes(value) ? value as AiThinkingType : "enabled";
@@ -826,7 +874,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
   return { thinking: { type: thinkingEnabled ? thinkingType : "disabled" }, ...effortParameters };
 }
 
-const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"] as const;
+const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "semantic_search_story", "read_character_sections", "search_drafts", "image", "calculate_time"] as const;
 // 可写类交互工具不进入 CONFIGURED 列表：它们不走 agentTools 开关，
 // 由作品设置页的 work_ai_tool_settings 单独开关（默认全关）。
 const INTERACTIVE_AGENT_TOOL_IDS = ["propose_write_plan", "ask_user_question"] as const;
@@ -844,7 +892,7 @@ const AGENT_TOOL_IDS = [
 ] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type ConfiguredAgentToolId = (typeof CONFIGURED_AGENT_TOOL_IDS)[number];
-const AGENT_TOOL_READ_MODULES: Record<Exclude<ConfiguredAgentToolId, "search_story_entities">, readonly WorkPermissionModule[]> = {
+const AGENT_TOOL_READ_MODULES: Record<Exclude<ConfiguredAgentToolId, "search_story_entities" | "semantic_search_story">, readonly WorkPermissionModule[]> = {
   story_index: ["prose"],
   read_chapters: ["prose"],
   grep: ["prose"],
@@ -853,6 +901,16 @@ const AGENT_TOOL_READ_MODULES: Record<Exclude<ConfiguredAgentToolId, "search_sto
   image: ["settings"],
   calculate_time: []
 };
+const SEMANTIC_AGENT_MODULE_TYPES = {
+  prose: ["chapter"],
+  settings: ["setting"],
+  characters: ["character"],
+  races: ["race"],
+  organizations: ["organization"],
+  timeline: ["timeline-track", "timeline-event"],
+  relationships: ["relationship"],
+  outlines: ["chapter-outline", "foreshadow"]
+} as const satisfies Record<string, readonly SemanticSourceType[]>;
 const IMAGE_TOOL_READ_MODULES: readonly WorkPermissionModule[] = [
   "settings",
   "characters",
@@ -1330,6 +1388,10 @@ function resolvedQuestionToolMessages(continuation: QuestionToolContinuation): C
 }
 
 const MAX_AGENT_TOOL_CALLS = 12;
+const SEMANTIC_EMBEDDING_BATCH_SIZE = 16;
+const SEMANTIC_RERANK_CANDIDATE_LIMIT = 8;
+const SEMANTIC_FAILURE_PAUSE_THRESHOLD = 3;
+const SEMANTIC_REQUEST_TIMEOUT_MS = 60_000;
 const TOOL_CONTEXT_COMPACT_MAX_TOKENS = 1_024;
 const TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS = MIN_OUTPUT_RESERVE_TOKENS;
 const IMAGE_TOOL_MAX_BYTES = 30 * 1024 * 1024;
@@ -1355,6 +1417,12 @@ const searchStoryEntitiesArguments = z.object({
   categories: z.array(z.enum(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"])).max(8).default([]),
   includePhonetic: z.boolean().default(false),
   limit: z.number().int().min(1).max(30).default(30),
+  cursor: agentToolCursor
+}).strict();
+const semanticSearchStoryArguments = z.object({
+  query: z.string().trim().min(1).max(2_000),
+  modules: z.array(z.enum(["prose", "settings", "characters", "races", "organizations", "timeline", "relationships", "outlines"])).max(8).default([]),
+  limit: z.number().int().min(1).max(30).default(12),
   cursor: agentToolCursor
 }).strict();
 const readCharacterSectionsArguments = z.object({
@@ -1461,6 +1529,24 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
       name: "search_story_entities",
       description: "按短关键词在结构化作品实体中进行元数据与精确全文检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。默认不查询拼音索引；只有中文实体可能存在同音字或错别字且精确检索无结果时，才设置 includePhonetic=true。拼音索引极其缓慢，必须谨慎使用。人物结果包含权威 gender 字段：male 表示男/雄性，female 表示女/雌性，none 表示无性别，unknown 表示未知；gender=unknown 时禁止根据正文或常识自行推断。人物、种族、组织结果还分别包含权威布尔状态 isDead、isExtinct、isDissolved；只有值为 true 才能判定该角色已死亡、该种族已灭绝或该组织已解散，字段为 false 时必须视为仍存活、未灭绝或未解散，禁止根据正文情节自行改判。时间线事件结果返回 trackId、timeSort、chapterIds、chapterStoryOrders 与 orderEligible；只有 orderEligible=true 的事件才可参与同轨道时间比较。不是语义问答；请传入实体名、别名、标题或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时先改用更短关键词，再按需谨慎启用拼音索引，或改用 story_index / grep。",
       parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: MAXIMUM_WORK_SEARCH_QUERY_LENGTH }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 }, includePhonetic: { type: "boolean", default: false, description: "是否启用极其缓慢的拼音索引。默认关闭；仅在同音字或错别字检索确有必要时谨慎开启。" }, limit: { type: "integer", minimum: 1, maximum: 30, default: 30 }, cursor: agentToolCursorParameter }, required: ["query"], additionalProperties: false }
+    }
+  },
+  semantic_search_story: {
+    type: "function",
+    function: {
+      name: "semantic_search_story",
+      description: "只读语义检索当前作品原文。仅在需要用自然语言整句查找正文、设定、人物 Markdown 档案、种族、组织、时间线、关系、大纲或伏笔时显式调用；返回来源 ID、来源版本、档案章节 ID、原文行号、semantic 匹配标记与相关性。不会修改任何作品内容、索引来源实体或会话固定上下文；索引未就绪或通道失败时会明确返回降级状态与关键词结果。不要把 semantic 结果伪装成关键词命中。",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", minLength: 1, maxLength: 2_000, description: "自然语言整句查询。" },
+          modules: { type: "array", items: { type: "string", enum: ["prose", "settings", "characters", "races", "organizations", "timeline", "relationships", "outlines"] }, maxItems: 8, description: "可选的可读模块筛选；留空表示全部可读模块。" },
+          limit: { type: "integer", minimum: 1, maximum: 30, default: 12 },
+          cursor: agentToolCursorParameter
+        },
+        required: ["query"],
+        additionalProperties: false
+      }
     }
   },
   read_character_sections: {
@@ -1972,6 +2058,7 @@ const providerConnectivityConfigurationFields = [
 const modelConnectivityConfigurationFields = [
   "display_name",
   "model_id",
+  "model_kind",
   "purposes_json",
   "context_note",
   "context_window",
@@ -2595,6 +2682,42 @@ export class ContextBuilder {
       ));
     }
 
+    if (scope.semanticSnapshotId) {
+      const snapshot = this.store.getSemanticContextSnapshot(scope.semanticSnapshotId, workId);
+      const sourceItems = Array.isArray(snapshot.items) ? snapshot.items as Record<string, unknown>[] : [];
+      const merged: Record<string, unknown>[] = [];
+      const seen = new Set<string>();
+      for (const item of sourceItems) {
+        const key = `${String(item.sourceType)}:${String(item.sourceId)}:${String(item.sectionId ?? "")}:${Number(item.startLine)}:${Number(item.endLine)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const previous = merged.at(-1);
+        if (previous
+          && String(previous.sourceType) === String(item.sourceType)
+          && String(previous.sourceId) === String(item.sourceId)
+          && String(previous.sectionId ?? "") === String(item.sectionId ?? "")
+          && Number(item.startLine) <= Number(previous.endLine) + 1) {
+          previous.endLine = Math.max(Number(previous.endLine), Number(item.endLine));
+          previous.content = `${String(previous.content)}\n${String(item.content)}`;
+          continue;
+        }
+        merged.push({ ...item });
+      }
+      if (merged.length > 0) {
+        for (const item of merged) {
+          contentSections.push(wrapAiContextRegion(
+            "semantic",
+            [
+              `用户主动语义检索快照（查询：${String(snapshot.query)}；快照 ID：${String(snapshot.id)}）：`,
+              "以下均为可追溯原文，不得用摘要替代或改写权威状态。",
+              `[${String(item.sourceType)}:${String(item.sourceId)}${item.sectionId ? ` / section:${String(item.sectionId)}` : ""} | 版本 ${String(item.sourceVersion)} | 行 ${Number(item.startLine)}-${Number(item.endLine)}] ${String(item.sourceTitle)}`,
+              String(item.content)
+            ].join("\n\n")
+          ));
+        }
+      }
+    }
+
     if (scope.includeBookSummary || scope.type === "book" || scope.type === "volume") {
       this.appendBookSummary(
         contentSections,
@@ -2711,7 +2834,7 @@ export class ContextBuilder {
     }
     const sections: ContextSection[] = contentSections.map((text, order) => {
       const required = /^(?:<(?:selection|referenced_chapters|settings_analysis)>|<chapter>\n(?:当前章节|所在章节)|当前选中文本|当前章节|所在章节|作者主动引用的章节|待分析设定)/u.test(text);
-      const summary = /<book_summary>|章节概要（/u.test(text);
+      const summary = /<book_summary>|<semantic>|章节概要（/u.test(text);
       return {
         id: `context-${order}`,
         text,
@@ -2912,6 +3035,8 @@ export class AiManager {
   private readonly relationshipSelectionCache = new Map<string, RelationshipLocalSourceSelection>();
   private readonly relationshipSelectionBuilds = new Map<string, Promise<RelationshipLocalSourceSelection>>();
   private readonly relationshipIndexSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly semanticIndexBuilds = new Map<string, Promise<Record<string, unknown>>>();
+  private readonly semanticIndexSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private relationshipIndexSerial: Promise<void> = Promise.resolve();
   private relationshipIndexTimer: ReturnType<typeof setTimeout> | null = null;
   private relationshipIndexDisposed = false;
@@ -2972,10 +3097,16 @@ export class AiManager {
       this.autoRunStartupTimer = null;
       for (const workId of this.store.listAutoRunWorkIds()) this.scheduleAutoRun(workId);
     }, 0);
-    this.store.setRelationshipIndexQueuedHandler((workId) => this.scheduleRelationshipIndexSync(workId));
+    this.store.setRelationshipIndexQueuedHandler((workId) => {
+      this.scheduleRelationshipIndexSync(workId);
+      this.scheduleSemanticIndexSync(workId);
+    });
     this.relationshipIndexTimer = setTimeout(() => {
       this.relationshipIndexTimer = null;
-      void this.schedulePendingRelationshipIndexes();
+      void Promise.allSettled([
+        this.schedulePendingRelationshipIndexes(),
+        this.schedulePendingSemanticIndexes()
+      ]);
     }, 0);
     logger.info("ai.manager.ready", {
       interactiveStreamIdleTimeoutMs: this.interactiveStreamIdleTimeoutMs,
@@ -3668,6 +3799,22 @@ export class AiManager {
       modelId: usage.modelId,
       estimatedCost: estimateLiteLlmUsageCost([usage], priceTable).estimatedCost
     }));
+    const callTypes = this.store.db.all(
+      `SELECT
+         CASE WHEN call.task_type = 'embedding' THEN 'embedding' WHEN call.task_type = 'rerank' THEN 'rerank' ELSE 'chat' END AS call_type,
+         COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
+         COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
+         COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
+         COALESCE(SUM(call.cache_write_input_tokens), 0) AS cache_write_input_tokens,
+         COALESCE(SUM(call.cache_eligible_input_tokens), 0) AS cache_eligible_input_tokens,
+         COUNT(*) AS request_count,
+         COALESCE(SUM(CASE WHEN call.token_usage_source = 'reported' THEN 0 ELSE 1 END), 0) AS estimated_request_count
+       FROM ai_calls call
+       JOIN works work ON work.id = call.work_id
+       WHERE COALESCE(work.is_internal, 0) = 0 AND ${usageFilter}${scopeSql}
+       GROUP BY call_type ORDER BY call_type`,
+      ...scopeParams
+    ).map((row) => this.mapTokenUsageRow(row, { callType: stringValue(row, "call_type") }));
     const works = includeWorks
       ? this.store.db.all(
         `SELECT
@@ -3701,6 +3848,7 @@ export class AiManager {
         ...pricing
       }),
       models,
+      callTypes,
       daily,
       ...(works ? { works } : {}),
       timezoneOffset
@@ -3792,6 +3940,9 @@ export class AiManager {
     const relationshipIndexTimer = this.relationshipIndexSyncTimers.get(workId);
     if (relationshipIndexTimer) clearTimeout(relationshipIndexTimer);
     this.relationshipIndexSyncTimers.delete(workId);
+    const semanticIndexTimer = this.semanticIndexSyncTimers.get(workId);
+    if (semanticIndexTimer) clearTimeout(semanticIndexTimer);
+    this.semanticIndexSyncTimers.delete(workId);
     for (const taskId of taskIds) {
       this.taskControllers.get(taskId)?.abort(new Error("作品已移入回收站"));
     }
@@ -3817,6 +3968,8 @@ export class AiManager {
     this.relationshipIndexDisposed = true;
     for (const timer of this.relationshipIndexSyncTimers.values()) clearTimeout(timer);
     this.relationshipIndexSyncTimers.clear();
+    for (const timer of this.semanticIndexSyncTimers.values()) clearTimeout(timer);
+    this.semanticIndexSyncTimers.clear();
     if (this.relationshipIndexTimer) clearTimeout(this.relationshipIndexTimer);
     this.relationshipIndexTimer = null;
     this.store.setAnalysisTaskQueuedHandler(null);
@@ -4059,6 +4212,47 @@ export class AiManager {
     if (!message?.content?.trim() && !message?.reasoning_content?.trim()) {
       throw new Error(`${providerProtocolLabelText(protocol)} 响应缺少可用回复`);
     }
+  }
+
+  private async probeSemanticProviderModel(row: ProviderRow, accessToken: string, model: ModelRow, signal: AbortSignal): Promise<void> {
+    const kind = modelKind(model);
+    if (kind === "embedding") {
+      this.semanticProviderProtocol(row, "embedding");
+      const response = await this.outboundFetchWithRetry(providerEmbeddingEndpoint(stringValue(row, "base_url")), {
+        method: "POST",
+        headers: providerRequestHeaders(providerProtocol(row), accessToken, "application/json"),
+        body: JSON.stringify({ model: stringValue(model, "model_id"), input: ["连接测试"] }),
+        signal
+      });
+      const body = await readResponseTextLimited(response);
+      if (!response.ok) throw new Error(`Embedding provider returned HTTP ${response.status}`);
+      const payload = JSON.parse(body) as { data?: Array<{ embedding?: unknown[] }> };
+      const embedding = payload.data?.[0]?.embedding;
+      if (!Array.isArray(embedding) || embedding.length === 0 || embedding.some((value) => !Number.isFinite(Number(value)))) {
+        throw new Error("Embedding provider returned an invalid vector");
+      }
+      return;
+    }
+    if (kind === "rerank") {
+      this.semanticProviderProtocol(row, "rerank");
+      const response = await this.outboundFetchWithRetry(providerLegacyCompletionEndpoint(stringValue(row, "base_url")), {
+        method: "POST",
+        headers: providerRequestHeaders(providerProtocol(row), accessToken, "application/json"),
+        body: JSON.stringify({
+          model: stringValue(model, "model_id"),
+          prompt: "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be yes or no.<|im_end|>\n<|im_start|>user\n<Instruct>: Retrieve a relevant passage\n<Query>: connection test\n<Document>: connection test<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+          temperature: 0,
+          max_tokens: 1,
+          stream: false
+        }),
+        signal
+      });
+      const body = await readResponseTextLimited(response);
+      if (!response.ok) throw new Error(`Rerank provider returned HTTP ${response.status}`);
+      parseRerankCompletion(JSON.parse(body) as unknown);
+      return;
+    }
+    await this.probeProviderModel(row, accessToken, model, signal);
   }
 
   createProvider(input: ProviderInput): Record<string, unknown> {
@@ -4439,7 +4633,8 @@ export class AiManager {
           ? "AI 供应商没有返回可用模型，请先添加模型后再测试连接"
           : `${lastFailure}；也可先添加模型后再测试连接`);
       }
-      await this.probeProviderModel(row, accessToken, probeModel, controller.signal);
+      if (typeof probeModel === "string") await this.probeProviderModel(row, accessToken, probeModel, controller.signal);
+      else await this.probeSemanticProviderModel(row, accessToken, probeModel, controller.signal);
       const cooldown = this.connectivityTestGate.complete(claim, "success", {
         isConfigurationCurrent: () => {
           try {
@@ -4513,13 +4708,50 @@ export class AiManager {
     const timeout = setTimeout(() => controller.abort(), AI_INTERACTIVE_TIMEOUT_MS);
     const startedAt = process.hrtime.bigint();
     const protocol = providerProtocol(provider);
-    const multimodalTested = boolValue(model, "multimodal_enabled") && supportsMultimodalProviderProtocol(provider);
+    const testedModelKind = modelKind(model);
+    const multimodalTested = testedModelKind === "chat" && boolValue(model, "multimodal_enabled") && supportsMultimodalProviderProtocol(provider);
+    let vectorDimension: number | null = null;
     let credentialSecret = "";
     let accessToken = "";
     logger.info("ai.model_test.started", { modelId, providerId });
     try {
       ({ accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider));
-      await this.probeProviderModel(provider, accessToken, model, controller.signal, { multimodal: multimodalTested });
+      if (testedModelKind === "embedding") {
+        this.semanticProviderProtocol(provider, "embedding");
+        const response = await this.outboundFetchWithRetry(providerEmbeddingEndpoint(stringValue(provider, "base_url")), {
+          method: "POST",
+          headers: providerRequestHeaders(protocol, accessToken, "application/json"),
+          body: JSON.stringify({ model: stringValue(model, "model_id"), input: ["连接测试"] }),
+          signal: controller.signal
+        });
+        const body = await readResponseTextLimited(response);
+        if (!response.ok) throw new Error(`Embedding provider returned HTTP ${response.status}`);
+        const payload = JSON.parse(body) as { data?: Array<{ embedding?: unknown[] }> };
+        const embedding = payload.data?.[0]?.embedding;
+        if (!Array.isArray(embedding) || embedding.length === 0 || embedding.length > 65_536 || embedding.some((value) => !Number.isFinite(Number(value)))) {
+          throw new Error("Embedding provider returned an invalid vector");
+        }
+        vectorDimension = embedding.length;
+      } else if (testedModelKind === "rerank") {
+        this.semanticProviderProtocol(provider, "rerank");
+        const response = await this.outboundFetchWithRetry(providerLegacyCompletionEndpoint(stringValue(provider, "base_url")), {
+          method: "POST",
+          headers: providerRequestHeaders(protocol, accessToken, "application/json"),
+          body: JSON.stringify({
+            model: stringValue(model, "model_id"),
+            prompt: "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be yes or no.<|im_end|>\n<|im_start|>user\n<Instruct>: Retrieve a relevant passage\n<Query>: connection test\n<Document>: connection test<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+            temperature: 0,
+            max_tokens: 1,
+            stream: false
+          }),
+          signal: controller.signal
+        });
+        const body = await readResponseTextLimited(response);
+        if (!response.ok) throw new Error(`Rerank provider returned HTTP ${response.status}`);
+        parseRerankCompletion(JSON.parse(body) as unknown);
+      } else {
+        await this.probeProviderModel(provider, accessToken, model, controller.signal, { multimodal: multimodalTested });
+      }
       const cooldown = this.connectivityTestGate.complete(claim, "success", {
         isConfigurationCurrent: () => {
           try {
@@ -4548,7 +4780,7 @@ export class AiManager {
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
       });
       return this.attachPrivateNetworkHint(
-        { ok: true, multimodalTested, cooldown, model: this.getModel(modelId), provider: this.getProvider(providerId) },
+        { ok: true, modelKind: testedModelKind, multimodalTested, vectorDimension, cooldown, model: this.getModel(modelId), provider: this.getProvider(providerId) },
         stringValue(provider, "base_url")
       );
     } catch (error) {
@@ -4596,8 +4828,15 @@ export class AiManager {
     const provider = this.getProviderRow(providerId);
     const modelId = id("model");
     const timestamp = now();
+    const nextModelKind = input.modelKind ?? "chat";
     const multimodalEnabled = input.multimodalEnabled ?? false;
     const enabled = input.enabled ?? true;
+    if (nextModelKind !== "chat" && multimodalEnabled) {
+      throw new AppError(400, "MODEL_KIND_MULTIMODAL_UNSUPPORTED", "Embedding 与 rerank 模型不能启用多模态能力");
+    }
+    if (nextModelKind !== "chat" && input.imageToolDefault) {
+      throw new AppError(400, "MODEL_KIND_IMAGE_TOOL_UNSUPPORTED", "只有 chat 模型才能设为默认读图模型");
+    }
     if (multimodalEnabled && !supportsMultimodalProviderProtocol(provider)) {
       throw new AppError(400, "MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED", "当前接口协议不支持多模态模型");
     }
@@ -4612,13 +4851,14 @@ export class AiManager {
     }
     this.store.db.transaction(() => {
       this.store.db.run(
-        `INSERT INTO models (id, provider_id, display_name, model_id, purposes_json, context_note, context_window, output_note,
-         preset_json, thinking_enabled, thinking_effort, multimodal_enabled, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO models (id, provider_id, display_name, model_id, model_kind, purposes_json, context_note, context_window, output_note,
+         preset_json, thinking_enabled, thinking_effort, multimodal_enabled, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         modelId,
         providerId,
         input.displayName,
         input.modelId,
-        JSON.stringify(input.purposes ?? []),
+        nextModelKind,
+        JSON.stringify(nextModelKind === "chat" ? input.purposes ?? [] : []),
         input.contextNote ?? "",
         input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
         input.outputNote ?? "",
@@ -4684,8 +4924,24 @@ export class AiManager {
     return this.store.db.all(
       `SELECT m.*, p.name AS provider_name, p.status AS provider_status, p.connection_status AS provider_connection_status
        FROM models m JOIN providers p ON p.id = m.provider_id
-       WHERE p.work_id = ? AND p.status = 'enabled' AND p.connection_status = 'success' AND m.enabled = 1
+       WHERE p.work_id = ? AND p.status = 'enabled' AND p.connection_status = 'success' AND m.enabled = 1 AND m.model_kind = 'chat'
        ORDER BY p.created_at, m.created_at`,
+      PLATFORM_AI_WORK_ID
+    ).map((row) => ({
+      ...this.mapModel(row),
+      providerName: stringValue(row, "provider_name"),
+      providerStatus: stringValue(row, "provider_status"),
+      providerConnectionStatus: stringValue(row, "provider_connection_status")
+    }));
+  }
+
+  listWorkSemanticModels(workId: string): Record<string, unknown>[] {
+    this.store.getWork(workId);
+    return this.store.db.all(
+      `SELECT m.*, p.name AS provider_name, p.status AS provider_status, p.connection_status AS provider_connection_status
+       FROM models m JOIN providers p ON p.id = m.provider_id
+       WHERE p.work_id = ? AND m.model_kind IN ('embedding', 'rerank')
+       ORDER BY p.created_at, m.model_kind, m.created_at`,
       PLATFORM_AI_WORK_ID
     ).map((row) => ({
       ...this.mapModel(row),
@@ -4701,7 +4957,7 @@ export class AiManager {
     const rows = this.store.db.all(
       `SELECT m.*, p.name AS provider_name, p.status AS provider_status, p.connection_status AS provider_connection_status
        FROM models m JOIN providers p ON p.id = m.provider_id
-       WHERE p.work_id = ? AND p.status = 'enabled' AND p.connection_status = 'success' AND m.enabled = 1
+       WHERE p.work_id = ? AND p.status = 'enabled' AND p.connection_status = 'success' AND m.enabled = 1 AND m.model_kind = 'chat'
        ORDER BY p.created_at, m.created_at${page.sql}`,
       PLATFORM_AI_WORK_ID,
       ...page.params
@@ -4723,9 +4979,16 @@ export class AiManager {
     const row = this.getModelRow(modelId);
     const provider = this.getProviderRow(stringValue(row, "provider_id"));
     const nextModelId = input.modelId ?? stringValue(row, "model_id");
+    const nextModelKind = input.modelKind ?? modelKind(row);
     const preset = normalizeModelPreset(input.preset ?? safeJsonObject(stringValue(row, "preset_json")), nextModelId);
     const multimodalEnabled = input.multimodalEnabled ?? boolValue(row, "multimodal_enabled");
     const enabled = input.enabled ?? boolValue(row, "enabled");
+    if (nextModelKind !== "chat" && multimodalEnabled) {
+      throw new AppError(400, "MODEL_KIND_MULTIMODAL_UNSUPPORTED", "Embedding 与 rerank 模型不能启用多模态能力");
+    }
+    if (nextModelKind !== "chat" && input.imageToolDefault) {
+      throw new AppError(400, "MODEL_KIND_IMAGE_TOOL_UNSUPPORTED", "只有 chat 模型才能设为默认读图模型");
+    }
     if (multimodalEnabled && !supportsMultimodalProviderProtocol(provider)) {
       throw new AppError(400, "MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED", "当前接口协议不支持多模态模型");
     }
@@ -4737,11 +5000,12 @@ export class AiManager {
     }
     this.store.db.transaction(() => {
       this.store.db.run(
-        `UPDATE models SET display_name = ?, model_id = ?, purposes_json = ?, context_note = ?, context_window = ?, output_note = ?,
+        `UPDATE models SET display_name = ?, model_id = ?, model_kind = ?, purposes_json = ?, context_note = ?, context_window = ?, output_note = ?,
          preset_json = ?, thinking_enabled = ?, thinking_effort = ?, multimodal_enabled = ?, enabled = ?, note = ?, updated_at = ? WHERE id = ?`,
         input.displayName ?? stringValue(row, "display_name"),
         nextModelId,
-        JSON.stringify(input.purposes ?? json(stringValue(row, "purposes_json"), [])),
+        nextModelKind,
+        JSON.stringify(nextModelKind === "chat" ? input.purposes ?? json(stringValue(row, "purposes_json"), []) : []),
         input.contextNote ?? stringValue(row, "context_note"),
         input.contextWindow ?? (numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW),
         input.outputNote ?? stringValue(row, "output_note"),
@@ -4754,7 +5018,17 @@ export class AiManager {
         now(),
         modelId
       );
-      if (!multimodalEnabled || !enabled) this.clearImageToolModelReferences(modelId);
+      if (nextModelKind !== "chat") {
+        this.clearImageToolModelReferences(modelId);
+        this.store.db.run("DELETE FROM task_defaults WHERE model_id = ?", modelId);
+        this.store.db.run("UPDATE work_ai_settings SET title_generation_model_id = NULL WHERE title_generation_model_id = ?", modelId);
+      } else if (!multimodalEnabled || !enabled) this.clearImageToolModelReferences(modelId);
+      if (nextModelKind !== "embedding") {
+        this.store.db.run("UPDATE work_ai_settings SET semantic_embedding_model_id = NULL, semantic_search_enabled = 0 WHERE semantic_embedding_model_id = ?", modelId);
+      }
+      if (nextModelKind !== "rerank") {
+        this.store.db.run("UPDATE work_ai_settings SET semantic_rerank_model_id = NULL WHERE semantic_rerank_model_id = ?", modelId);
+      }
       if (input.imageToolDefault === true) this.setPlatformImageToolModel(modelId);
       else if (input.imageToolDefault === false) {
         this.store.db.run("UPDATE platform_ai_settings SET image_tool_model_id = NULL WHERE image_tool_model_id = ?", modelId);
@@ -4781,6 +5055,7 @@ export class AiManager {
     const model = this.getModelRow(modelId);
     const provider = this.getProviderRow(stringValue(model, "provider_id"));
     if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "模型不属于平台 AI 配置");
+    if (modelKind(model) !== "chat") throw new AppError(400, "MODEL_KIND_UNSUPPORTED", "Embedding 与 rerank 模型不能用于 AI 对话或分析任务");
     this.assertAvailable(provider, model);
     this.store.db.run(
       `INSERT INTO task_defaults (work_id, task_type, model_id) VALUES (?, ?, ?)
@@ -4798,6 +5073,7 @@ export class AiManager {
     if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) {
       throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "模型不属于平台 AI 配置");
     }
+    if (modelKind(model) !== "chat") throw new AppError(400, "MODEL_KIND_UNSUPPORTED", "Embedding 与 rerank 模型不能用于 AI 对话或分析任务");
     this.assertAvailable(provider, model);
   }
 
@@ -7215,7 +7491,7 @@ export class AiManager {
           ...directImageToolGuidance,
           ...(enabledToolIds.includes("calculate_time") ? ["涉及两个日期之间的天数差时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录、最新剧情、情节先后或章节定位优先调用 story_index，并严格按返回的 storyOrdering 与 storyOrder 判断顺序；story_index.latestChaptersByStructure 是不受当前分页影响的结构最新章节，若要遍历完整目录则在 nextOffset 非空时用该值作为 offset 继续调用。按关键字定位正文段落时调用 grep；以 grep.latestOccurrences.byStructure 判断关键词的结构最后出现位置，以 grep.latestOccurrences.byTimelineTrack 中同一 trackId 的最大 timeSort 判断倒叙时间，不能跨轨道比较。已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
+          "整体介绍、作品基本信息、目录、最新剧情、情节先后或章节定位优先调用 story_index，并严格按返回的 storyOrdering 与 storyOrder 判断顺序；story_index.latestChaptersByStructure 是不受当前分页影响的结构最新章节，若要遍历完整目录则在 nextOffset 非空时用该值作为 offset 继续调用。按关键字定位正文段落时调用 grep；以 grep.latestOccurrences.byStructure 判断关键词的结构最后出现位置，以 grep.latestOccurrences.byTimelineTrack 中同一 trackId 的最大 timeSort 判断倒叙时间，不能跨轨道比较。已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；需要用自然语言整句跨正文和设定库查找原文时，才显式调用 semantic_search_story，并保留其 semantic 来源标记；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -7767,6 +8043,9 @@ export class AiManager {
     if (toolId === "search_story_entities") {
       return Object.values(AGENT_ENTITY_CATEGORY_MODULES).some((module) => canReadWorkModule(permissions, module));
     }
+    if (toolId === "semantic_search_story") {
+      return Object.keys(SEMANTIC_AGENT_MODULE_TYPES).some((module) => canReadWorkModule(permissions, module as WorkPermissionModule));
+    }
     if (toolId === "image") return IMAGE_TOOL_READ_MODULES.some((module) => canReadWorkModule(permissions, module));
     if (toolId === "calculate_time") return true;
     return AGENT_TOOL_READ_MODULES[toolId].every((module) => canReadWorkModule(permissions, module));
@@ -8063,6 +8342,7 @@ export class AiManager {
       : name === "read_chapters" ? readChaptersArguments
       : name === "grep" ? grepArguments
       : name === "search_story_entities" ? searchStoryEntitiesArguments
+      : name === "semantic_search_story" ? semanticSearchStoryArguments
       : name === "read_character_sections" ? readCharacterSectionsArguments
       : name === "search_drafts" ? searchDraftsArguments
       : name === "image" ? imageArguments
@@ -8870,6 +9150,57 @@ export class AiManager {
         status: "completed",
         result
       };
+    }
+    if (name === "semantic_search_story") {
+      const { query, modules, limit, cursor } = args as z.infer<typeof semanticSearchStoryArguments>;
+      const readableTypes = this.readableSemanticSourceTypes(workId);
+      const requestedTypes = modules.length > 0
+        ? [...new Set(modules.flatMap((module) => SEMANTIC_AGENT_MODULE_TYPES[module]))]
+          .filter((type) => readableTypes.includes(type))
+        : readableTypes;
+      try {
+        const search = await this.semanticSearchStory(workId, query, {
+          allowedTypes: readableTypes,
+          types: requestedTypes,
+          limit,
+          includeKeyword: true
+        });
+        const matches = Array.isArray(search.results) ? search.results as Record<string, unknown>[] : [];
+        const records = structuralToolResultRecords(matches, maximumRecordChars);
+        const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+          ok: search.status === "ready" || search.status === "degraded",
+          data: {
+            query,
+            status: search.status,
+            semanticUsed: search.semanticUsed,
+            degraded: search.degraded,
+            reason: search.reason,
+            matches: page
+          },
+          pagination
+        }), maximumResultChars);
+        return {
+          id: toolCall.id,
+          name,
+          calledAt,
+          arguments: { query, modules, limit, ...(cursor > 0 ? { cursor } : {}) },
+          status: "completed",
+          result
+        };
+      } catch (error) {
+        return {
+          id: toolCall.id,
+          name,
+          calledAt,
+          arguments: { query, modules, limit, ...(cursor > 0 ? { cursor } : {}) },
+          status: "completed",
+          result: {
+            ok: false,
+            data: { query, status: "failed", semanticUsed: false, degraded: true, matches: [] },
+            error: { code: error instanceof AppError ? error.code : "SEMANTIC_SEARCH_FAILED", message: error instanceof Error ? error.message : "Semantic search failed" }
+          }
+        };
+      }
     }
     if (name === "read_character_sections") {
       const { sectionIds, include, cursor } = args as z.infer<typeof readCharacterSectionsArguments>;
@@ -11861,6 +12192,977 @@ export class AiManager {
     };
   }
 
+  private semanticProviderProtocol(provider: ProviderRow, kind: "embedding" | "rerank"): AiProviderProtocol {
+    const protocol = providerProtocol(provider);
+    if (protocol !== "openai-chat-completions" && protocol !== "openai-responses") {
+      throw new AppError(400, "SEMANTIC_PROVIDER_PROTOCOL_UNSUPPORTED", `${kind === "embedding" ? "Embedding" : "Rerank"} 模型必须使用 OpenAI-compatible 供应商协议`);
+    }
+    return protocol;
+  }
+
+  private resolveSemanticConfiguration(workId: string, requireEnabled = true): ResolvedSemanticConfiguration {
+    const settings = this.store.getWorkAiSettings(workId);
+    if (requireEnabled && settings.semanticSearchEnabled !== true) {
+      throw new AppError(409, "SEMANTIC_SEARCH_DISABLED", "当前作品尚未开启语义检索");
+    }
+    const embeddingModelId = typeof settings.semanticEmbeddingModelId === "string" ? settings.semanticEmbeddingModelId : "";
+    if (!embeddingModelId) throw new AppError(409, "SEMANTIC_EMBEDDING_MODEL_REQUIRED", "尚未配置 embedding 模型");
+    const model = this.getModelRow(embeddingModelId);
+    if (modelKind(model) !== "embedding") throw new AppError(400, "SEMANTIC_EMBEDDING_MODEL_INVALID", "所选模型不是 embedding 模型");
+    const provider = this.getProviderRow(stringValue(model, "provider_id"));
+    if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) {
+      throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "Embedding 模型不属于平台 AI 配置");
+    }
+    this.semanticProviderProtocol(provider, "embedding");
+    this.assertAvailable(provider, model);
+    const vectorDimension = Math.min(65_536, Math.max(1, Math.trunc(Number(settings.semanticVectorDimension) || 1_024)));
+    const rerankModelId = typeof settings.semanticRerankModelId === "string" ? settings.semanticRerankModelId : "";
+    let rerankModel: ModelRow | null = null;
+    let rerankProvider: ProviderRow | null = null;
+    if (rerankModelId) {
+      rerankModel = this.getModelRow(rerankModelId);
+      if (modelKind(rerankModel) !== "rerank") throw new AppError(400, "SEMANTIC_RERANK_MODEL_INVALID", "所选模型不是 rerank 模型");
+      rerankProvider = this.getProviderRow(stringValue(rerankModel, "provider_id"));
+      if (stringValue(rerankProvider, "work_id") !== PLATFORM_AI_WORK_ID) {
+        throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "Rerank 模型不属于平台 AI 配置");
+      }
+      this.semanticProviderProtocol(rerankProvider, "rerank");
+      this.assertAvailable(rerankProvider, rerankModel);
+    }
+    return {
+      settings,
+      model,
+      provider,
+      rerankModel,
+      rerankProvider,
+      vectorDimension,
+      fingerprint: semanticConfigurationFingerprint({
+        providerId: stringValue(provider, "id"),
+        baseUrl: stringValue(provider, "base_url"),
+        modelRecordId: stringValue(model, "id"),
+        modelId: stringValue(model, "model_id"),
+        vectorDimension,
+        chunkRuleVersion: SEMANTIC_CHUNK_RULE_VERSION,
+        chunkMaximumCharacters: DEFAULT_SEMANTIC_CHUNK_MAXIMUM_CHARACTERS
+      })
+    };
+  }
+
+  async updateSemanticSearchSettings(workId: string, input: {
+    enabled?: boolean;
+    embeddingModelId?: string | null;
+    rerankModelId?: string | null;
+    vectorDimension?: number;
+    recallLimit?: number;
+    resultLimit?: number;
+    budgetTokens?: number;
+    channelWeight?: number;
+  }): Promise<Record<string, unknown>> {
+    const current = this.store.getWorkAiSettings(workId);
+    const embeddingModelId = input.embeddingModelId === undefined
+      ? typeof current.semanticEmbeddingModelId === "string" ? current.semanticEmbeddingModelId : null
+      : input.embeddingModelId;
+    const rerankModelId = input.rerankModelId === undefined
+      ? typeof current.semanticRerankModelId === "string" ? current.semanticRerankModelId : null
+      : input.rerankModelId;
+    const enabled = input.enabled ?? Boolean(current.semanticSearchEnabled);
+    const validateModel = async (modelId: string, expectedKind: "embedding" | "rerank"): Promise<void> => {
+      const model = this.getModelRow(modelId);
+      if (modelKind(model) !== expectedKind) {
+        throw new AppError(400, expectedKind === "embedding" ? "SEMANTIC_EMBEDDING_MODEL_INVALID" : "SEMANTIC_RERANK_MODEL_INVALID", `所选模型不是 ${expectedKind} 模型`);
+      }
+      const provider = this.getProviderRow(stringValue(model, "provider_id"));
+      this.semanticProviderProtocol(provider, expectedKind);
+      if (enabled) this.assertAvailable(provider, model);
+      if (this.validateOutboundUrl) {
+        await this.validateOutboundUrl(expectedKind === "embedding"
+          ? providerEmbeddingEndpoint(stringValue(provider, "base_url"))
+          : providerLegacyCompletionEndpoint(stringValue(provider, "base_url")));
+      }
+    };
+    if (embeddingModelId) await validateModel(embeddingModelId, "embedding");
+    if (rerankModelId) await validateModel(rerankModelId, "rerank");
+    if (enabled && !embeddingModelId) throw new AppError(400, "SEMANTIC_EMBEDDING_MODEL_REQUIRED", "开启语义检索前必须选择 embedding 模型");
+    let previousFingerprint = "";
+    try {
+      previousFingerprint = this.resolveSemanticConfiguration(workId, false).fingerprint;
+    } catch {
+      previousFingerprint = "";
+    }
+    const updated = this.store.updateWorkSemanticSearchSettings(workId, input);
+    if (!updated.semanticSearchEnabled) {
+      this.store.db.run(
+        `INSERT INTO semantic_index_state(work_id, status, config_fingerprint, updated_at)
+         VALUES (?, 'disabled', '', ?) ON CONFLICT(work_id) DO UPDATE SET status = 'disabled', updated_at = excluded.updated_at`,
+        workId,
+        now()
+      );
+      return { ...updated, semanticIndex: this.getSemanticSearchIndexStatus(workId) };
+    }
+    const next = this.resolveSemanticConfiguration(workId);
+    const state = this.store.db.get("SELECT status, config_fingerprint FROM semantic_index_state WHERE work_id = ?", workId);
+    const changed = previousFingerprint !== next.fingerprint || String(state?.config_fingerprint ?? "") !== next.fingerprint;
+    this.store.db.run(
+      `INSERT INTO semantic_index_state(work_id, status, config_fingerprint, total_sources, processed_sources, failed_sources,
+         consecutive_failures, error, updated_at)
+       VALUES (?, 'idle', ?, 0, 0, 0, 0, '', ?)
+       ON CONFLICT(work_id) DO UPDATE SET
+         status = CASE WHEN ? THEN 'idle' WHEN semantic_index_state.status = 'disabled' THEN 'idle' ELSE semantic_index_state.status END,
+         config_fingerprint = excluded.config_fingerprint,
+         total_sources = CASE WHEN ? THEN 0 ELSE semantic_index_state.total_sources END,
+         processed_sources = CASE WHEN ? THEN 0 ELSE semantic_index_state.processed_sources END,
+         failed_sources = CASE WHEN ? THEN 0 ELSE semantic_index_state.failed_sources END,
+         consecutive_failures = CASE WHEN ? THEN 0 ELSE semantic_index_state.consecutive_failures END,
+         error = CASE WHEN ? THEN '' ELSE semantic_index_state.error END,
+         updated_at = excluded.updated_at`,
+      workId,
+      next.fingerprint,
+      now(),
+      changed ? 1 : 0,
+      changed ? 1 : 0,
+      changed ? 1 : 0,
+      changed ? 1 : 0,
+      changed ? 1 : 0,
+      changed ? 1 : 0
+    );
+    return { ...updated, semanticIndex: this.getSemanticSearchIndexStatus(workId) };
+  }
+
+  getSemanticSearchIndexStatus(workId: string): Record<string, unknown> {
+    const settings = this.store.getWorkAiSettings(workId);
+    const row = this.store.db.get("SELECT * FROM semantic_index_state WHERE work_id = ?", workId);
+    let configuration: ResolvedSemanticConfiguration | null = null;
+    let configurationError = "";
+    try {
+      configuration = this.resolveSemanticConfiguration(workId, false);
+    } catch (error) {
+      configurationError = error instanceof AppError ? error.message : "语义检索配置无效";
+    }
+    const configuredFingerprint = configuration?.fingerprint ?? "";
+    const indexedChunkCount = configuredFingerprint ? Number(this.store.db.get(
+      "SELECT COUNT(*) AS count FROM semantic_index_entries WHERE work_id = ? AND config_fingerprint = ?",
+      workId,
+      configuredFingerprint
+    )?.count ?? 0) : 0;
+    const storedStatus = String(row?.status ?? "idle");
+    const status = settings.semanticSearchEnabled !== true
+      ? "disabled"
+      : !configuration
+        ? "unconfigured"
+        : String(row?.config_fingerprint ?? "") !== configuredFingerprint
+          ? "idle"
+          : storedStatus === "disabled" ? "idle" : storedStatus;
+    const totalSources = Number(row?.total_sources ?? 0);
+    const processedSources = Number(row?.processed_sources ?? 0);
+    return {
+      workId,
+      enabled: settings.semanticSearchEnabled === true,
+      status,
+      ready: status === "ready" && indexedChunkCount > 0,
+      progress: status === "ready" ? 100 : totalSources > 0 ? Math.min(100, Math.round((processedSources + Number(row?.failed_sources ?? 0)) / totalSources * 100)) : 0,
+      totalSources,
+      processedSources,
+      failedSources: Number(row?.failed_sources ?? 0),
+      consecutiveFailures: Number(row?.consecutive_failures ?? 0),
+      failureThreshold: SEMANTIC_FAILURE_PAUSE_THRESHOLD,
+      indexedChunkCount,
+      error: configurationError || String(row?.error ?? ""),
+      configFingerprint: configuredFingerprint,
+      embeddingModel: configuration ? {
+        id: stringValue(configuration.model, "id"),
+        displayName: stringValue(configuration.model, "display_name"),
+        modelId: stringValue(configuration.model, "model_id"),
+        providerName: stringValue(configuration.provider, "name")
+      } : null,
+      rerankModel: configuration?.rerankModel && configuration.rerankProvider ? {
+        id: stringValue(configuration.rerankModel, "id"),
+        displayName: stringValue(configuration.rerankModel, "display_name"),
+        modelId: stringValue(configuration.rerankModel, "model_id"),
+        providerName: stringValue(configuration.rerankProvider, "name")
+      } : null,
+      vectorDimension: configuration?.vectorDimension ?? Number(settings.semanticVectorDimension ?? 1_024),
+      updatedAt: String(row?.updated_at ?? "")
+    };
+  }
+
+  private async schedulePendingSemanticIndexes(): Promise<void> {
+    const workIds = this.store.db.all(
+      `SELECT settings.work_id FROM work_ai_settings settings
+       JOIN semantic_index_state state ON state.work_id = settings.work_id
+       WHERE settings.semantic_search_enabled = 1 AND state.status IN ('ready', 'failed')`
+    ).map((row) => String(row.work_id));
+    await Promise.allSettled(workIds.map(async (workId) => {
+      const configuration = this.resolveSemanticConfiguration(workId);
+      const state = this.store.db.get("SELECT config_fingerprint FROM semantic_index_state WHERE work_id = ?", workId);
+      if (String(state?.config_fingerprint ?? "") !== configuration.fingerprint) return;
+      await this.ensureSemanticSearchIndex(workId, false);
+    }));
+  }
+
+  private scheduleSemanticIndexSync(workId: string): void {
+    if (this.relationshipIndexDisposed) return;
+    try {
+      const settings = this.store.getWorkAiSettings(workId);
+      if (settings.semanticSearchEnabled !== true) return;
+      const state = this.store.db.get("SELECT status, config_fingerprint FROM semantic_index_state WHERE work_id = ?", workId);
+      if (!state || !["ready", "failed"].includes(String(state.status))) return;
+      const configuration = this.resolveSemanticConfiguration(workId);
+      if (String(state.config_fingerprint) !== configuration.fingerprint) return;
+    } catch {
+      return;
+    }
+    const existing = this.semanticIndexSyncTimers.get(workId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.semanticIndexSyncTimers.delete(workId);
+      void this.ensureSemanticSearchIndex(workId, false).catch(() => undefined);
+    }, 2_000);
+    this.semanticIndexSyncTimers.set(workId, timer);
+    logger.debug("semantic.search_index.auto_sync_scheduled", { workId });
+  }
+
+  private semanticSourceDocuments(workId: string): SemanticSourceDocument[] {
+    this.store.getWork(workId);
+    const documents: SemanticSourceDocument[] = [];
+    for (const row of this.store.db.all(
+      `SELECT id FROM chapters WHERE work_id = ? AND deleted_at IS NULL AND chapter_type <> '作者的话'
+       ORDER BY volume_id, sort_order, created_at`,
+      workId
+    )) {
+      try {
+        const chapter = this.store.getChapter(String(row.id));
+        documents.push({
+          sourceType: "chapter",
+          sourceId: String(chapter.id),
+          sourceVersion: String(chapter.versionNo),
+          sourceTitle: String(chapter.title),
+          content: String(chapter.content)
+        });
+      } catch {
+        // 来源在快照扫描期间被删除时忽略，下一轮会清理旧分片。
+      }
+    }
+    for (const character of this.store.listCharacters(workId, true, true)) {
+      if (character.mergedIntoCharacterId) continue;
+      const characterId = String(character.id);
+      const authority = {
+        name: character.name,
+        gender: character.gender,
+        isDead: character.isDead,
+        aliases: character.aliases,
+        code: character.code,
+        species: character.species,
+        attributes: character.attributes,
+        profile: character.profile,
+        currentState: character.currentState,
+        lockedFields: character.lockedFields
+      };
+      documents.push({
+        sourceType: "character",
+        sourceId: characterId,
+        sourceVersion: String(character.versionNo),
+        sourceTitle: `人物档案：${String(character.name)}`,
+        content: JSON.stringify(authority, null, 2)
+      });
+      for (const section of this.store.listCharacterProfileSections(characterId)) {
+        documents.push({
+          sourceType: "character",
+          sourceId: characterId,
+          sectionId: String(section.id),
+          sourceVersion: `${String(character.versionNo)}:${String(section.versionNo)}`,
+          sourceTitle: `${String(character.name)} / ${String(section.title)}`,
+          content: [
+            `权威状态：gender=${String(character.gender)}；isDead=${String(Boolean(character.isDead))}；lockedFields=${JSON.stringify(character.lockedFields ?? [])}`,
+            String(section.summary ?? ""),
+            String(section.contentMarkdown ?? "")
+          ].filter(Boolean).join("\n\n")
+        });
+      }
+    }
+    const refs: Array<[SemanticSourceType, string]> = [
+      ...this.store.listSettings(workId, true).map((item) => ["setting", String(item.id)] as [SemanticSourceType, string]),
+      ...this.store.listRaces(workId, true).map((item) => ["race", String(item.id)] as [SemanticSourceType, string]),
+      ...this.store.listOrganizations(workId, true).map((item) => ["organization", String(item.id)] as [SemanticSourceType, string]),
+      ...this.store.listTimelineTracks(workId).map((item) => ["timeline-track", String(item.id)] as [SemanticSourceType, string]),
+      ...this.store.listTimelineEvents(workId).map((item) => ["timeline-event", String(item.id)] as [SemanticSourceType, string]),
+      ...this.store.listRelationships(workId).map((item) => ["relationship", String(item.id)] as [SemanticSourceType, string]),
+      ...this.store.listChapterOutlines(workId).map((item) => ["chapter-outline", String(item.chapterId)] as [SemanticSourceType, string]),
+      ...this.store.listForeshadows(workId).map((item) => ["foreshadow", String(item.id)] as [SemanticSourceType, string])
+    ];
+    for (const [sourceType, sourceId] of refs) {
+      const source = this.relationshipSettingSource(workId, sourceType, sourceId);
+      if (!source) continue;
+      documents.push({
+        sourceType,
+        sourceId,
+        sourceVersion: source.version,
+        sourceTitle: source.title,
+        content: source.content
+      });
+    }
+    return documents;
+  }
+
+  private semanticDocumentKey(document: Pick<SemanticSourceDocument, "sourceType" | "sourceId" | "sectionId">): string {
+    return `${document.sourceType}:${document.sourceId}:${document.sectionId ?? ""}`;
+  }
+
+  private beginSemanticAiCall(
+    workId: string,
+    taskType: "embedding" | "rerank",
+    model: ModelRow,
+    provider: ProviderRow,
+    inputCharacters: number,
+    parameters: Record<string, unknown>
+  ): string {
+    const callId = id("call");
+    this.store.db.run(
+      `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
+       status, input_chars, created_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+      callId,
+      workId,
+      taskType,
+      stringValue(provider, "id"),
+      stringValue(model, "id"),
+      JSON.stringify({ type: "entities", semantic: true }),
+      JSON.stringify(parameters),
+      inputCharacters,
+      now(),
+      currentRequestActor()?.userId ?? null
+    );
+    return callId;
+  }
+
+  private completeSemanticAiCall(callId: string, usage: unknown, inputCharacters: number, outputCharacters = 0): void {
+    const resolved = resolveAiTokenUsage(usage, Math.ceil(inputCharacters / 3), Math.ceil(outputCharacters / 3));
+    const inputTokens = resolved.inputTokens > 0 ? resolved.inputTokens : Math.max(1, Math.ceil(inputCharacters / 3));
+    const usageSource = resolved.inputTokens > 0 ? resolved.source : "estimated";
+    this.store.db.run(
+      `UPDATE ai_calls SET status = 'completed', output_chars = ?, input_tokens = ?, output_tokens = ?,
+       cached_input_tokens = ?, cache_write_input_tokens = ?, cache_eligible_input_tokens = ?,
+       cache_usage_available = ?, token_usage_source = ?, completed_at = ? WHERE id = ?`,
+      outputCharacters,
+      inputTokens,
+      resolved.outputTokens,
+      resolved.cachedInputTokens,
+      resolved.cacheWriteInputTokens,
+      resolved.cacheEligibleInputTokens,
+      resolved.cacheEligibleInputTokens > 0 ? 1 : 0,
+      usageSource,
+      now(),
+      callId
+    );
+  }
+
+  private failSemanticAiCall(callId: string, failure: string): void {
+    this.store.db.run(
+      "UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?",
+      failure.slice(0, 500),
+      now(),
+      callId
+    );
+  }
+
+  private async requestSemanticEmbeddings(
+    workId: string,
+    configuration: ResolvedSemanticConfiguration,
+    inputs: string[]
+  ): Promise<number[][]> {
+    const inputCharacters = inputs.reduce((total, input) => total + input.length, 0);
+    const callId = this.beginSemanticAiCall(workId, "embedding", configuration.model, configuration.provider, inputCharacters, {
+      model: stringValue(configuration.model, "model_id"),
+      vectorDimension: configuration.vectorDimension,
+      requestCount: inputs.length
+    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error("Embedding request timed out")), SEMANTIC_REQUEST_TIMEOUT_MS);
+    let credential = "";
+    try {
+      credential = this.decryptKey(configuration.provider);
+      const response = await this.scheduleProviderRequest(configuration.provider, controller.signal, () => this.outboundFetchWithRetry(
+        providerEmbeddingEndpoint(stringValue(configuration.provider, "base_url")),
+        {
+          method: "POST",
+          headers: providerRequestHeaders(this.semanticProviderProtocol(configuration.provider, "embedding"), credential, "application/json"),
+          body: JSON.stringify({ model: stringValue(configuration.model, "model_id"), input: inputs }),
+          signal: controller.signal
+        }
+      ));
+      const body = await readResponseTextLimited(response);
+      if (!response.ok) throw new Error(`Embedding provider returned HTTP ${response.status}`);
+      let payload: unknown;
+      try {
+        payload = JSON.parse(body) as unknown;
+      } catch {
+        throw new Error("Embedding provider returned invalid JSON");
+      }
+      const parsed = parseEmbeddingResponse(payload, inputs.length, configuration.vectorDimension);
+      this.completeSemanticAiCall(callId, parsed.usage, inputCharacters);
+      return parsed.vectors;
+    } catch (error) {
+      this.failSemanticAiCall(callId, error instanceof Error ? error.message : "Embedding request failed");
+      logger.warn("semantic.embedding.failed", {
+        workId,
+        modelId: stringValue(configuration.model, "id"),
+        error: aiErrorForLog(error)
+      });
+      throw new AppError(502, "SEMANTIC_EMBEDDING_FAILED", "Embedding 请求失败，语义通道已降级");
+    } finally {
+      clearTimeout(timeout);
+      credential = "";
+    }
+  }
+
+  private async requestSemanticRerank(
+    workId: string,
+    configuration: ResolvedSemanticConfiguration,
+    query: string,
+    document: string
+  ): Promise<number> {
+    if (!configuration.rerankModel || !configuration.rerankProvider) return 0;
+    const prompt = [
+      "<|im_start|>system",
+      "Judge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be yes or no.<|im_end|>",
+      "<|im_start|>user",
+      "<Instruct>: Given a story search query, retrieve relevant passages that answer the query",
+      `<Query>: ${query}`,
+      `<Document>: ${document}<|im_end|>`,
+      "<|im_start|>assistant",
+      "<think>",
+      "",
+      "</think>",
+      ""
+    ].join("\n");
+    const inputCharacters = prompt.length;
+    const callId = this.beginSemanticAiCall(workId, "rerank", configuration.rerankModel, configuration.rerankProvider, inputCharacters, {
+      model: stringValue(configuration.rerankModel, "model_id"),
+      requestCount: 1
+    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error("Rerank request timed out")), SEMANTIC_REQUEST_TIMEOUT_MS);
+    let credential = "";
+    try {
+      credential = this.decryptKey(configuration.rerankProvider);
+      const response = await this.scheduleProviderRequest(configuration.rerankProvider, controller.signal, () => this.outboundFetchWithRetry(
+        providerLegacyCompletionEndpoint(stringValue(configuration.rerankProvider!, "base_url")),
+        {
+          method: "POST",
+          headers: providerRequestHeaders(this.semanticProviderProtocol(configuration.rerankProvider!, "rerank"), credential, "application/json"),
+          body: JSON.stringify({
+            model: stringValue(configuration.rerankModel!, "model_id"),
+            prompt,
+            temperature: 0,
+            max_tokens: 1,
+            stream: false
+          }),
+          signal: controller.signal
+        }
+      ));
+      const body = await readResponseTextLimited(response);
+      if (!response.ok) throw new Error(`Rerank provider returned HTTP ${response.status}`);
+      let payload: unknown;
+      try {
+        payload = JSON.parse(body) as unknown;
+      } catch {
+        throw new Error("Rerank provider returned invalid JSON");
+      }
+      const score = parseRerankCompletion(payload);
+      const usage = payload && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>).usage
+        : {};
+      this.completeSemanticAiCall(callId, usage, inputCharacters, score > 0 ? 3 : 2);
+      return score;
+    } catch (error) {
+      this.failSemanticAiCall(callId, error instanceof Error ? error.message : "Rerank request failed");
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      credential = "";
+    }
+  }
+
+  private async indexSemanticDocument(
+    workId: string,
+    configuration: ResolvedSemanticConfiguration,
+    document: SemanticSourceDocument
+  ): Promise<number> {
+    const chunks = splitSemanticDocument(document);
+    const vectors: number[][] = [];
+    for (let offset = 0; offset < chunks.length; offset += SEMANTIC_EMBEDDING_BATCH_SIZE) {
+      const batch = chunks.slice(offset, offset + SEMANTIC_EMBEDDING_BATCH_SIZE);
+      vectors.push(...await this.requestSemanticEmbeddings(workId, configuration, batch.map((chunk) => chunk.content)));
+    }
+    this.store.db.transaction(() => {
+      this.store.db.run(
+        `DELETE FROM semantic_index_entries
+         WHERE work_id = ? AND source_type = ? AND source_id = ? AND section_id = ?`,
+        workId,
+        document.sourceType,
+        document.sourceId,
+        document.sectionId ?? ""
+      );
+      chunks.forEach((chunk, index) => {
+        this.store.db.run(
+          `INSERT INTO semantic_index_entries (
+             id, work_id, source_type, source_id, section_id, source_version, source_title, chunk_order,
+             start_line, end_line, start_offset, end_offset, content, content_hash, vector_json,
+             vector_dimension, embedding_model_id, config_fingerprint, chunk_rule_version, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id("semanticChunk"),
+          workId,
+          chunk.sourceType,
+          chunk.sourceId,
+          chunk.sectionId ?? "",
+          chunk.sourceVersion,
+          chunk.sourceTitle,
+          chunk.chunkOrder,
+          chunk.startLine,
+          chunk.endLine,
+          chunk.startOffset,
+          chunk.endOffset,
+          chunk.content,
+          this.store.hashContent(chunk.content),
+          JSON.stringify(vectors[index]),
+          configuration.vectorDimension,
+          stringValue(configuration.model, "id"),
+          configuration.fingerprint,
+          SEMANTIC_CHUNK_RULE_VERSION,
+          now()
+        );
+      });
+    });
+    return chunks.length;
+  }
+
+  syncSemanticSearchIndex(workId: string): Record<string, unknown> {
+    const status = this.getSemanticSearchIndexStatus(workId);
+    if (status.enabled !== true) throw new AppError(409, "SEMANTIC_SEARCH_DISABLED", "当前作品尚未开启语义检索");
+    if (status.status === "paused") throw new AppError(409, "SEMANTIC_INDEX_PAUSED", "语义索引已因连续失败暂停，请使用重建恢复");
+    void this.ensureSemanticSearchIndex(workId, false).catch(() => undefined);
+    return status;
+  }
+
+  rebuildSemanticSearchIndex(workId: string): Record<string, unknown> {
+    const configuration = this.resolveSemanticConfiguration(workId);
+    this.store.db.run(
+      `INSERT INTO semantic_index_state(work_id, status, config_fingerprint, total_sources, processed_sources, failed_sources,
+       consecutive_failures, error, updated_at) VALUES (?, 'idle', ?, 0, 0, 0, 0, '', ?)
+       ON CONFLICT(work_id) DO UPDATE SET status = 'idle', config_fingerprint = excluded.config_fingerprint,
+       total_sources = 0, processed_sources = 0, failed_sources = 0, consecutive_failures = 0, error = '', updated_at = excluded.updated_at`,
+      workId,
+      configuration.fingerprint,
+      now()
+    );
+    void this.ensureSemanticSearchIndex(workId, true).catch(() => undefined);
+    return this.getSemanticSearchIndexStatus(workId);
+  }
+
+  private ensureSemanticSearchIndex(workId: string, force: boolean): Promise<Record<string, unknown>> {
+    const existing = this.semanticIndexBuilds.get(workId);
+    if (existing) return existing;
+    const build = this.drainSemanticSearchIndex(workId, force);
+    this.semanticIndexBuilds.set(workId, build);
+    void build.finally(() => {
+      if (this.semanticIndexBuilds.get(workId) === build) this.semanticIndexBuilds.delete(workId);
+    }).catch(() => undefined);
+    return build;
+  }
+
+  private async drainSemanticSearchIndex(workId: string, force: boolean): Promise<Record<string, unknown>> {
+    const configuration = this.resolveSemanticConfiguration(workId);
+    const documents = this.semanticSourceDocuments(workId);
+    const existingRows = this.store.db.all(
+      `SELECT id, source_type, source_id, section_id, source_version, chunk_order, content_hash
+       FROM semantic_index_entries WHERE work_id = ? AND config_fingerprint = ?
+       ORDER BY source_type, source_id, section_id, chunk_order`,
+      workId,
+      configuration.fingerprint
+    );
+    const existingByDocument = new Map<string, Row[]>();
+    for (const row of existingRows) {
+      const key = this.semanticDocumentKey({
+        sourceType: String(row.source_type) as SemanticSourceType,
+        sourceId: String(row.source_id),
+        sectionId: String(row.section_id) || undefined
+      });
+      const rows = existingByDocument.get(key) ?? [];
+      rows.push(row);
+      existingByDocument.set(key, rows);
+    }
+    const pending = documents.filter((document) => {
+      const chunks = splitSemanticDocument(document);
+      const rows = existingByDocument.get(this.semanticDocumentKey(document)) ?? [];
+      return force || rows.length !== chunks.length || rows.some((row, index) => (
+        String(row.source_version) !== document.sourceVersion
+        || Number(row.chunk_order) !== index
+        || String(row.content_hash) !== this.store.hashContent(chunks[index]?.content ?? "")
+      ));
+    });
+    this.store.db.run(
+      `INSERT INTO semantic_index_state(work_id, status, config_fingerprint, total_sources, processed_sources, failed_sources,
+       consecutive_failures, error, updated_at) VALUES (?, 'building', ?, ?, 0, 0, 0, '', ?)
+       ON CONFLICT(work_id) DO UPDATE SET status = 'building', config_fingerprint = excluded.config_fingerprint,
+       total_sources = excluded.total_sources, processed_sources = 0, failed_sources = 0, error = '', updated_at = excluded.updated_at`,
+      workId,
+      configuration.fingerprint,
+      pending.length,
+      now()
+    );
+    let processedSources = 0;
+    let failedSources = 0;
+    let consecutiveFailures = 0;
+    let lastError = "";
+    for (const document of pending) {
+      if (this.relationshipIndexDisposed) break;
+      try {
+        await this.indexSemanticDocument(workId, configuration, document);
+        processedSources += 1;
+        consecutiveFailures = 0;
+      } catch (error) {
+        failedSources += 1;
+        consecutiveFailures += 1;
+        lastError = error instanceof AppError ? error.message : "语义分片构建失败";
+      }
+      const paused = consecutiveFailures >= SEMANTIC_FAILURE_PAUSE_THRESHOLD;
+      this.store.db.run(
+        `UPDATE semantic_index_state SET status = ?, processed_sources = ?, failed_sources = ?, consecutive_failures = ?,
+         error = ?, updated_at = ? WHERE work_id = ?`,
+        paused ? "paused" : "building",
+        processedSources,
+        failedSources,
+        consecutiveFailures,
+        lastError,
+        now(),
+        workId
+      );
+      if (paused) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    if (this.relationshipIndexDisposed) return this.getSemanticSearchIndexStatus(workId);
+    const currentKeys = new Set(documents.map((document) => this.semanticDocumentKey(document)));
+    const staleIds = existingRows
+      .filter((row) => !currentKeys.has(this.semanticDocumentKey({
+        sourceType: String(row.source_type) as SemanticSourceType,
+        sourceId: String(row.source_id),
+        sectionId: String(row.section_id) || undefined
+      })))
+      .map((row) => String(row.id));
+    this.store.db.transaction(() => {
+      for (const entryId of staleIds) this.store.db.run("DELETE FROM semantic_index_entries WHERE id = ?", entryId);
+      this.store.db.run(
+        "DELETE FROM semantic_index_entries WHERE work_id = ? AND config_fingerprint <> ?",
+        workId,
+        configuration.fingerprint
+      );
+    });
+    const state = this.store.db.get("SELECT status FROM semantic_index_state WHERE work_id = ?", workId);
+    if (String(state?.status) !== "paused") {
+      this.store.db.run(
+        `UPDATE semantic_index_state SET status = ?, processed_sources = ?, failed_sources = ?, consecutive_failures = ?,
+         error = ?, updated_at = ? WHERE work_id = ?`,
+        failedSources > 0 ? "failed" : "ready",
+        processedSources,
+        failedSources,
+        failedSources > 0 ? consecutiveFailures : 0,
+        lastError,
+        now(),
+        workId
+      );
+    }
+    const status = this.getSemanticSearchIndexStatus(workId);
+    logger.info("semantic.search_index.completed", {
+      workId,
+      status: status.status,
+      processedSources,
+      failedSources,
+      indexedChunkCount: status.indexedChunkCount
+    });
+    return status;
+  }
+
+  private readableSemanticSourceTypes(workId: string): SemanticSourceType[] {
+    const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
+    return SEMANTIC_SOURCE_TYPES.filter((type) => {
+      const module = hybridSearchPermissionModule(type);
+      return Boolean(module && canReadWorkModule(permissions, module));
+    });
+  }
+
+  private recordSemanticSearchFailure(workId: string, message: string): void {
+    const row = this.store.db.get("SELECT consecutive_failures FROM semantic_index_state WHERE work_id = ?", workId);
+    const failures = Number(row?.consecutive_failures ?? 0) + 1;
+    this.store.db.run(
+      `UPDATE semantic_index_state SET status = ?, consecutive_failures = ?, error = ?, updated_at = ? WHERE work_id = ?`,
+      failures >= SEMANTIC_FAILURE_PAUSE_THRESHOLD ? "paused" : "failed",
+      failures,
+      message.slice(0, 2_000),
+      now(),
+      workId
+    );
+  }
+
+  async semanticSearchStory(workId: string, query: string, options: SemanticSearchOptions = {}): Promise<Record<string, unknown>> {
+    const normalizedQuery = query.normalize("NFKC").trim().slice(0, 2_000);
+    if (!normalizedQuery) throw new AppError(400, "SEMANTIC_QUERY_REQUIRED", "语义检索问题不能为空");
+    let chapterContext = "";
+    if (options.currentChapterId) {
+      const chapter = this.store.getChapter(options.currentChapterId);
+      if (String(chapter.workId) !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "当前章节不属于此作品");
+      chapterContext = `当前章节：${String(chapter.title)}`;
+    }
+    const selectionContext = options.selection?.trim().slice(0, 4_000) ?? "";
+    const semanticQuery = [normalizedQuery, chapterContext, selectionContext ? `当前选区：${selectionContext}` : ""].filter(Boolean).join("\n");
+    const readableTypes = new Set(options.allowedTypes ?? this.readableSemanticSourceTypes(workId));
+    const requestedTypes = new Set((options.types?.length ? options.types : SEMANTIC_SOURCE_TYPES)
+      .filter((type) => readableTypes.has(type)));
+    const settings = this.store.getWorkAiSettings(workId);
+    const resultLimit = Math.min(100, Math.max(1, Math.trunc(options.limit ?? Number(settings.semanticResultLimit ?? 12))));
+    const keywordResults = options.includeKeyword === false || requestedTypes.size === 0
+      ? []
+      : await this.searchWork(workId, normalizedQuery, {
+        limit: Math.min(100, Math.max(resultLimit * 4, 20)),
+        allowedTypes: [...requestedTypes],
+        includePhonetic: false,
+        conversationOwnerUserId: options.conversationOwnerUserId
+      }) as SearchChannelResult[];
+    const fallback = (status: string, reason: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+      query: normalizedQuery,
+      status,
+      semanticUsed: false,
+      degraded: true,
+      reason,
+      results: keywordResults.slice(0, resultLimit),
+      ...extra
+    });
+    if (settings.semanticSearchEnabled !== true) return fallback("disabled", "语义检索未开启，已返回关键词检索结果");
+    let configuration: ResolvedSemanticConfiguration;
+    try {
+      configuration = this.resolveSemanticConfiguration(workId);
+    } catch (error) {
+      return fallback("unconfigured", error instanceof AppError ? error.message : "语义检索配置无效");
+    }
+    const state = this.getSemanticSearchIndexStatus(workId);
+    if (state.status === "paused") return fallback("paused", String(state.error || "语义检索已因连续失败暂停"));
+    if (state.configFingerprint !== configuration.fingerprint || Number(state.indexedChunkCount ?? 0) === 0) {
+      return fallback("not_ready", "语义索引尚未就绪，请在作品 AI 设置中执行同步或重建", { index: state });
+    }
+    let queryVector: number[];
+    try {
+      const vectors = await this.requestSemanticEmbeddings(workId, configuration, [semanticQuery]);
+      const firstVector = vectors[0];
+      if (!firstVector) throw new Error("Embedding response omitted the query vector");
+      queryVector = firstVector;
+    } catch (error) {
+      this.recordSemanticSearchFailure(workId, error instanceof AppError ? error.message : "查询向量生成失败");
+      return fallback("failed", "查询向量生成失败，已返回关键词检索结果");
+    }
+    const typePlaceholders = [...requestedTypes].map(() => "?").join(", ");
+    if (!typePlaceholders) return fallback("empty_scope", "当前账户在所选模块中没有可读内容");
+    const rows = this.store.db.all(
+      `SELECT * FROM semantic_index_entries
+       WHERE work_id = ? AND config_fingerprint = ? AND source_type IN (${typePlaceholders})
+       ORDER BY source_type, source_id, section_id, chunk_order`,
+      workId,
+      configuration.fingerprint,
+      ...requestedTypes
+    );
+    const currentVersions = new Map(this.semanticSourceDocuments(workId).map((document) => [
+      this.semanticDocumentKey(document),
+      document.sourceVersion
+    ]));
+    const entries = rows.flatMap((row): SemanticVectorEntry[] => {
+      const sourceKey = this.semanticDocumentKey({
+        sourceType: String(row.source_type) as SemanticSourceType,
+        sourceId: String(row.source_id),
+        sectionId: String(row.section_id) || undefined
+      });
+      if (currentVersions.get(sourceKey) !== String(row.source_version)) return [];
+      let vector: unknown;
+      try {
+        vector = JSON.parse(String(row.vector_json));
+      } catch {
+        return [];
+      }
+      if (!Array.isArray(vector) || vector.length !== configuration.vectorDimension || vector.some((value) => !Number.isFinite(Number(value)))) return [];
+      return [{
+        id: String(row.id),
+        sourceType: String(row.source_type) as SemanticSourceType,
+        sourceId: String(row.source_id),
+        ...(String(row.section_id) ? { sectionId: String(row.section_id) } : {}),
+        sourceVersion: String(row.source_version),
+        sourceTitle: String(row.source_title),
+        startLine: Number(row.start_line),
+        endLine: Number(row.end_line),
+        content: String(row.content),
+        vector: vector.map(Number)
+      }];
+    });
+    const recallLimit = Math.min(200, Math.max(resultLimit, Number(settings.semanticRecallLimit ?? 20)));
+    const ranked = rankSemanticVectors(queryVector, entries, recallLimit);
+    let rerankError = "";
+    const rerankScores = new Map<string, number>();
+    if (configuration.rerankModel && configuration.rerankProvider) {
+      for (const entry of ranked.slice(0, SEMANTIC_RERANK_CANDIDATE_LIMIT)) {
+        try {
+          rerankScores.set(entry.id, await this.requestSemanticRerank(workId, configuration, semanticQuery, entry.content));
+        } catch {
+          rerankError = "Rerank 请求失败，结果已按 embedding 相关性降级排序";
+          break;
+        }
+      }
+    }
+    const semanticResults = ranked.map((entry): SearchChannelResult => ({
+      type: entry.sourceType,
+      id: entry.sourceId,
+      entryId: entry.id,
+      ...(entry.sectionId ? { sectionId: entry.sectionId } : {}),
+      title: entry.sourceTitle,
+      snippet: entry.content,
+      sourceVersion: entry.sourceVersion,
+      startLine: entry.startLine,
+      endLine: entry.endLine,
+      semanticScore: entry.semanticScore,
+      rerankScore: rerankScores.get(entry.id) ?? null,
+      estimatedTokens: estimateAiTokens(entry.content),
+      matchKinds: ["semantic"],
+      ...this.hybridAiSearchDetails(workId, entry.sourceType, entry.sourceId)
+    })).sort((left, right) => {
+      const leftRerank = typeof left.rerankScore === "number" ? left.rerankScore : -1;
+      const rightRerank = typeof right.rerankScore === "number" ? right.rerankScore : -1;
+      return rightRerank - leftRerank
+        || Number(right.semanticScore ?? 0) - Number(left.semanticScore ?? 0)
+        || String(left.entryId).localeCompare(String(right.entryId));
+    });
+    const results = fuseSemanticSearchResults(
+      keywordResults,
+      semanticResults,
+      Number(settings.semanticChannelWeight ?? 1),
+      resultLimit
+    );
+    if (!rerankError) {
+      this.store.db.run(
+        `UPDATE semantic_index_state SET consecutive_failures = 0,
+         error = CASE WHEN failed_sources > 0 THEN error ELSE '' END,
+         status = CASE WHEN failed_sources > 0 THEN 'failed' ELSE 'ready' END,
+         updated_at = ? WHERE work_id = ? AND status <> 'building'`,
+        now(),
+        workId
+      );
+    }
+    return {
+      query: normalizedQuery,
+      status: rerankError ? "degraded" : "ready",
+      semanticUsed: true,
+      degraded: Boolean(rerankError),
+      reason: rerankError,
+      index: this.getSemanticSearchIndexStatus(workId),
+      results
+    };
+  }
+
+  createSemanticContextSnapshot(workId: string, input: {
+    query: string;
+    entryIds: string[];
+    scope?: Record<string, unknown>;
+    conversationId?: string;
+  }): Record<string, unknown> {
+    const configuration = this.resolveSemanticConfiguration(workId);
+    const entryIds = [...new Set(input.entryIds.map((entryId) => entryId.trim()).filter(Boolean))].slice(0, 30);
+    if (entryIds.length === 0) throw new AppError(400, "SEMANTIC_SNAPSHOT_EMPTY", "请至少选择一个语义检索结果");
+    if (input.conversationId) {
+      const conversation = this.store.getAiConversationSummary(input.conversationId);
+      if (String(conversation.workId) !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    }
+    const placeholders = entryIds.map(() => "?").join(", ");
+    const rows = this.store.db.all(
+      `SELECT * FROM semantic_index_entries WHERE work_id = ? AND config_fingerprint = ? AND id IN (${placeholders})`,
+      workId,
+      configuration.fingerprint,
+      ...entryIds
+    );
+    const byId = new Map(rows.map((row) => [String(row.id), row]));
+    const currentDocuments = new Map(this.semanticSourceDocuments(workId).map((document) => [this.semanticDocumentKey(document), document]));
+    const readableTypes = new Set(this.readableSemanticSourceTypes(workId));
+    const budgetTokens = Math.min(100_000, Math.max(256, Number(configuration.settings.semanticBudgetTokens ?? 4_000)));
+    let usedTokens = 0;
+    const selected = entryIds.flatMap((entryId): Row[] => {
+      const row = byId.get(entryId);
+      if (!row || !readableTypes.has(String(row.source_type) as SemanticSourceType)) return [];
+      const current = currentDocuments.get(this.semanticDocumentKey({
+        sourceType: String(row.source_type) as SemanticSourceType,
+        sourceId: String(row.source_id),
+        sectionId: String(row.section_id) || undefined
+      }));
+      if (!current || current.sourceVersion !== String(row.source_version)) return [];
+      const tokens = estimateAiTokens(String(row.content));
+      if (usedTokens + tokens > budgetTokens) return [];
+      usedTokens += tokens;
+      return [{ ...row, estimated_tokens: tokens }];
+    });
+    if (selected.length === 0) throw new AppError(409, "SEMANTIC_SNAPSHOT_STALE", "所选结果已过期或超出上下文预算，请重新检索");
+    const snapshotId = id("semanticSnapshot");
+    const createdAt = now();
+    this.store.db.transaction(() => {
+      this.store.db.run(
+        `INSERT INTO semantic_context_snapshots (
+          id, work_id, conversation_id, query, scope_json, config_fingerprint, created_by_user_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        snapshotId,
+        workId,
+        input.conversationId ?? null,
+        input.query.trim().slice(0, 2_000),
+        JSON.stringify(input.scope ?? {}),
+        configuration.fingerprint,
+        currentRequestActor()?.userId ?? null,
+        createdAt
+      );
+      selected.forEach((row, position) => {
+        this.store.db.run(
+          `INSERT INTO semantic_context_snapshot_items (
+            snapshot_id, position, entry_id, source_type, source_id, section_id, source_version, source_title,
+            start_line, end_line, content, estimated_tokens, semantic_score, rerank_score, match_kinds_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '["semantic"]')`,
+          snapshotId,
+          position,
+          String(row.id),
+          String(row.source_type),
+          String(row.source_id),
+          String(row.section_id),
+          String(row.source_version),
+          String(row.source_title),
+          Number(row.start_line),
+          Number(row.end_line),
+          String(row.content),
+          Number(row.estimated_tokens)
+        );
+      });
+    });
+    return {
+      id: snapshotId,
+      workId,
+      conversationId: input.conversationId ?? null,
+      query: input.query.trim().slice(0, 2_000),
+      itemCount: selected.length,
+      estimatedTokens: usedTokens,
+      budgetTokens,
+      createdAt,
+      items: selected.map((row) => ({
+        entryId: row.id,
+        type: row.source_type,
+        id: row.source_id,
+        sectionId: String(row.section_id) || undefined,
+        title: row.source_title,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        snippet: row.content,
+        sourceVersion: row.source_version,
+        estimatedTokens: row.estimated_tokens,
+        matchKinds: ["semantic"]
+      }))
+    };
+  }
+
   private async schedulePendingRelationshipIndexes(): Promise<void> {
     if (this.relationshipIndexDisposed) return;
     const workIds = this.store.db.all(
@@ -12858,7 +14160,7 @@ export class AiManager {
         const item = this.store.getSetting(sourceId);
         if (String(item.workId) !== workId) return null;
         return source(String(item.title), {
-          category: item.category, content: item.content, tags: item.tags, status: item.status, authorNote: item.authorNote
+          category: item.category, content: item.content, tags: item.tags, status: item.status, locked: item.locked, authorNote: item.authorNote
         }, item.versionNo ?? item.updatedAt);
       }
       if (sourceType === "character") {
@@ -14624,6 +15926,7 @@ export class AiManager {
     const model = this.getModelRow(modelId);
     const provider = this.getProviderRow(stringValue(model, "provider_id"));
     if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "模型不属于平台 AI 配置");
+    if (modelKind(model) !== "chat") throw new AppError(400, "MODEL_KIND_UNSUPPORTED", "Embedding 与 rerank 模型不能用于 AI 对话或分析任务");
     this.assertAvailable(provider, model);
     return { model, provider };
   }
@@ -14752,6 +16055,7 @@ export class AiManager {
     if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) {
       throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "模型不属于平台 AI 配置");
     }
+    if (modelKind(model) !== "chat") throw new AppError(400, "MODEL_KIND_UNSUPPORTED", "只有 chat 模型可用作多模态读图模型");
     if (!boolValue(model, "multimodal_enabled")) {
       throw new AppError(400, "MODEL_NOT_MULTIMODAL", "模型未启用多模态能力");
     }
@@ -14923,6 +16227,7 @@ export class AiManager {
       providerId: stringValue(row, "provider_id"),
       displayName: stringValue(row, "display_name"),
       modelId: stringValue(row, "model_id"),
+      modelKind: modelKind(row),
       purposes: json(stringValue(row, "purposes_json"), []),
       contextNote: stringValue(row, "context_note"),
       contextWindow: numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW,
