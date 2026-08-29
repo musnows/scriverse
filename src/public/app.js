@@ -640,7 +640,10 @@ function assertAiRequestCurrent(request) {
 }
 
 function aiInteractionBusy() {
-  return aiRequestManager.hasActive(activeAiChatTab()?.id) || aiConversationNavigationPending !== null;
+  const activeTabId = activeAiChatTab()?.id;
+  return aiRequestManager.hasActive(activeTabId)
+    || (activeTabId ? aiQuestionContinuationTabIds.has(activeTabId) : false)
+    || aiConversationNavigationPending !== null;
 }
 
 function aiSendButtonIconMarkup(stateName) {
@@ -650,12 +653,14 @@ function aiSendButtonIconMarkup(stateName) {
 }
 
 function syncAiRequestControls() {
-  const sending = aiRequestManager.hasActive(activeAiChatTab()?.id);
+  const activeTabId = activeAiChatTab()?.id;
+  const sending = aiRequestManager.hasActive(activeTabId);
+  const continuingQuestion = activeTabId ? aiQuestionContinuationTabIds.has(activeTabId) : false;
   const switching = aiConversationNavigationPending !== null;
   const button = $("#ai-send");
-  const stateName = sending ? "stop" : switching ? "switching" : "send";
-  const label = sending ? "终止当前回复" : switching ? "正在切换对话" : "发送消息";
-  button.disabled = switching;
+  const stateName = sending ? "stop" : (switching || continuingQuestion) ? "switching" : "send";
+  const label = sending ? "终止当前回复" : continuingQuestion ? "AI 正在根据回答继续处理" : switching ? "正在切换对话" : "发送消息";
+  button.disabled = switching || continuingQuestion;
   button.dataset.state = stateName;
   button.classList.toggle("is-stop", sending);
   button.setAttribute("aria-label", label);
@@ -2976,7 +2981,9 @@ let aiWritePlanDialogBusy = false;
 let currentPlanDialogDetail = null;
 let currentPlanDialogFocusConfirm = false;
 let aiQuestionDialogQuestionId = null;
+let currentAiQuestionDialogView = null;
 let aiQuestionDialogBusy = false;
+const aiQuestionContinuationTabIds = new Set();
 let autoOpenedQuestionIds = new Set();
 const aiApprovalCenterState = { status: "" };
 
@@ -3203,6 +3210,7 @@ function renderAiUserQuestionOptions(question) {
 
 async function refreshAiQuestionDialog() {
   const question = await fetchAiUserQuestion(aiQuestionDialogQuestionId);
+  currentAiQuestionDialogView = question;
   $("#ai-question-text").textContent = question.question;
   renderAiUserQuestionOptions(question);
   return question;
@@ -3224,19 +3232,63 @@ async function openAiUserQuestionDialog(questionId) {
   }
 }
 
+function beginAiQuestionContinuationUi(conversationId) {
+  const tab = conversationId ? aiChatTabManager.findByConversation(conversationId) : null;
+  if (!tab) return null;
+  const message = document.createElement("div");
+  message.className = "assistant-message is-streaming ai-question-continuation-message";
+  message.innerHTML = '<div class="message-body" aria-live="polite" aria-busy="true"><p>正在根据你的回答继续处理…</p></div><div class="message-meta">正在继续原工作流</div>';
+  attachMessageHeading(message, aiAssistantLabel("正在生成", tab.roleplayCharacter), undefined, tab);
+  tab.feed.append(message);
+  aiQuestionContinuationTabIds.add(tab.id);
+  setAiChatTabStatus(tab, "streaming");
+  if (isActiveAiChatTab(tab)) syncAiRequestControls();
+  scrollAiFeedToBottom(tab.feed);
+  return { tab, message };
+}
+
+function finishAiQuestionContinuationUi(continuationUi, failed = false) {
+  if (!continuationUi) return;
+  aiQuestionContinuationTabIds.delete(continuationUi.tab.id);
+  if (continuationUi.message.isConnected) continuationUi.message.remove();
+  if (aiChatTabManager.get(continuationUi.tab.id)) setAiChatTabStatus(continuationUi.tab, failed ? "error" : "ready");
+  if (isActiveAiChatTab(continuationUi.tab)) syncAiRequestControls();
+}
+
+async function reloadAiQuestionConversation(conversationId) {
+  if (!conversationId) return null;
+  const tab = aiChatTabManager.findByConversation(conversationId);
+  if (!tab) return openAiConversation(conversationId);
+  const conversation = await api(`/api/ai-conversations/${encodeURIComponent(conversationId)}?page=1&limit=100`);
+  if (String(conversation.workId ?? "") !== String(state.work?.id ?? "")) throw new Error("AI 对话不属于当前作品");
+  upsertAiConversationSummary(conversation);
+  applyConversationToAiChatTab(tab, conversation);
+  activateAiChatTab(tab.id, { persistCurrent: false, force: true });
+  return conversation;
+}
+
 async function respondAiUserQuestion(questionId, payload) {
   if (aiQuestionDialogBusy) return;
   aiQuestionDialogBusy = true;
   $("#ai-question-submit").disabled = true;
   $("#ai-question-skip").disabled = true;
+  const questionDialog = $("#ai-question-dialog");
+  const approvalCenterDialog = $("#ai-approval-center-dialog");
+  let continuationUi = null;
+  let continuationFailed = false;
   try {
+    const knownQuestion = currentAiQuestionDialogView?.id === String(questionId)
+      ? currentAiQuestionDialogView
+      : await fetchAiUserQuestion(questionId);
+    const conversationId = typeof knownQuestion?.conversationId === "string" ? knownQuestion.conversationId : null;
+    if (questionDialog.open) questionDialog.close();
+    if (approvalCenterDialog.open) approvalCenterDialog.close();
+    continuationUi = beginAiQuestionContinuationUi(conversationId);
     let question;
     if (payload.action === "reject") {
       question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/reject`), { method: "POST" });
-      toast("已拒绝回答该问题；AI 不会因此编造答案");
     } else if (payload.action === "custom") {
       question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/answer`), { method: "POST", body: { customAnswer: payload.customAnswer } });
-      toast("回答已提交给 AI");
     } else {
       question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/answer`), {
         method: "POST",
@@ -3245,15 +3297,28 @@ async function respondAiUserQuestion(questionId, payload) {
           ...(payload.customAnswer ? { customAnswer: payload.customAnswer } : {})
         }
       });
-      toast(payload.customAnswer ? "选项和补充信息已提交给 AI" : "回答已提交给 AI");
     }
     cacheAiQuestionView(question);
+    currentAiQuestionDialogView = question;
     aiQuestionDialogQuestionId = String(question.id);
-    $("#ai-question-text").textContent = question.question;
-    renderAiUserQuestionOptions(question);
-    if (!$("#ai-question-dialog").open) $("#ai-question-dialog").showModal();
+    await reloadAiQuestionConversation(question.conversationId ?? conversationId);
+    toast(payload.action === "reject" ? "已跳过该问题，AI 已继续处理" : "回答已提交，AI 已继续处理");
     return question;
+  } catch (error) {
+    continuationFailed = true;
+    const latestQuestion = await fetchAiUserQuestion(questionId).catch(() => null);
+    if (latestQuestion) {
+      currentAiQuestionDialogView = latestQuestion;
+      cacheAiQuestionView(latestQuestion);
+      if (latestQuestion.status === "pending") {
+        $("#ai-question-text").textContent = latestQuestion.question;
+        renderAiUserQuestionOptions(latestQuestion);
+        if (!questionDialog.open) questionDialog.showModal();
+      }
+    }
+    throw error;
   } finally {
+    finishAiQuestionContinuationUi(continuationUi, continuationFailed);
     aiQuestionDialogBusy = false;
   }
 }
@@ -17118,6 +17183,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
   const tab = activeAiChatTab();
   if (!tab) return toast("Agent 对话页签尚未就绪", "error");
   if (aiRequestManager.hasActive(tab.id)) return;
+  if (aiQuestionContinuationTabIds.has(tab.id)) return toast("AI 正在根据你的回答继续处理，请稍候");
   const composerSnapshot = captureAiPromptComposer();
   const requestComposerSnapshot = retry
     ? {
