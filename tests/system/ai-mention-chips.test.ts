@@ -47,8 +47,13 @@ describe("AI 输入框引用气泡", () => {
       application.text.indexOf("async function sendAi()"),
       application.text.indexOf("async function streamChat(requestHolder, body, idempotencyKey)")
     );
-    expect(sendAiSource).toMatch(/appendMessage\("user"[\s\S]+?clearAiPromptComposer\(\);[\s\S]+?await streamChat/u);
-    expect(sendAiSource.match(/clearAiPromptComposer\(\);/gu)).toHaveLength(1);
+    const streamChatSource = application.text.slice(
+      application.text.indexOf("async function streamChat(requestHolder, body, idempotencyKey)"),
+      application.text.indexOf("function appendAiMessageImageAttachments")
+    );
+    expect(sendAiSource).toContain("const streamed = await streamChat");
+    expect(streamChatSource).toMatch(/appendMessage\("user"[\s\S]+?clearAiPromptComposer\(\);/u);
+    expect(streamChatSource.match(/clearAiPromptComposer\(\);/gu)).toHaveLength(1);
     expect(styles.text).toContain(".ai-prompt-reference");
     expect(styles.text).toContain(".ai-mention-option.is-active");
     expect(styles.text).not.toContain(".ai-reference-chip");
