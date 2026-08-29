@@ -52,7 +52,7 @@ import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-p
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
 import { AI_CHAT_IMAGE_ATTACHMENT_MAX_COUNT, aiChatImageAttachmentIds, isAiChatImageFile, normalizeAiChatImageAttachments } from "/ai-image-attachments.js?v=20260820-ai-chat-image-attachments-v2";
 import { findTextMatches, replaceTextMatches } from "/chapter-search.js?v=20260818-chapter-search-replace-v1";
-import { MAX_CHAPTER_LINE_IDS, normalizeChapterLineIdDraft, reconcileChapterLineIdDraft } from "/chapter-line-id-tracker.js?v=20260828-stable-line-ids-v1";
+import { MAX_CHAPTER_LINE_IDS, normalizeChapterLineIdDraft, reconcileChapterLineIdDraft, remapChapterLineCounts } from "/chapter-line-id-tracker.js?v=20260829-live-annotation-anchors-v1";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260816-character-gender-v1";
@@ -1350,6 +1350,7 @@ function replaceCurrentChapterSearchMatch() {
   const input = $("#chapter-content");
   const replacement = $("#chapter-replace-query").value;
   input.value = `${input.value.slice(0, start)}${replacement}${input.value.slice(start + query.length)}`;
+  syncChapterDraftLineIds(input.value);
   chapterSearchMatchIndex = Math.min(index, Math.max(0, findTextMatches(input.value, query).length - 1));
   updateChapterStats();
   clearChapterLineSelection();
@@ -1369,6 +1370,7 @@ function replaceAllChapterSearchMatches() {
   const result = replaceTextMatches(input.value, query, $("#chapter-replace-query").value);
   if (!result.matches) return renderChapterSearchStatus();
   input.value = result.content;
+  syncChapterDraftLineIds(input.value);
   chapterSearchMatchIndex = -1;
   updateChapterStats();
   clearChapterLineSelection();
@@ -5127,11 +5129,14 @@ async function loadChapterAnnotationCounts(chapterId = state.chapter?.id) {
   }
   const counts = await api(`/api/chapters/${encodeURIComponent(chapterId)}/annotation-counts`);
   if (String(state.chapter?.id ?? "") !== String(chapterId)) return;
-  chapterAnnotationCounts = new Map(
+  const savedLineIds = normalizeChapterLineIdDraft(state.chapter.content, state.chapter.lineIds);
+  const draftLineIds = syncChapterDraftLineIds($("#chapter-content").value);
+  const savedCounts = new Map(
     (Array.isArray(counts) ? counts : [])
       .map((item) => [Number(item.line), Number(item.count)])
       .filter(([line, count]) => Number.isInteger(line) && line > 0 && Number.isInteger(count) && count > 0)
   );
+  chapterAnnotationCounts = remapChapterLineCounts(savedLineIds, draftLineIds, savedCounts);
   scheduleChapterLineNumbers();
 }
 
@@ -6367,15 +6372,18 @@ function syncChapterDraftLineIds(content, hint = null) {
     resetChapterDraftLineIds(state.chapter);
   }
   if (chapterDraftLineIdState.content !== content) {
+    const beforeLineIds = chapterDraftLineIdState.lineIds;
+    const lineIds = reconcileChapterLineIdDraft(
+      chapterDraftLineIdState.content,
+      content,
+      beforeLineIds,
+      hint
+    );
+    chapterAnnotationCounts = remapChapterLineCounts(beforeLineIds, lineIds, chapterAnnotationCounts);
     chapterDraftLineIdState = {
       chapterId: state.chapter.id,
       content,
-      lineIds: reconcileChapterLineIdDraft(
-        chapterDraftLineIdState.content,
-        content,
-        chapterDraftLineIdState.lineIds,
-        hint
-      )
+      lineIds
     };
   }
   return chapterDraftLineIdState.lineIds;
@@ -9389,6 +9397,7 @@ function tidyChapterBlankLines() {
   const normalized = normalizeParagraphSpacing(input.value);
   if (normalized === input.value) return toast("正文空行已经符合要求");
   input.value = normalized;
+  syncChapterDraftLineIds(input.value);
   scheduleChapterLineNumbers();
   updateChapterStats();
   scheduleChapterAutoSave(120);

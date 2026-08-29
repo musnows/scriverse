@@ -11,6 +11,12 @@ export function normalizeChapterLineIdDraft(
   lineIds: unknown
 ): Array<string | null>;
 
+export function remapChapterLineCounts(
+  beforeLineIds: unknown,
+  afterLineIds: unknown,
+  lineCounts: unknown
+): Map<number, number>;
+
 export function reconcileChapterLineIdDraft(
   beforeContent: unknown,
   afterContent: unknown,
