@@ -18,9 +18,9 @@ import {
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
 export const SYSTEM_USER_ID = "__scriverse_system_user__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0；版本 111 扩展模型思考强度为 auto；版本 112 为 CLI API Key 增加可复制的加密密文；版本 113 增加角色收藏状态与列表索引；版本 114 增加组织、设定档案与想法收藏状态及列表索引；版本 115 增加 AI 对话会话级场景钉；版本 116 增加可持久化且可撤销的 Desktop Bearer 会话；版本 117 增加作品离线授权、同步变更游标与幂等变更结果；版本 118 增加供应商分析请求超时配置；版本 119 记录分析任务是否由 API Key 创建；版本 120 将书籍资料收藏按用户隔离并增加书籍级共享置顶；版本 121 强制作品 Owner 非空并建立用户外键约束；版本 122 创建 AI 写入审批与持久化提问表，并增加按角色归属的共享角色扮演记忆及作品级正文编辑偏好；版本 123 为正文评论持久化逐行哈希锚点；版本 124 为正文行和评论锚点持久化稳定行身份。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0；版本 111 扩展模型思考强度为 auto；版本 112 为 CLI API Key 增加可复制的加密密文；版本 113 增加角色收藏状态与列表索引；版本 114 增加组织、设定档案与想法收藏状态及列表索引；版本 115 增加 AI 对话会话级场景钉；版本 116 增加可持久化且可撤销的 Desktop Bearer 会话；版本 117 增加作品离线授权、同步变更游标与幂等变更结果；版本 118 增加供应商分析请求超时配置；版本 119 记录分析任务是否由 API Key 创建；版本 120 将书籍资料收藏按用户隔离并增加书籍级共享置顶；版本 121 强制作品 Owner 非空并建立用户外键约束；版本 122 创建 AI 写入审批与持久化提问表，并增加按角色归属的共享角色扮演记忆及作品级正文编辑偏好；版本 123 为正文评论持久化逐行哈希锚点；版本 124 为正文行和评论锚点持久化稳定行身份；版本 125 增加显式语义检索配置、分片索引、模型类型与上下文快照。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 124;
+export const DATABASE_SCHEMA_VERSION = 125;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -4895,6 +4895,118 @@ export class Database {
           }
         }
         this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (124, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const modelKindPresent = this.all<{ name: string }>("PRAGMA table_info(models)")
+      .some((column) => column.name === "model_kind");
+    const semanticSettingsColumns = new Set(
+      this.all<{ name: string }>("PRAGMA table_info(work_ai_settings)").map((column) => column.name)
+    );
+    const semanticIndexPresent = Boolean(this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'semantic_index_entries'"
+    ));
+    if (!applied.has(125) || !modelKindPresent || !semanticIndexPresent) {
+      this.transaction(() => {
+        if (!modelKindPresent) {
+          this.run("ALTER TABLE models ADD COLUMN model_kind TEXT NOT NULL DEFAULT 'chat' CHECK(model_kind IN ('chat', 'embedding', 'rerank'))");
+        }
+        const semanticSettings: Array<[string, string]> = [
+          ["semantic_search_enabled", "INTEGER NOT NULL DEFAULT 0 CHECK(semantic_search_enabled IN (0, 1))"],
+          ["semantic_embedding_model_id", "TEXT REFERENCES models(id) ON DELETE SET NULL"],
+          ["semantic_rerank_model_id", "TEXT REFERENCES models(id) ON DELETE SET NULL"],
+          ["semantic_vector_dimension", "INTEGER NOT NULL DEFAULT 1024 CHECK(semantic_vector_dimension BETWEEN 1 AND 65536)"],
+          ["semantic_recall_limit", "INTEGER NOT NULL DEFAULT 20 CHECK(semantic_recall_limit BETWEEN 1 AND 200)"],
+          ["semantic_result_limit", "INTEGER NOT NULL DEFAULT 12 CHECK(semantic_result_limit BETWEEN 1 AND 100)"],
+          ["semantic_budget_tokens", "INTEGER NOT NULL DEFAULT 4000 CHECK(semantic_budget_tokens BETWEEN 256 AND 100000)"],
+          ["semantic_channel_weight", "REAL NOT NULL DEFAULT 1 CHECK(semantic_channel_weight BETWEEN 0.1 AND 5)"]
+        ];
+        for (const [column, definition] of semanticSettings) {
+          if (!semanticSettingsColumns.has(column)) this.run(`ALTER TABLE work_ai_settings ADD COLUMN ${column} ${definition}`);
+        }
+        this.raw.exec(`
+          CREATE TABLE IF NOT EXISTS semantic_index_entries (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            source_type TEXT NOT NULL CHECK(source_type IN (
+              'chapter', 'setting', 'character', 'race', 'organization', 'timeline-track',
+              'timeline-event', 'relationship', 'chapter-outline', 'foreshadow'
+            )),
+            source_id TEXT NOT NULL,
+            section_id TEXT NOT NULL DEFAULT '',
+            source_version TEXT NOT NULL,
+            source_title TEXT NOT NULL,
+            chunk_order INTEGER NOT NULL CHECK(chunk_order >= 0),
+            start_line INTEGER NOT NULL CHECK(start_line >= 1),
+            end_line INTEGER NOT NULL CHECK(end_line >= start_line),
+            start_offset INTEGER NOT NULL CHECK(start_offset >= 0),
+            end_offset INTEGER NOT NULL CHECK(end_offset >= start_offset),
+            content TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            vector_json TEXT NOT NULL CHECK(json_valid(vector_json) AND json_type(vector_json) = 'array'),
+            vector_dimension INTEGER NOT NULL CHECK(vector_dimension BETWEEN 1 AND 65536),
+            embedding_model_id TEXT NOT NULL,
+            config_fingerprint TEXT NOT NULL CHECK(length(config_fingerprint) = 64),
+            chunk_rule_version INTEGER NOT NULL DEFAULT 1 CHECK(chunk_rule_version >= 1),
+            created_at TEXT NOT NULL,
+            UNIQUE(work_id, source_type, source_id, section_id, source_version, chunk_order, config_fingerprint)
+          );
+          CREATE INDEX IF NOT EXISTS idx_semantic_index_entries_recall
+            ON semantic_index_entries(work_id, config_fingerprint, source_type, source_id);
+          CREATE INDEX IF NOT EXISTS idx_semantic_index_entries_source
+            ON semantic_index_entries(work_id, source_type, source_id, section_id, source_version);
+
+          CREATE TABLE IF NOT EXISTS semantic_index_state (
+            work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'idle' CHECK(status IN ('disabled', 'idle', 'building', 'ready', 'failed', 'paused')),
+            config_fingerprint TEXT NOT NULL DEFAULT '',
+            total_sources INTEGER NOT NULL DEFAULT 0 CHECK(total_sources >= 0),
+            processed_sources INTEGER NOT NULL DEFAULT 0 CHECK(processed_sources >= 0),
+            failed_sources INTEGER NOT NULL DEFAULT 0 CHECK(failed_sources >= 0),
+            consecutive_failures INTEGER NOT NULL DEFAULT 0 CHECK(consecutive_failures >= 0),
+            error TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+          ) WITHOUT ROWID;
+
+          CREATE TABLE IF NOT EXISTS semantic_context_snapshots (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE SET NULL,
+            query TEXT NOT NULL,
+            scope_json TEXT NOT NULL CHECK(json_valid(scope_json) AND json_type(scope_json) = 'object'),
+            config_fingerprint TEXT NOT NULL CHECK(length(config_fingerprint) = 64),
+            created_by_user_id TEXT,
+            created_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_semantic_context_snapshots_work
+            ON semantic_context_snapshots(work_id, created_at DESC);
+
+          CREATE TABLE IF NOT EXISTS semantic_context_snapshot_items (
+            snapshot_id TEXT NOT NULL REFERENCES semantic_context_snapshots(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL CHECK(position >= 0),
+            entry_id TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            section_id TEXT NOT NULL DEFAULT '',
+            source_version TEXT NOT NULL,
+            source_title TEXT NOT NULL,
+            start_line INTEGER NOT NULL CHECK(start_line >= 1),
+            end_line INTEGER NOT NULL CHECK(end_line >= start_line),
+            content TEXT NOT NULL,
+            estimated_tokens INTEGER NOT NULL CHECK(estimated_tokens >= 0),
+            semantic_score REAL NOT NULL,
+            rerank_score REAL,
+            match_kinds_json TEXT NOT NULL CHECK(json_valid(match_kinds_json) AND json_type(match_kinds_json) = 'array'),
+            PRIMARY KEY(snapshot_id, position),
+            UNIQUE(snapshot_id, entry_id)
+          ) WITHOUT ROWID;
+        `);
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (125, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
