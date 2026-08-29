@@ -15795,17 +15795,17 @@ function renderCharacterEditorFields(item) {
   const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
   const chapterOptions = [["", "未指定"], ...(state.work?.volumes ?? []).flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]))];
   const stateEntries = characterStateEntries(item?.currentState ?? {});
+  const raceField = !canReadModule("races")
+    ? '<div class="character-editor-empty-field"><b>种族</b><span>当前账户没有种族模块读取权限，原有绑定不会被修改。</span></div>'
+    : state.races.length
+      ? field("raceId", "种族", "select", item?.raceId ?? "", raceOptions)
+      : '<div class="character-editor-empty-field"><b>种族</b><span>尚未创建种族，请先在“种族”模块建立档案。</span></div>';
   $("#character-editor-fields").innerHTML = [
     characterEditorSection("basic", "基础资料", "用于检索、去重和建立人物在作品中的基本归属。",
       `<div class="avatar-settings character-avatar-settings"><div id="character-avatar-preview" class="character-avatar character-avatar-editor-preview" role="img" aria-label="角色头像"></div><div class="avatar-settings-copy"><strong>角色头像</strong><small>支持 PNG、JPEG、WebP，文件不超过 2 MB。选择后可框选正方形选区再裁剪上传。</small></div><div class="avatar-settings-actions"><button id="character-avatar-upload-button" class="ghost-button" type="button">${item?.avatarUrl ? "更换头像" : "上传头像"}</button><button id="character-avatar-remove-button" class="ghost-button${item?.avatarUrl ? "" : " hidden"}" type="button">移除头像</button></div></div>` +
-      field("name", "标准名", "text", item?.name) +
+      raceField +
       field("gender", "性别", "select", item?.gender ?? "unknown", CHARACTER_GENDER_OPTIONS) +
       field("aliases", "别名", "keyword-chips", item?.aliases ?? []) +
-      (!canReadModule("races")
-        ? '<div class="character-editor-empty-field"><b>种族</b><span>当前账户没有种族模块读取权限，原有绑定不会被修改。</span></div>'
-        : state.races.length
-        ? field("raceId", "种族", "select", item?.raceId ?? "", raceOptions)
-        : '<div class="character-editor-empty-field"><b>种族</b><span>尚未创建种族，请先在“种族”模块建立档案。</span></div>') +
       (!canReadModule("organizations")
         ? '<div class="character-editor-empty-field"><b>所属组织</b><span>当前账户没有组织模块读取权限，原有绑定不会被修改。</span></div>'
         : organizationOptions.length
@@ -15845,8 +15845,6 @@ function renderCharacterEditorFields(item) {
         : '<div class="character-editor-empty-field"><b>角色扮演记忆</b><span>保存角色卡后即可管理该角色的共享记忆库。</span></div>',
       item?.id ? roleplayMemoryToolbarMarkup() : "")
   ].join("");
-  const name = $("#character-editor-fields [name='name']");
-  if (name) name.required = true;
   bindDynamicListControls($("#character-editor-fields"));
   bindRelationshipKeywordControls($("#character-editor-fields"));
   renderCharacterAvatar(item);
@@ -15928,7 +15926,7 @@ function renderCharacterHistory() {
       const restored = await api(`/api/characters/${characterEditorItem.id}/restore`, { method: "POST", body: { versionNo } });
       characterEditorItem = restored;
       renderCharacterEditorFields(restored);
-      $("#character-editor-title").textContent = restored.name;
+      $("#character-editor-name").value = restored.name;
       $("#character-editor-version").textContent = `v${restored.versionNo}`;
       $("#character-change-note").value = "";
       await Promise.all([renderCharacters(), loadAiReferences()]);
@@ -15967,7 +15965,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   characterEditorRelationshipsLoaded = false;
   characterEditorSections = [];
   $("#character-editor-eyebrow").textContent = item ? "人物主档案" : "建立人物档案";
-  $("#character-editor-title").textContent = item?.name || "新建角色";
+  $("#character-editor-name").value = item?.name ?? "";
   $("#character-editor-version").textContent = item ? `v${item.versionNo}` : "新档案";
   $("#character-change-note").value = "";
   $("#character-editor-submit").textContent = item ? "保存新版本" : "创建人物档案";
@@ -16016,6 +16014,9 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   setCharacterHistoryVisible(false);
   renderCharacterEditorFields(item);
   const viewOnly = readOnly || !canEditModule("characters");
+  $("#character-editor-form").classList.toggle("is-read-only", viewOnly);
+  $("#character-editor-name").readOnly = viewOnly;
+  $("#character-editor-name").setAttribute("aria-readonly", String(viewOnly));
   if (viewOnly) {
     $("#character-editor-eyebrow").textContent = readOnly ? "阅读人物档案" : "人物档案";
     $("#character-editor-fields").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = true; });
@@ -16067,7 +16068,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
         const body = collectCharacterBody(new FormData(form));
         if (!body.name) {
           toast("请填写角色标准名", "error");
-          form.querySelector("[name='name']")?.focus();
+          $("#character-editor-name").focus();
           return null;
         }
         const currentItem = characterEditorItem;
@@ -16081,7 +16082,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
         state.characters = upsertEntityCollection(state.characters, saved);
         entityEditorDirty = false;
         renderCharacterAvatar(saved);
-        $("#character-editor-title").textContent = saved.name;
+        $("#character-editor-name").value = saved.name;
         $("#character-editor-version").textContent = `v${saved.versionNo}`;
         $("#character-change-note").value = "";
         $("#character-history-button").disabled = false;
@@ -16107,6 +16108,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   if (item) {
     void loadCharacterMarkdownSections(item.id);
   }
+  (viewOnly ? $("#character-editor-close") : $("#character-editor-name")).focus();
 }
 
 function knowledgeEditorSection(key, title, description, content) {

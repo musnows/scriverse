@@ -3776,9 +3776,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .knowledge-markdown-block .message-body { overflow-wrap: anywhere; font-size: 12px; line-height: 1.65; }
 .character-editor-header > div:nth-child(2) { min-width: 0; text-align: center; }
 .character-editor-header h1, .character-editor-header h3 { margin: 0; }
-.character-editor-title-row { display: flex; align-items: center; gap: 10px; margin-top: 3px; }
-.character-editor-title-row { justify-content: center; }
+.character-editor-title-row { display: flex; align-items: center; justify-content: center; min-width: 0; gap: 10px; margin-top: 3px; }
 .character-editor-title-row h1 { overflow: hidden; font-size: 24px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.character-editor-title-input { flex: 0 1 520px; width: min(100%, 520px); min-width: 0; padding: 0 0 4px; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: transparent; color: var(--ink); font-size: 24px; font-weight: 600; line-height: 1.2; text-align: center; }
+.character-editor-title-input::placeholder { color: var(--muted); opacity: 1; }
+.character-editor-title-input:focus { border-color: var(--accent); box-shadow: none; }
+.character-editor-title-input[readonly] { cursor: default; }
+.character-editor-title-input[readonly]:focus { border-color: transparent; }
 .knowledge-editor-header-note { color: var(--muted); font-size: 10px; text-align: right; }
 .character-version-badge { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper-deep); color: var(--accent-dark); font: 10px/1 var(--font-latin), monospace; }
 .character-editor-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
@@ -4042,7 +4046,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .setting-row, .module-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .setting-row .card-actions, .module-row .card-actions { justify-content: flex-start; }
   .entity-editor-header, .character-editor-header { grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; padding-inline: 12px; }
-  .entity-editor-heading h1, .character-editor-title-row h1 { font-size: 18px; }
+  .entity-editor-heading h1, .character-editor-title-row h1, .character-editor-title-input { font-size: 18px; }
   .entity-editor-back { overflow: hidden; width: 40px; min-width: 40px; padding-inline: 11px; white-space: nowrap; }
   .entity-editor-back::before { margin-right: 18px; }
   .setting-editor-header { min-height: 102px; }
