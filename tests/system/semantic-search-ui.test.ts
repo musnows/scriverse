@@ -18,7 +18,7 @@ describe("主动语义检索界面", () => {
     expect(page).toContain("只在点击检索后调用 embedding；结果默认仅查看");
     expect(page).toContain('id="ai-semantic-inject"');
     expect(page).toContain('id="ai-semantic-injection"');
-    expect(page).toContain("feature=semantic-search-v1");
+    expect(page).toContain("feature=semantic-search-v4");
 
     expect(application).toContain("这是一个 embedding 模型");
     expect(application).toContain("这是一个 rerank 模型");
@@ -32,6 +32,7 @@ describe("主动语义检索界面", () => {
     expect(application).toContain('value="semantic_search_story"');
     expect(application).toContain("function runAiSemanticSearch()");
     expect(application).toContain("function injectAiSemanticSelection()");
+    expect(application).toContain('if (!$("#ai-semantic-search-panel").classList.contains("hidden"))');
     expect(application).toContain("if (state.aiSemanticSnapshot?.id) scope.semanticSnapshotId = state.aiSemanticSnapshot.id;");
     expect(application).toContain("Embedding\", rerank: \"Rerank");
 
