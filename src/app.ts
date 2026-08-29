@@ -1,3 +1,4 @@
+import compression from "compression";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import JSZip from "jszip";
 import multer from "multer";
@@ -32,6 +33,17 @@ import {
   CHARACTER_EXTRACTION_MAX_NAME_LENGTH,
   CHARACTER_EXTRACTION_MAX_SPECIES_LENGTH
 } from "./character-extraction.js";
+import {
+  AiWritePlanManager,
+  AI_USER_QUESTION_STATUSES,
+  AI_WRITE_PLAN_STATUSES,
+  aiWriteToolDescriptions,
+  aiWriteToolLabels,
+  aiWriteToolsUpdateSchema,
+  answerAiUserQuestionSchema,
+  resolveAiWritePlanMaxOperations,
+  type PlanViewer
+} from "./ai-write-plans.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
@@ -41,8 +53,15 @@ import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH, readableHybridSearchTypes } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
+import { MAX_CHAPTER_LINE_IDS } from "./chapter-annotation-anchor.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes, WORK_AGENT_TOOL_IDS } from "./store.js";
 import { composeRoleplayStoredUserContent } from "./roleplay-turn.js";
+import {
+  ROLEPLAY_MEMORY_CATEGORIES,
+  ROLEPLAY_MEMORY_CERTAINTY,
+  ROLEPLAY_MEMORY_IMPORTANCE,
+  ROLEPLAY_MEMORY_STATUSES
+} from "./roleplay-memory.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
@@ -79,6 +98,7 @@ import {
   UserAuthService,
   type AuthUser
 } from "./user-auth.js";
+import { extractStaticModuleImports, injectModulePreloads } from "./ui-module-preload.js";
 
 const chapterAnnotationKinds = ["note", "todo"] as const;
 
@@ -94,6 +114,32 @@ const optionalStrings = z.array(z.string()).optional();
 const jsonObject = z.record(z.string(), z.unknown());
 const chapterTypeSchema = z.enum(["正文", "设定", "作者的话", "其他"]);
 const aiConversationTaskTypeSchema = z.enum(aiConversationTaskTypes);
+const roleplayMemoryInputSchema = z.object({
+  category: z.enum(ROLEPLAY_MEMORY_CATEGORIES),
+  content: z.string().trim().min(1).max(2_000),
+  importance: z.enum(ROLEPLAY_MEMORY_IMPORTANCE).optional(),
+  certainty: z.enum(ROLEPLAY_MEMORY_CERTAINTY).optional(),
+  isPinned: z.boolean().optional()
+}).strict();
+const roleplayMemoryListQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  categories: z.preprocess(
+    (value) => typeof value === "string" ? value.split(",").filter(Boolean) : value,
+    z.array(z.enum(ROLEPLAY_MEMORY_CATEGORIES)).max(ROLEPLAY_MEMORY_CATEGORIES.length).optional()
+  ),
+  statuses: z.preprocess(
+    (value) => typeof value === "string" ? value.split(",").filter(Boolean) : value,
+    z.array(z.enum(ROLEPLAY_MEMORY_STATUSES)).max(ROLEPLAY_MEMORY_STATUSES.length).optional()
+  ),
+  cursor: z.coerce.number().int().min(0).max(100_000).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional()
+}).strict();
+const roleplayMemoryUpdateSchema = roleplayMemoryInputSchema.partial().extend({
+  expectedVersion: z.number().int().min(1)
+}).strict().refine(
+  (value) => Object.keys(value).some((key) => key !== "expectedVersion"),
+  "至少提供一个要修改的字段"
+);
 const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
 const attachmentPermissionModuleSchema = z.enum(attachmentPermissionModules);
 const maximumImportedTextLength = 20_000_000;
@@ -247,7 +293,9 @@ const workSchema = z.object({
   description: z.string().max(10_000).optional(),
   language: z.string().max(30).optional(),
   coverUrl: z.string().url().nullable().optional(),
-  tags: optionalStrings
+  tags: optionalStrings,
+  editorAutoIndentEnabled: z.boolean().optional(),
+  editorTypewriterModeEnabled: z.boolean().optional()
 });
 const workOfflineAccessSchema = z.object({ enabled: z.boolean() }).strict();
 
@@ -1545,6 +1593,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       allowPrivateAiEndpoints: options.security?.allowPrivateAiEndpoints === true
     }
   );
+  // AI 可写工具与审批工作流：计划创建只能由侧边栏 AI 发起，确认入口只接收审批 ID。
+  const aiWritePlanManager = new AiWritePlanManager({
+    database,
+    store,
+    auth,
+    resolveAnalysisTask: (workId, input) => ai.resolveTaskInput(workId, input),
+    startAnalysisTask: (workId, input) => store.createTask(workId, input)
+  });
+  ai.attachWritePlanManager(aiWritePlanManager);
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2108,7 +2165,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/chapters/:chapterId", (request, response) => data(response, store.getChapter(request.params.chapterId)));
   app.patch("/api/chapters/:chapterId", (request, response) => {
-    const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional(), changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), lineIds: z.array(z.union([identifier, z.null()])).max(MAX_CHAPTER_LINE_IDS).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional(), changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const { source, changeNote, expectedVersionNo, ...chapterInput } = input;
     const chapter = store.saveChapter(request.params.chapterId, chapterInput, source ?? "manual", null, changeNote, expectedVersionNo);
     publishEditorChange(String(chapter.workId), String(chapter.id));
@@ -3134,6 +3191,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.createAiConversation(request.params.workId, input.title, input.taskType), 201);
   });
   app.use("/api/ai-conversations/:conversationId", (request, _response, next) => {
+    const sourceId = typeof request.query.roleplayMemorySourceId === "string"
+      ? request.query.roleplayMemorySourceId
+      : null;
+    const messageId = typeof request.query.messageId === "string" ? request.query.messageId : null;
+    if (
+      ["GET", "HEAD"].includes(request.method)
+      && request.authUser?.role === "admin"
+      && sourceId !== null
+      && messageId !== null
+      && store.isRoleplayMemorySourceTarget(sourceId, request.params.conversationId, messageId)
+    ) return next();
     assertRequestAiConversationOwner(request, request.params.conversationId);
     next();
   });
@@ -3201,6 +3269,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const permissions = requestPermissions(request, String(updated.workId));
     data(response, redactAiConversation(updated, permissions));
   });
+  app.get("/api/characters/:characterId/roleplay-memories", (request, response) => {
+    const query = parse(roleplayMemoryListQuerySchema, request.query);
+    data(response, store.listRoleplayMemories(request.params.characterId, {
+      query: query.q,
+      categories: query.categories,
+      statuses: query.statuses,
+      cursor: query.cursor,
+      limit: query.limit
+    }));
+  });
+  app.post("/api/characters/:characterId/roleplay-memories", (request, response) => {
+    const input = parse(roleplayMemoryInputSchema, request.body);
+    data(response, store.createRoleplayMemory(request.params.characterId, input), 201);
+  });
   app.post("/api/ai-conversations/:conversationId/messages", (request, response) => {
     const input = parse(z.object({
       role: z.enum(["user", "assistant"]),
@@ -3262,6 +3344,137 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         scope: input.scope
       })
     });
+  });
+  app.patch("/api/roleplay-memories/:memoryId", (request, response) => {
+    const input = parse(roleplayMemoryUpdateSchema, request.body);
+    data(response, store.updateRoleplayMemory(request.params.memoryId, input));
+  });
+  app.delete("/api/roleplay-memories/:memoryId", (request, response) => {
+    const input = parse(z.object({ expectedVersion: z.number().int().min(1) }).strict(), request.body);
+    data(response, store.setRoleplayMemoryArchived(request.params.memoryId, true, input.expectedVersion));
+  });
+  app.post("/api/roleplay-memories/:memoryId/restore", (request, response) => {
+    const input = parse(z.object({ expectedVersion: z.number().int().min(1) }).strict(), request.body);
+    data(response, store.setRoleplayMemoryArchived(request.params.memoryId, false, input.expectedVersion));
+  });
+
+  // ---------------------------------------------------------------- AI 可写工具与审批中心
+
+  const planViewer = (): PlanViewer => {
+    const actor = currentRequestActor();
+    return actor ? { userId: actor.userId, role: actor.role } : null;
+  };
+
+  app.get("/api/works/:workId/ai/tools", (request, response) => {
+    store.getWork(request.params.workId);
+    data(response, {
+      tools: aiWritePlanManager.getEnabledTools(request.params.workId),
+      labels: aiWriteToolLabels,
+      descriptions: aiWriteToolDescriptions,
+      maxOperations: resolveAiWritePlanMaxOperations(process.env.AI_WRITE_PLAN_MAX_OPERATIONS)
+    });
+  });
+  app.put("/api/works/:workId/ai/tools", (request, response) => {
+    const input = parse(aiWriteToolsUpdateSchema, request.body ?? {});
+    data(response, {
+      tools: aiWritePlanManager.updateToolSettings(request.params.workId, input.tools, currentRequestActor()?.userId ?? null)
+    });
+  });
+
+  app.get("/api/works/:workId/ai/write-plans", (request, response) => {
+    const status = typeof request.query.status === "string"
+      ? parse(z.enum(AI_WRITE_PLAN_STATUSES), request.query.status)
+      : undefined;
+    const limit = Number.parseInt(typeof request.query.limit === "string" ? request.query.limit : "", 10);
+    data(response, {
+      plans: aiWritePlanManager.listPlansForWork(request.params.workId, planViewer(), {
+        status,
+        ...(Number.isFinite(limit) ? { limit } : {})
+      })
+    });
+  });
+  app.get("/api/works/:workId/ai/write-plans/:planId", (request, response) => {
+    data(response, aiWritePlanManager.getPlanDetail(request.params.planId, request.params.workId, planViewer()));
+  });
+  app.post("/api/works/:workId/ai/write-plans/:planId/confirm", async (request, response) => {
+    data(response, await aiWritePlanManager.confirmPlan(request.params.planId, request.params.workId, planViewer()));
+  });
+  app.post("/api/works/:workId/ai/write-plans/:planId/reject", (request, response) => {
+    data(response, aiWritePlanManager.rejectPlan(request.params.planId, request.params.workId, planViewer()));
+  });
+  app.post("/api/works/:workId/ai/write-plans/:planId/undo", (request, response) => {
+    data(response, aiWritePlanManager.createUndoPlan(request.params.planId, request.params.workId, planViewer()), 201);
+  });
+
+  app.get("/api/works/:workId/ai/questions", (request, response) => {
+    const conversationId = typeof request.query.conversationId === "string"
+      ? parse(identifier, request.query.conversationId)
+      : undefined;
+    const status = typeof request.query.status === "string"
+      ? parse(z.enum(AI_USER_QUESTION_STATUSES), request.query.status)
+      : undefined;
+    const limit = Number.parseInt(typeof request.query.limit === "string" ? request.query.limit : "", 10);
+    data(response, {
+      questions: aiWritePlanManager.listQuestions(request.params.workId, planViewer(), {
+        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(Number.isFinite(limit) ? { limit } : {})
+      })
+    });
+  });
+  app.get("/api/works/:workId/ai/questions/:questionId", (request, response) => {
+    data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, planViewer()));
+  });
+  const resumeQuestionWorkflow = async (questionId: string, workId: string, viewer: PlanViewer): Promise<void> => {
+    const continuation = aiWritePlanManager.claimQuestionContinuation(questionId, workId, viewer);
+    if (!continuation) return;
+    try {
+      const conversationId = typeof continuation.conversationId === "string" ? continuation.conversationId : "";
+      if (!conversationId) throw new AppError(409, "AI_QUESTION_CONTINUATION_MISSING", "提问缺少可恢复的对话状态");
+      const scope = parse(contextSchema, continuation.scope ?? { type: "none" }) as ContextScope;
+      const resumed = await ai.resumeUserQuestion({
+        questionId,
+        workId,
+        conversationId,
+        scope,
+        status: String(continuation.status ?? "rejected"),
+        answerText: String(continuation.answerText ?? ""),
+        selectedOptionLabel: typeof continuation.selectedOptionLabel === "string" ? continuation.selectedOptionLabel : null,
+        supplementalAnswer: typeof continuation.customAnswer === "string" ? continuation.customAnswer : "",
+        ...(typeof continuation.modelId === "string" && continuation.modelId ? { modelId: continuation.modelId } : {}),
+        ...(typeof continuation.toolCallId === "string" && continuation.toolCallId ? { toolCallId: continuation.toolCallId } : {}),
+        ...(typeof continuation.assistantMessageRequestId === "string" && continuation.assistantMessageRequestId
+          ? { assistantMessageRequestId: continuation.assistantMessageRequestId }
+          : {}),
+        ...(continuation.questionView && typeof continuation.questionView === "object" && !Array.isArray(continuation.questionView)
+          ? { questionView: continuation.questionView as Record<string, unknown> }
+          : {}),
+        ...(typeof continuation.round === "number" ? { round: continuation.round } : {}),
+        ...(Array.isArray(continuation.toolMessages) ? { toolMessages: continuation.toolMessages } : {})
+      });
+      aiWritePlanManager.finishQuestionContinuation(questionId, { callId: resumed.callId ?? null, completed: true });
+    } catch (error) {
+      aiWritePlanManager.finishQuestionContinuation(questionId, { message: error instanceof Error ? error.message : "恢复失败" }, true);
+      throw error;
+    }
+  };
+  app.post("/api/works/:workId/ai/questions/:questionId/answer", async (request, response) => {
+    const input = parse(answerAiUserQuestionSchema, request.body ?? {});
+    const viewer = planViewer();
+    aiWritePlanManager.answerQuestion(
+      request.params.questionId,
+      request.params.workId,
+      viewer,
+      { ...(input.selectedOption !== undefined ? { selectedOption: input.selectedOption } : {}), ...(input.customAnswer !== undefined ? { customAnswer: input.customAnswer } : {}) }
+    );
+    await resumeQuestionWorkflow(request.params.questionId, request.params.workId, viewer);
+    data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, viewer));
+  });
+  app.post("/api/works/:workId/ai/questions/:questionId/reject", async (request, response) => {
+    const viewer = planViewer();
+    aiWritePlanManager.rejectQuestion(request.params.questionId, request.params.workId, viewer);
+    await resumeQuestionWorkflow(request.params.questionId, request.params.workId, viewer);
+    data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, viewer));
   });
 
   app.get("/api/works/:workId/providers", (request, response) => {
@@ -3611,6 +3824,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }
       const currentMessageId = String(begun.userMessage?.id ?? input.currentMessageId ?? "");
       if (begun.userMessage) sendEvent("user_message", { message: redactAiConversationMessage(begun.userMessage, permissions) });
+      if (aiWritePlanManager.latestPendingQuestion(conversationId)) {
+        throw new AppError(409, "AI_QUESTION_PENDING", "当前对话仍有待回答问题，请先回答或拒绝后再继续");
+      }
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: resolvedInstruction,
@@ -3792,11 +4008,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   if (options.serveUi ?? true) {
     const publicPath = options.publicPath ?? join(process.cwd(), "src", "public");
+    const publicApplicationModuleImports = extractStaticModuleImports(readFileSync(join(publicPath, "app.js"), "utf8"));
+    // API 与 SSE 路由已经在此前注册；压缩只作用于页面和静态资源，避免缓冲流式响应。
+    app.use(compression());
     // index.html 按登录态动态下发：未登录时注入 login-route 类，首帧直接渲染登录页；
     // 已登录时保持骨架屏，由前端恢复会话后进入工作台，避免两种闪烁。
     const sendIndexHtml = (request: Request, response: Response) => {
       const authenticated = options.disableUserAuth === true || auth.authenticate(request) !== null;
-      let html = readFileSync(join(publicPath, "index.html"), "utf8");
+      let html = injectModulePreloads(
+        readFileSync(join(publicPath, "index.html"), "utf8"),
+        publicApplicationModuleImports
+      );
       if (!authenticated) html = html.replace('<html lang="zh-CN">', '<html lang="zh-CN" class="login-route">');
       if (options.disableUserAuth === true) {
         html = html.replace('<html lang="zh-CN">', '<html lang="zh-CN" class="dev-auth-bypass">');

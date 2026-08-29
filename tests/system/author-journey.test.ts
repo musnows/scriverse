@@ -28,8 +28,9 @@ describe("作者完整创作流程", () => {
         let content = "舱门关闭，林舟望向逐渐远去的北港。";
         if (prompt.includes("检查下面的续写候选")) {
           content = "[]";
-        } else if (prompt.includes("抽取大事件候选")) {
-          content = JSON.stringify([{ name: "北港启航", description: "林舟驾驶飞船离开北港。", eventType: "离别", timeLabel: "启航日", timeSort: 1, location: "北港", impactScope: "personal", chapterIds: [], participantIds: [], evidence: [{ quote: "飞船驶离北港" }] }]);
+        } else if (prompt.includes("时间线事件证据账本")) {
+          const chapter = prompt.match(/<CHAPTER id="([^"]+)" title="([^"]+)">/u);
+          content = JSON.stringify([{ name: "北港启航", description: "林舟驾驶飞船离开北港。", eventType: "离别", timeLabel: "启航日", timeSort: 1, location: "北港", impactScope: "personal", participantReferences: ["林舟"], evidence: [{ chapterId: chapter?.[1], chapterTitle: chapter?.[2], quote: "逐渐远去的北港" }] }]);
         } else if (prompt.includes("小说人物关系抽取器")) {
           const chapters = [...prompt.matchAll(/<CHAPTER id="([^"]+)" title="([^"]+)">/gu)];
           content = JSON.stringify([{ fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "朋友", directed: false, currentStatus: "active", timeRange: { start: "第一卷" }, confidence: 0.82, evidence: chapters.map((match, index) => ({ chapterId: match[1], chapterTitle: match[2], quote: index === 0 ? "林舟想起沈星的警告" : "沈星仍保存着林舟的旧信", contextType: "current", supports: "两人保持长期联系" })) }]);
@@ -142,12 +143,16 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("overflow-wrap: anywhere; line-height: 1.45; white-space: normal");
     expect(page.text).toContain('id="ai-citations"');
     expect(page.text).toContain('id="line-citation-menu"');
-    expect(page.text).toContain('<button id="chapter-delete-button" class="danger-button" type="button">删除章节</button>');
+    expect(page.text).not.toContain('id="chapter-delete-button"');
     expect(page.text).toContain('data-delete-chapter');
     expect(application.text).toContain("async function deleteChapter(chapterId)");
     expect(application.text).toContain('title: "删除章节"');
     expect(application.text).toContain('title: "删除操作需要再次确认"');
     expect(application.text).toContain('method: "DELETE", body: { expectedVersionNo }');
+    expect(styles.text).toContain('.setting-editor-header .entity-editor-heading { display: grid; align-content: center; justify-items: center; gap: 8px; text-align: center; }');
+    expect(styles.text).toContain('.setting-editor-title-input::placeholder { color: var(--muted); opacity: 1; }');
+    expect(styles.text).toContain('font-size: 22px; font-weight: 600; line-height: 1.2; text-align: center;');
+    expect(styles.text).toContain('.setting-editor-header .entity-editor-heading { grid-column: 1 / -1; grid-row: 1; padding-inline: 48px; }');
   });
 
   it("作品切换和新建只保留在书架首页", async () => {
@@ -227,8 +232,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('<button id="setting-editor-delete" class="danger-button hidden" type="button">删除设定</button>');
     expect(page.text).toContain('id="character-merge-button"');
     expect(page.text).toContain('id="character-delete-button"');
-    expect(page.text.match(/data-character-editor-tab=/gu)).toHaveLength(5);
+    expect(page.text.match(/data-character-editor-tab=/gu)).toHaveLength(6);
     expect(page.text).toContain('data-character-editor-tab="relationships"');
+    expect(page.text).toContain('data-character-editor-tab="roleplay-memory"');
     expect(page.text).toContain("简介、人设摘要、身份与动机");
     expect(page.text).toContain("保存新版本");
     expect(application.text).toContain("function renderCharacterEditorFields(item)");
@@ -339,14 +345,16 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('feature=ai-token-usage-details-centered-v1');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
-    expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
-    expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
+    expect(page.text).not.toContain('/vendor/vditor/dist/index.css?v=3.11.2');
+    expect(page.text).not.toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
+    expect(page.text).not.toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
     expect(styles.text).toContain('.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; color: #fff; border-radius: 3px; font-weight: 700; }');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(page.text).toContain('feature=ai-provider-thinking-type-v1');
     expect(page.text).toContain('feature=ai-provider-analysis-timeout-v1');
+    expect(page.text).toContain('feature=ai-write-tools-v2');
+    expect(page.text).toContain('feature=ai-write-tools-v3');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -630,7 +638,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('class="prompt-composer"');
     expect(page.text).toContain('class="ai-send-button"');
     expect(page.text).toContain('id="ai-context-meter"');
-    expect(application.text).toContain('description.textContent = item.key === "skills"\n        ? "待加入"\n        : item.key === "input" ? "用户和 agent 的交互" : "模型输出预留";');
+    expect(application.text).toContain('description.textContent = item.key === "skills"\n        ? "待加入"\n        : item.key === "input" ? "用户和 agent 的交互" : "当前调用实际输出";');
     expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
     expect(application.text).toContain("多人协作，自动保存已关闭");
     expect(application.text).toContain("if (automatic) {");
@@ -644,6 +652,12 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('/markdown.js?v=20260731-no-external-images-v1');
     expect(application.text).toContain('/upload-progress.js?v=20260812-upload-progress-v1');
     expect(application.text).toContain('new window.Vditor');
+    expect(application.text).toContain('async function loadVditorResources()');
+    expect(application.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
+    expect(application.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
+    expect(application.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
+    expect(application.text).toContain('}, "edit-mode"],');
+    expect(application.text).not.toContain('}, "edit-mode", "fullscreen"]');
     expect(application.text).toContain('createVditorUploadHandler');
     expect(application.text).toContain('createVditorUploadPlaceholder');
     expect(page.text).toContain('id="character-section-editor-view"');
@@ -909,10 +923,11 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".left-actions { display: block; margin: 0 0 15px; }");
     expect(styles.text).toContain(".file-button { min-height: 30px; font-size: 11px;");
     expect(styles.text).toContain(".panel-heading { display: flex; align-items: center; gap: 8px; padding: 15px 0 9px 7px;");
-    expect(application.text).toContain('const stateName = sending ? "stop" : switching ? "switching" : "send";');
-    expect(application.text).toContain('button.disabled = switching;');
+    expect(application.text).toContain('const stateName = sending ? "stop" : (switching || continuingQuestion) ? "switching" : "send";');
+    expect(application.text).toContain('button.disabled = switching || continuingQuestion;');
     expect(application.text).toContain('button.classList.toggle("is-stop", sending);');
-    expect(application.text).toContain('content: $("#chapter-content").value');
+    expect(application.text).toContain('const content = $("#chapter-content").value;');
+    expect(application.text).toContain('...(lineIds.length <= MAX_CHAPTER_LINE_IDS ? { lineIds } : {})');
     expect(application.text).not.toContain("collapseChapterInputBlankLines");
     expect(application.text).not.toContain("collapseExcessBlankLines");
     expect(application.text).toContain("function tidyChapterBlankLines()");

@@ -43,6 +43,25 @@ import {
   roleplayUserTurnTitleSource,
   type RoleplayScenePin
 } from "./roleplay-turn.js";
+import {
+  chapterAnnotationLineHashes,
+  createChapterLineIds,
+  MAX_CHAPTER_LINE_IDS,
+  parseChapterAnnotationLineIds,
+  parseChapterAnnotationLineHashes,
+  parseChapterLineIds,
+  reconcileChapterLineIds,
+  reanchorChapterAnnotations
+} from "./chapter-annotation-anchor.js";
+import {
+  normalizeRoleplayMemoryContent,
+  roleplayMemoryCandidateIsSafe,
+  type RoleplayMemoryCandidate,
+  type RoleplayMemoryCategory,
+  type RoleplayMemoryCertainty,
+  type RoleplayMemoryImportance,
+  type RoleplayMemoryStatus
+} from "./roleplay-memory.js";
 
 type WorkInput = {
   title: string;
@@ -51,6 +70,8 @@ type WorkInput = {
   language?: string;
   coverUrl?: string | null;
   tags?: string[];
+  editorAutoIndentEnabled?: boolean;
+  editorTypewriterModeEnabled?: boolean;
 };
 
 type WorkListBatch = {
@@ -665,8 +686,10 @@ export function defaultAiConversationTitle(prompt: string): string {
 
 export type AiConversationContext = {
   workId: string;
+  taskType: AiConversationTaskType;
   roleplayCharacterId: string | null;
   roleplayUserCharacterId: string | null;
+  roleplayMemories: Record<string, unknown>[];
   summary: string;
   compactedMessageCount: number;
   totalMessageCount: number;
@@ -679,6 +702,26 @@ export type AiConversationContext = {
     content: string;
     metadata: Record<string, unknown>;
   }>;
+};
+
+export type RoleplayMemoryInput = {
+  category: RoleplayMemoryCategory;
+  content: string;
+  importance?: RoleplayMemoryImportance;
+  certainty?: RoleplayMemoryCertainty;
+  isPinned?: boolean;
+};
+
+export type RoleplayMemoryUpdateInput = Partial<RoleplayMemoryInput> & {
+  expectedVersion: number;
+};
+
+export type RoleplayMemoryListOptions = {
+  query?: string;
+  categories?: RoleplayMemoryCategory[];
+  statuses?: RoleplayMemoryStatus[];
+  cursor?: number;
+  limit?: number;
 };
 
 export type AiConversationTitleContext = {
@@ -1165,6 +1208,8 @@ export class Store {
       language: entity.language,
       coverUrl: entity.coverUrl,
       tags: entity.tags,
+      editorAutoIndentEnabled: entity.editorAutoIndentEnabled,
+      editorTypewriterModeEnabled: entity.editorTypewriterModeEnabled,
       ownerUserId: entity.ownerUserId
     };
     if (type === "volume") return {
@@ -1491,8 +1536,9 @@ export class Store {
         const ownerUserId = this.resolveWorkOwnerUserId(typeof snapshot.ownerUserId === "string" ? snapshot.ownerUserId : null, true);
         const timestamp = now();
         this.db.run(
-          `INSERT INTO works (id, title, author, description, language, cover_url, tags_json, version_no, created_at, updated_at, owner_user_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+          `INSERT INTO works (id, title, author, description, language, cover_url, tags_json,
+           editor_auto_indent_enabled, editor_typewriter_mode_enabled, version_no, created_at, updated_at, owner_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
           entityId,
           String(snapshot.title ?? "未命名作品"),
           String(snapshot.author ?? ""),
@@ -1500,6 +1546,8 @@ export class Store {
           String(snapshot.language ?? "zh-CN"),
           snapshot.coverUrl as string | null ?? null,
           JSON.stringify(Array.isArray(snapshot.tags) ? snapshot.tags : []),
+          snapshot.editorAutoIndentEnabled === true ? 1 : 0,
+          snapshot.editorTypewriterModeEnabled === true ? 1 : 0,
           timestamp,
           timestamp,
           ownerUserId
@@ -1587,8 +1635,9 @@ export class Store {
     const resolvedOwnerUserId = this.resolveWorkOwnerUserId(ownerUserId);
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO works (id, title, author, description, language, cover_url, tags_json, created_at, updated_at, owner_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO works (id, title, author, description, language, cover_url, tags_json,
+         editor_auto_indent_enabled, editor_typewriter_mode_enabled, created_at, updated_at, owner_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         workId,
         input.title,
         input.author ?? "",
@@ -1596,6 +1645,8 @@ export class Store {
         input.language ?? "zh-CN",
         input.coverUrl ?? null,
         JSON.stringify(input.tags ?? []),
+        input.editorAutoIndentEnabled === true ? 1 : 0,
+        input.editorTypewriterModeEnabled === true ? 1 : 0,
         timestamp,
         timestamp,
         resolvedOwnerUserId
@@ -2055,7 +2106,8 @@ export class Store {
       this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
       const timestamp = now();
       this.db.run(
-        `UPDATE works SET title = ?, author = ?, description = ?, language = ?, cover_url = ?, tags_json = ?, version_no = version_no + 1, updated_at = ?
+        `UPDATE works SET title = ?, author = ?, description = ?, language = ?, cover_url = ?, tags_json = ?,
+         editor_auto_indent_enabled = ?, editor_typewriter_mode_enabled = ?, version_no = version_no + 1, updated_at = ?
          WHERE id = ?`,
         input.title ?? String(current.title),
         input.author ?? String(current.author),
@@ -2063,6 +2115,8 @@ export class Store {
         input.language ?? String(current.language),
         input.coverUrl === undefined ? (current.coverUrl as string | null) : input.coverUrl,
         JSON.stringify(input.tags ?? current.tags),
+        input.editorAutoIndentEnabled === undefined ? (current.editorAutoIndentEnabled ? 1 : 0) : input.editorAutoIndentEnabled ? 1 : 0,
+        input.editorTypewriterModeEnabled === undefined ? (current.editorTypewriterModeEnabled ? 1 : 0) : input.editorTypewriterModeEnabled ? 1 : 0,
         timestamp,
         workId
       );
@@ -3229,7 +3283,7 @@ export class Store {
 
   saveChapter(
     chapterId: string,
-    input: { title?: string; content?: string; excludedFromAnalysis?: boolean; chapterType?: ChapterType },
+    input: { title?: string; content?: string; lineIds?: Array<string | null>; excludedFromAnalysis?: boolean; chapterType?: ChapterType },
     source = "manual",
     sourceRef: string | null = null,
     changeNote = "",
@@ -3241,6 +3295,7 @@ export class Store {
     const nextContent = input.content === undefined ? String(current.content) : input.content;
     const nextExcluded = input.excludedFromAnalysis ?? Boolean(current.excludedFromAnalysis);
     const nextChapterType = input.chapterType ?? String(current.chapterType) as ChapterType;
+    const hasContentChange = nextContent !== current.content;
     const hasTextChange = nextTitle !== current.title || nextContent !== current.content;
     const hasTypeChange = nextChapterType !== current.chapterType;
     const hasOtherChange = nextExcluded !== current.excludedFromAnalysis || hasTypeChange;
@@ -3250,9 +3305,23 @@ export class Store {
     this.db.transaction(() => {
       const lockedCurrent = this.getChapter(chapterId);
       this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(lockedCurrent.versionNo));
+      const storedLineIds = parseChapterLineIds(lockedCurrent.lineIds, String(lockedCurrent.content));
+      const beforeLineIds = storedLineIds.length > 0
+        ? storedLineIds
+        : createChapterLineIds(String(lockedCurrent.content), () => id("chapterLine"));
+      const nextLineIds = hasContentChange
+        ? reconcileChapterLineIds(
+            String(lockedCurrent.content),
+            nextContent,
+            beforeLineIds,
+            input.lineIds,
+            () => id("chapterLine")
+          )
+        : beforeLineIds;
+      if (!nextLineIds) throw new AppError(400, "CHAPTER_LINE_IDS_INVALID", "正文行身份与当前版本不匹配，请刷新后重试");
       this.db.run(
         `UPDATE chapters SET title = ?, content = ?, chapter_type = ?, word_count = ?, version_no = ?, analysis_status = ?,
-         excluded_from_analysis = ?, updated_at = ? WHERE id = ?`,
+         excluded_from_analysis = ?, line_ids_json = ?, updated_at = ? WHERE id = ?`,
         nextTitle,
         nextContent,
         nextChapterType,
@@ -3260,11 +3329,21 @@ export class Store {
         versionNo,
         hasTextChange || hasTypeChange ? "expired" : String(current.analysisStatus),
         nextExcluded ? 1 : 0,
+        JSON.stringify(nextLineIds),
         timestamp,
         chapterId
       );
       if (hasTextChange) this.syncChapterParagraphSearch(String(current.workId), chapterId, nextContent);
       else if (hasTypeChange) this.syncChapterParagraphSearchVersion(chapterId, versionNo);
+      if (hasContentChange) this.reanchorChapterAnnotations(
+        String(current.workId),
+        chapterId,
+        String(lockedCurrent.content),
+        nextContent,
+        nextLineIds,
+        source,
+        timestamp
+      );
       if (hasTextChange || hasTypeChange) {
         this.insertChapterVersionRow({
           workId: String(current.workId),
@@ -3286,6 +3365,55 @@ export class Store {
       this.audit(String(current.workId), "chapter.saved", "chapter", chapterId, { versionNo, source, chapterType: nextChapterType, changeNote });
     });
     return this.getChapter(chapterId);
+  }
+
+  private reanchorChapterAnnotations(
+    workId: string,
+    chapterId: string,
+    beforeContent: string,
+    afterContent: string,
+    afterLineIds: readonly string[],
+    source: string,
+    timestamp: string
+  ): void {
+    const annotations = this.db.all(
+      `SELECT id, start_line, end_line, quote, line_hashes_json, anchor_line_ids_json
+       FROM chapter_annotations
+       WHERE chapter_id = ? AND deleted_at IS NULL`,
+      chapterId
+    ).map((row) => ({
+      id: requiredString(row, "id"),
+      startLine: numberValue(row, "start_line"),
+      endLine: numberValue(row, "end_line"),
+      quote: requiredString(row, "quote"),
+      lineHashes: parseChapterAnnotationLineHashes(row.line_hashes_json, requiredString(row, "quote")),
+      lineIds: parseChapterAnnotationLineIds(row.anchor_line_ids_json)
+    }));
+    for (const annotation of reanchorChapterAnnotations(beforeContent, afterContent, annotations, afterLineIds)) {
+      if (!annotation.changed) continue;
+      this.db.run(
+        `UPDATE chapter_annotations
+         SET start_line = ?, end_line = ?, quote = ?, line_hashes_json = ?, anchor_line_ids_json = ?, version_no = version_no + 1
+         WHERE id = ?`,
+        annotation.startLine,
+        annotation.endLine,
+        annotation.quote,
+        JSON.stringify(annotation.lineHashes),
+        JSON.stringify(annotation.lineIds),
+        annotation.id
+      );
+      const updated = this.getChapterAnnotation(annotation.id);
+      this.recordChapterAnnotationVersion(updated, "reanchor", timestamp);
+      this.audit(workId, "chapter.annotation.updated", "chapter-annotation", annotation.id, {
+        chapterId,
+        startLine: annotation.startLine,
+        endLine: annotation.endLine,
+        versionNo: updated.versionNo,
+        anchorStrategy: annotation.anchorStrategy,
+        reason: "reanchor",
+        source
+      });
+    }
   }
 
   replaceWorkText(
@@ -3435,19 +3563,21 @@ export class Store {
       ? numberValue(this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS sort_order FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", volumeId) ?? {}, "sort_order") + 1
       : numberValue(version, "sort_order");
     const timestamp = now();
+    const lineIds = createChapterLineIds(content, () => id("chapterLine"));
     const nextVersionNo = numberValue(
       this.db.get("SELECT COALESCE(MAX(version_no), 0) AS version_no FROM chapter_versions WHERE chapter_id = ?", chapterId) ?? {},
       "version_no"
     ) + 1;
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO chapters (id, work_id, volume_id, title, content, chapter_type, sort_order, word_count, version_no, analysis_status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        `INSERT INTO chapters (id, work_id, volume_id, title, content, line_ids_json, chapter_type, sort_order, word_count, version_no, analysis_status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
         chapterId,
         workId,
         volumeId,
         title,
         content,
+        JSON.stringify(lineIds),
         chapterType,
         sortOrder,
         countWords(content),
@@ -3642,11 +3772,14 @@ export class Store {
   }
 
   private chapterAnnotationSnapshot(annotation: Record<string, unknown>): Record<string, unknown> {
+    const anchor = this.db.get("SELECT anchor_line_ids_json FROM chapter_annotations WHERE id = ?", String(annotation.id));
     return {
       kind: annotation.kind,
       startLine: annotation.startLine,
       endLine: annotation.endLine,
       quote: annotation.quote,
+      lineHashes: chapterAnnotationLineHashes(String(annotation.quote)),
+      lineIds: parseChapterAnnotationLineIds(anchor?.anchor_line_ids_json),
       note: annotation.note,
       status: annotation.status,
       deletedAt: annotation.deletedAt ?? null
@@ -3798,17 +3931,25 @@ export class Store {
     const annotationId = id("chapterAnnotation");
     const timestamp = now();
     const actorId = currentRequestActor()?.userId ?? null;
+    const quote = lines.slice(input.startLine - 1, input.endLine).join("\n");
+    const chapterLineIds = parseChapterLineIds(chapter.lineIds, String(chapter.content));
+    if (lines.length <= MAX_CHAPTER_LINE_IDS && chapterLineIds.length !== lines.length) {
+      throw new AppError(409, "CHAPTER_LINE_IDS_MISSING", "正文行身份尚未初始化，请重新保存正文后再添加评论");
+    }
+    const anchorLineIds = chapterLineIds.slice(input.startLine - 1, input.endLine);
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO chapter_annotations (id, work_id, chapter_id, kind, start_line, end_line, quote, note, status, version_no, created_at, updated_at, created_by_user_id, updated_by_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, ?, ?)`,
+        `INSERT INTO chapter_annotations (id, work_id, chapter_id, kind, start_line, end_line, quote, line_hashes_json, anchor_line_ids_json, note, status, version_no, created_at, updated_at, created_by_user_id, updated_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, ?, ?)`,
         annotationId,
         String(chapter.workId),
         chapterId,
         input.kind,
         input.startLine,
         input.endLine,
-        lines.slice(input.startLine - 1, input.endLine).join("\n"),
+        quote,
+        JSON.stringify(chapterAnnotationLineHashes(quote)),
+        JSON.stringify(anchorLineIds),
         input.note.trim(),
         timestamp,
         timestamp,
@@ -4084,14 +4225,16 @@ export class Store {
   ): string {
     const chapterId = id("chapter");
     const timestamp = now();
+    const lineIds = createChapterLineIds(content, () => id("chapterLine"));
     this.db.run(
-      `INSERT INTO chapters (id, work_id, volume_id, title, content, chapter_type, sort_order, word_count, version_no, analysis_status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', ?, ?)`,
+      `INSERT INTO chapters (id, work_id, volume_id, title, content, line_ids_json, chapter_type, sort_order, word_count, version_no, analysis_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', ?, ?)`,
       chapterId,
       workId,
       volumeId,
       title,
       content,
+      JSON.stringify(lineIds),
       chapterType,
       sortOrder,
       countWords(content),
@@ -4476,6 +4619,8 @@ export class Store {
         : optionalString(row, "cover_url"),
       tags: json(requiredString(row, "tags_json"), []),
       offlineAccessEnabled: numberValue(row, "offline_access_enabled") === 1,
+      editorAutoIndentEnabled: numberValue(row, "editor_auto_indent_enabled") === 1,
+      editorTypewriterModeEnabled: numberValue(row, "editor_typewriter_mode_enabled") === 1,
       versionNo: numberValue(row, "version_no") || this.currentEntityVersionNo("work", workId),
       ownerUserId,
       accessRole,
@@ -4511,7 +4656,8 @@ export class Store {
   private mapChapter(row: Row): Record<string, unknown> {
     return {
       ...this.mapChapterDirectoryEntry(row),
-      content: requiredString(row, "content")
+      content: requiredString(row, "content"),
+      lineIds: parseChapterLineIds(row.line_ids_json, requiredString(row, "content"))
     };
   }
 
@@ -7859,6 +8005,7 @@ export class Store {
       sourceId
     );
     const referenceSnapshot = { relationships: sourceRelationships, timelineEvents, memberships: sourceMemberships };
+    let roleplayMemoryMerge = { migrated: 0, deduplicated: 0 };
 
     this.db.transaction(() => {
       const lockedTarget = this.getCharacter(targetId);
@@ -7931,6 +8078,7 @@ export class Store {
       this.db.run("UPDATE character_profile_sections SET character_id = ?, updated_at = ? WHERE character_id = ?", targetId, timestamp, sourceId);
       this.db.run("UPDATE character_profile_section_versions SET character_id = ? WHERE character_id = ?", targetId, sourceId);
       this.db.run("UPDATE character_profile_section_search SET character_id = ? WHERE character_id = ?", targetId, sourceId);
+      roleplayMemoryMerge = this.mergeRoleplayMemoriesForCharacters(workId, targetId, sourceId, timestamp);
       const sourceVersionNo = Number(source.versionNo) + 1;
       this.db.run(
         "UPDATE characters SET merged_into_character_id = ?, merged_at = ?, version_no = ?, updated_at = ? WHERE id = ?",
@@ -7967,15 +8115,116 @@ export class Store {
       this.audit(workId, "character.merged", "character", targetId, {
         mergeId,
         sourceCharacterId: sourceId,
-        reviewId: input.reviewId
+        reviewId: input.reviewId,
+        roleplayMemoryMerge
       });
     });
     return {
       mergeId,
       target: this.getCharacter(targetId),
       source: this.getCharacter(sourceId),
-      review: input.reviewId ? this.getReviewItem(input.reviewId) : null
+      review: input.reviewId ? this.getReviewItem(input.reviewId) : null,
+      roleplayMemoryMerge
     };
+  }
+
+  private mergeRoleplayMemoriesForCharacters(
+    workId: string,
+    targetCharacterId: string,
+    sourceCharacterId: string,
+    timestamp: string
+  ): { migrated: number; deduplicated: number } {
+    let migrated = 0;
+    let deduplicated = 0;
+    const sourceMemories = this.db.all(
+      "SELECT * FROM roleplay_memories WHERE work_id = ? AND character_id = ? ORDER BY created_at, id",
+      workId,
+      sourceCharacterId
+    );
+    for (const sourceMemory of sourceMemories) {
+      const sourceMemoryId = requiredString(sourceMemory, "id");
+      const duplicate = this.db.get(
+        "SELECT * FROM roleplay_memories WHERE character_id = ? AND content_hash = ?",
+        targetCharacterId,
+        requiredString(sourceMemory, "content_hash")
+      );
+      if (!duplicate) {
+        this.db.run(
+          "UPDATE roleplay_memories SET character_id = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?",
+          targetCharacterId,
+          currentRequestActor()?.userId ?? null,
+          timestamp,
+          sourceMemoryId
+        );
+        migrated += 1;
+        continue;
+      }
+
+      const targetMemoryId = requiredString(duplicate, "id");
+      this.db.run(
+        "UPDATE roleplay_memories SET superseded_by_memory_id = ? WHERE superseded_by_memory_id = ?",
+        targetMemoryId,
+        sourceMemoryId
+      );
+      for (const source of this.db.all("SELECT * FROM roleplay_memory_sources WHERE memory_id = ? ORDER BY created_at, id", sourceMemoryId)) {
+        this.db.run(
+          `INSERT OR IGNORE INTO roleplay_memory_sources (
+            id, memory_id, conversation_id, message_id, message_role, source_created_by_user_id,
+            source_created_at, evidence_snapshot, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id("roleplay_memory_source"),
+          targetMemoryId,
+          optionalString(source, "conversation_id"),
+          optionalString(source, "message_id"),
+          requiredString(source, "message_role"),
+          optionalString(source, "source_created_by_user_id"),
+          requiredString(source, "source_created_at"),
+          requiredString(source, "evidence_snapshot"),
+          requiredString(source, "created_at")
+        );
+      }
+      let nextVersion = numberValue(duplicate, "version_no");
+      for (const version of this.db.all("SELECT * FROM roleplay_memory_versions WHERE memory_id = ? ORDER BY version_no", sourceMemoryId)) {
+        nextVersion += 1;
+        this.db.run(
+          `INSERT INTO roleplay_memory_versions (
+            id, memory_id, version_no, category, content, importance, certainty,
+            status, is_pinned, action, actor_user_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'merged', ?, ?)`,
+          id("roleplay_memory_version"),
+          targetMemoryId,
+          nextVersion,
+          requiredString(version, "category"),
+          requiredString(version, "content"),
+          requiredString(version, "importance"),
+          requiredString(version, "certainty"),
+          requiredString(version, "status"),
+          booleanValue(version, "is_pinned") ? 1 : 0,
+          currentRequestActor()?.userId ?? optionalString(version, "actor_user_id"),
+          requiredString(version, "created_at")
+        );
+      }
+      nextVersion += 1;
+      this.db.run(
+        `UPDATE roleplay_memories SET is_pinned = CASE WHEN is_pinned = 1 OR ? = 1 THEN 1 ELSE 0 END,
+         status = CASE WHEN status = 'active' OR ? = 'active' THEN 'active' ELSE status END,
+         superseded_by_memory_id = CASE WHEN status = 'active' OR ? = 'active' THEN NULL ELSE superseded_by_memory_id END,
+         version_no = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+        booleanValue(sourceMemory, "is_pinned") ? 1 : 0,
+        requiredString(sourceMemory, "status"),
+        requiredString(sourceMemory, "status"),
+        nextVersion,
+        currentRequestActor()?.userId ?? null,
+        timestamp,
+        targetMemoryId
+      );
+      const mergedTarget = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", targetMemoryId);
+      if (!mergedTarget) throw notFound("角色扮演记忆");
+      this.insertRoleplayMemoryVersion(mergedTarget, "merged");
+      this.db.run("DELETE FROM roleplay_memories WHERE id = ?", sourceMemoryId);
+      deduplicated += 1;
+    }
+    return { migrated, deduplicated };
   }
 
   resolveCharacterDuplicateReview(reviewId: string): Record<string, unknown> {
@@ -8955,6 +9204,391 @@ export class Store {
     };
   }
 
+  private roleplayMemoryContentHash(content: string): string {
+    return this.hashContent(normalizeRoleplayMemoryContent(content).toLocaleLowerCase("zh-CN"));
+  }
+
+  private insertRoleplayMemoryVersion(
+    memory: Row,
+    action: "created" | "edited" | "pinned" | "archived" | "restored" | "superseded" | "merged"
+  ): void {
+    this.db.run(
+      `INSERT INTO roleplay_memory_versions (
+        id, memory_id, version_no, category, content, importance, certainty,
+        status, is_pinned, action, actor_user_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id("roleplay_memory_version"),
+      requiredString(memory, "id"),
+      numberValue(memory, "version_no"),
+      requiredString(memory, "category"),
+      requiredString(memory, "content"),
+      requiredString(memory, "importance"),
+      requiredString(memory, "certainty"),
+      requiredString(memory, "status"),
+      booleanValue(memory, "is_pinned") ? 1 : 0,
+      action,
+      currentRequestActor()?.userId ?? optionalString(memory, "updated_by_user_id"),
+      now()
+    );
+  }
+
+  private roleplayMemoryListRows(characterId: string, options: RoleplayMemoryListOptions = {}): { rows: Row[]; total: number; cursor: number; limit: number } {
+    const cursor = Math.max(0, Math.min(100_000, options.cursor ?? 0));
+    const limit = Math.max(1, Math.min(100, options.limit ?? 20));
+    const where = ["memory.character_id = ?"];
+    const params: SQLInputValue[] = [characterId];
+    const statuses = options.statuses?.length ? [...new Set(options.statuses)] : ["active" as const];
+    where.push(`memory.status IN (${statuses.map(() => "?").join(", ")})`);
+    params.push(...statuses);
+    const categories = options.categories?.length ? [...new Set(options.categories)] : [];
+    if (categories.length > 0) {
+      where.push(`memory.category IN (${categories.map(() => "?").join(", ")})`);
+      params.push(...categories);
+    }
+    const query = normalizeRoleplayMemoryContent(options.query ?? "", 200).toLocaleLowerCase("zh-CN");
+    if (query) {
+      if (Array.from(query).length >= 3) {
+        where.push("memory.id IN (SELECT memory_id FROM roleplay_memory_fts WHERE roleplay_memory_fts MATCH ?)");
+        params.push(JSON.stringify(query));
+      } else {
+        where.push("lower(memory.content) LIKE ? ESCAPE '\\'");
+        params.push(`%${escapeSqlLikePattern(query)}%`);
+      }
+    }
+    const whereSql = where.join(" AND ");
+    const total = Number(this.db.get(`SELECT COUNT(*) AS count FROM roleplay_memories memory WHERE ${whereSql}`, ...params)?.count ?? 0);
+    const rows = this.db.all(
+      `SELECT memory.* FROM roleplay_memories memory
+       WHERE ${whereSql}
+       ORDER BY memory.is_pinned DESC,
+         CASE memory.importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+         memory.updated_at DESC, memory.id
+       LIMIT ? OFFSET ?`,
+      ...params,
+      limit,
+      cursor
+    );
+    return { rows, total, cursor, limit };
+  }
+
+  listRoleplayMemories(characterId: string, options: RoleplayMemoryListOptions = {}): Record<string, unknown> {
+    const character = this.getCharacter(characterId);
+    const page = this.roleplayMemoryListRows(characterId, options);
+    const nextCursor = page.cursor + page.rows.length < page.total ? page.cursor + page.rows.length : null;
+    return {
+      character: { id: character.id, name: character.name, workId: character.workId },
+      items: page.rows.map((memory) => this.mapRoleplayMemory(memory, true)),
+      pagination: { cursor: page.cursor, limit: page.limit, total: page.total, nextCursor }
+    };
+  }
+
+  isRoleplayMemorySourceTarget(sourceId: string, conversationId: string, messageId: string): boolean {
+    return Boolean(this.db.get(
+      `SELECT source.id
+       FROM roleplay_memory_sources source
+       INNER JOIN roleplay_memories memory ON memory.id = source.memory_id
+       WHERE source.id = ? AND source.conversation_id = ? AND source.message_id = ?`,
+      sourceId,
+      conversationId,
+      messageId
+    ));
+  }
+
+  getRoleplayMemoryPromptItems(workId: string, characterId: string, limit = 12): Record<string, unknown>[] {
+    const character = this.getCharacter(characterId);
+    if (String(character.workId) !== workId) throw new AppError(400, "ROLEPLAY_CHARACTER_WORK_MISMATCH", "角色不属于当前作品");
+    return this.roleplayMemoryListRows(characterId, {
+      statuses: ["active"],
+      limit: Math.max(1, Math.min(30, limit))
+    }).rows.map((memory) => this.mapRoleplayMemory(memory, false));
+  }
+
+  recallRoleplayMemories(
+    workId: string,
+    characterId: string,
+    query: string,
+    categories: RoleplayMemoryCategory[],
+    cursor: number
+  ): Record<string, unknown> {
+    const character = this.getCharacter(characterId);
+    if (String(character.workId) !== workId) throw new AppError(400, "ROLEPLAY_CHARACTER_WORK_MISMATCH", "角色不属于当前作品");
+    const result = this.listRoleplayMemories(characterId, { query, categories, statuses: ["active"], cursor, limit: 20 });
+    return {
+      origin: "roleplay",
+      canonical: false,
+      character: result.character,
+      memories: result.items,
+      pagination: result.pagination
+    };
+  }
+
+  createRoleplayMemory(characterId: string, input: RoleplayMemoryInput): Record<string, unknown> {
+    const character = this.getCharacter(characterId);
+    if (character.mergedIntoCharacterId) throw new AppError(409, "ROLEPLAY_MEMORY_CHARACTER_MERGED", "已合并角色不能新增角色扮演记忆");
+    const workId = String(character.workId);
+    const content = normalizeRoleplayMemoryContent(input.content);
+    if (!content) throw new AppError(400, "ROLEPLAY_MEMORY_CONTENT_REQUIRED", "请输入记忆内容");
+    const memoryId = id("roleplay_memory");
+    const contentHash = this.roleplayMemoryContentHash(content);
+    const timestamp = now();
+    this.db.transaction(() => {
+      if (this.db.get("SELECT id FROM roleplay_memories WHERE character_id = ? AND content_hash = ?", characterId, contentHash)) {
+        throw new AppError(409, "ROLEPLAY_MEMORY_DUPLICATE", "该角色已经有相同内容的角色扮演记忆");
+      }
+      this.db.run(
+        `INSERT INTO roleplay_memories (
+          id, work_id, character_id, category, content, content_hash, importance, certainty,
+          status, is_pinned, version_no, source_type, created_by_user_id, updated_by_user_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 1, 'manual', ?, ?, ?, ?)`,
+        memoryId,
+        workId,
+        characterId,
+        input.category,
+        content,
+        contentHash,
+        input.importance ?? "medium",
+        input.certainty ?? "experienced",
+        input.isPinned ? 1 : 0,
+        currentRequestActor()?.userId ?? null,
+        currentRequestActor()?.userId ?? null,
+        timestamp,
+        timestamp
+      );
+      const memory = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+      if (!memory) throw notFound("角色扮演记忆");
+      this.insertRoleplayMemoryVersion(memory, "created");
+      this.audit(workId, "roleplay-memory.created", "roleplay-memory", memoryId, { characterId });
+    });
+    const memory = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+    if (!memory) throw notFound("角色扮演记忆");
+    return this.mapRoleplayMemory(memory, true);
+  }
+
+  commitRoleplayMemoryCandidates(
+    conversationId: string,
+    assistantMessageId: string,
+    sourceUserMessageId: string,
+    candidates: RoleplayMemoryCandidate[]
+  ): Record<string, unknown>[] {
+    if (candidates.length === 0) return [];
+    const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    const characterId = optionalString(conversation, "roleplay_character_id");
+    if (!characterId) throw new AppError(409, "ROLEPLAY_MEMORY_REQUIRES_ROLEPLAY", "只有角色扮演对话可以写入角色扮演记忆");
+    const workId = requiredString(conversation, "work_id");
+    const assistant = this.db.get(
+      "SELECT * FROM ai_conversation_messages WHERE id = ? AND conversation_id = ? AND role = 'assistant'",
+      assistantMessageId,
+      conversationId
+    );
+    if (!assistant) throw new AppError(400, "ROLEPLAY_MEMORY_ASSISTANT_MISMATCH", "角色扮演记忆来源回复不属于当前对话");
+    const userMessage = this.db.get(
+      "SELECT * FROM ai_conversation_messages WHERE id = ? AND conversation_id = ? AND role = 'user'",
+      sourceUserMessageId,
+      conversationId
+    );
+    if (!userMessage) throw new AppError(400, "ROLEPLAY_MEMORY_USER_MESSAGE_MISMATCH", "角色扮演记忆来源消息不属于当前对话");
+    const committedIds: string[] = [];
+    this.db.transaction(() => {
+      const validCandidates = candidates.slice(0, 8).flatMap((candidate) => {
+        const content = normalizeRoleplayMemoryContent(candidate.content, 500);
+        if (!content || !roleplayMemoryCandidateIsSafe(content)) return [];
+        return [{ ...candidate, content }];
+      });
+      const insertable = validCandidates.flatMap((candidate) => {
+        const idempotencyKey = this.hashContent(`${assistantMessageId}:${JSON.stringify(candidate)}`);
+        const contentHash = this.roleplayMemoryContentHash(candidate.content);
+        const existing = this.db.get(
+          "SELECT id FROM roleplay_memories WHERE character_id = ? AND (idempotency_key = ? OR content_hash = ?)",
+          characterId,
+          idempotencyKey,
+          contentHash
+        );
+        return existing ? [] : [{ candidate, idempotencyKey, contentHash }];
+      });
+      if (insertable.length === 0) return;
+      const timestamp = now();
+      for (const { candidate, idempotencyKey, contentHash } of insertable) {
+        const memoryId = id("roleplay_memory");
+        const superseded = candidate.supersedesMemoryId
+          ? this.db.get(
+              "SELECT * FROM roleplay_memories WHERE id = ? AND character_id = ? AND status = 'active'",
+              candidate.supersedesMemoryId,
+              characterId
+            )
+          : undefined;
+        this.db.run(
+          `INSERT INTO roleplay_memories (
+            id, work_id, character_id, category, content, content_hash, importance, certainty, status, is_pinned, version_no,
+            source_type, source_assistant_message_id, idempotency_key,
+            created_by_user_id, updated_by_user_id, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, 1, 'ai', ?, ?, ?, ?, ?, ?)`,
+          memoryId,
+          workId,
+          characterId,
+          candidate.category,
+          candidate.content,
+          contentHash,
+          candidate.importance,
+          candidate.certainty,
+          assistantMessageId,
+          idempotencyKey,
+          optionalString(conversation, "created_by_user_id"),
+          optionalString(conversation, "created_by_user_id"),
+          timestamp,
+          timestamp
+        );
+        const memory = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+        if (!memory) throw notFound("角色扮演记忆");
+        this.insertRoleplayMemoryVersion(memory, "created");
+        for (const source of [userMessage, assistant]) {
+          this.db.run(
+            `INSERT INTO roleplay_memory_sources (
+              id, memory_id, conversation_id, message_id, message_role, source_created_by_user_id,
+              source_created_at, evidence_snapshot, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            id("roleplay_memory_source"),
+            memoryId,
+            conversationId,
+            requiredString(source, "id"),
+            requiredString(source, "role"),
+            optionalString(conversation, "created_by_user_id"),
+            requiredString(source, "created_at"),
+            Array.from(requiredString(source, "content")
+              .replace(/\r\n?/gu, "\n")
+              .replace(/\n{3,}/gu, "\n\n")
+              .trim()).slice(0, 2_000).join(""),
+            timestamp
+          );
+        }
+        if (superseded) {
+          const nextVersion = numberValue(superseded, "version_no") + 1;
+          this.db.run(
+            `UPDATE roleplay_memories SET status = 'superseded', superseded_by_memory_id = ?,
+             version_no = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+            memoryId,
+            nextVersion,
+            optionalString(conversation, "created_by_user_id"),
+            timestamp,
+            requiredString(superseded, "id")
+          );
+          const updatedSuperseded = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", requiredString(superseded, "id"));
+          if (updatedSuperseded) this.insertRoleplayMemoryVersion(updatedSuperseded, "superseded");
+        }
+        committedIds.push(memoryId);
+      }
+      this.audit(workId, "roleplay-memory.ai-committed", "character", characterId, {
+        conversationId,
+        assistantMessageId,
+        memoryCount: committedIds.length
+      });
+    });
+    return committedIds.flatMap((memoryId) => {
+      const memory = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+      return memory ? [this.mapRoleplayMemory(memory, true)] : [];
+    });
+  }
+
+  getRoleplayMemoryAccess(memoryId: string): { workId: string; characterId: string } {
+    const row = this.db.get(
+      "SELECT work_id, character_id FROM roleplay_memories WHERE id = ?",
+      memoryId
+    );
+    if (!row) throw notFound("角色扮演记忆");
+    return { workId: requiredString(row, "work_id"), characterId: requiredString(row, "character_id") };
+  }
+
+  updateRoleplayMemory(memoryId: string, input: RoleplayMemoryUpdateInput): Record<string, unknown> {
+    const memory = this.db.get(
+      "SELECT * FROM roleplay_memories WHERE id = ?",
+      memoryId
+    );
+    if (!memory) throw notFound("角色扮演记忆");
+    if (numberValue(memory, "version_no") !== input.expectedVersion) {
+      throw new AppError(409, "ROLEPLAY_MEMORY_VERSION_CONFLICT", "记忆已被其他操作更新，请刷新后重试");
+    }
+    const content = input.content === undefined ? requiredString(memory, "content") : normalizeRoleplayMemoryContent(input.content);
+    if (!content) throw new AppError(400, "ROLEPLAY_MEMORY_CONTENT_REQUIRED", "请输入记忆内容");
+    const category = input.category ?? requiredString(memory, "category");
+    const importance = input.importance ?? requiredString(memory, "importance");
+    const certainty = input.certainty ?? requiredString(memory, "certainty");
+    const isPinned = input.isPinned ?? booleanValue(memory, "is_pinned");
+    const contentChanged = content !== requiredString(memory, "content")
+      || category !== requiredString(memory, "category")
+      || importance !== requiredString(memory, "importance")
+      || certainty !== requiredString(memory, "certainty");
+    const pinnedChanged = isPinned !== booleanValue(memory, "is_pinned");
+    if (!contentChanged && !pinnedChanged) return this.mapRoleplayMemory(memory, true);
+    this.db.transaction(() => {
+      const timestamp = now();
+      const contentHash = this.roleplayMemoryContentHash(content);
+      const duplicate = this.db.get(
+        "SELECT id FROM roleplay_memories WHERE character_id = ? AND content_hash = ? AND id <> ?",
+        requiredString(memory, "character_id"),
+        contentHash,
+        memoryId
+      );
+      if (duplicate) throw new AppError(409, "ROLEPLAY_MEMORY_DUPLICATE", "该角色已经有相同内容的角色扮演记忆");
+      this.db.run(
+        `UPDATE roleplay_memories SET category = ?, content = ?, content_hash = ?, importance = ?, certainty = ?, is_pinned = ?,
+         version_no = version_no + 1, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+        category,
+        content,
+        contentHash,
+        importance,
+        certainty,
+        isPinned ? 1 : 0,
+        currentRequestActor()?.userId ?? null,
+        timestamp,
+        memoryId
+      );
+      const updated = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+      if (!updated) throw notFound("角色扮演记忆");
+      this.insertRoleplayMemoryVersion(updated, contentChanged ? "edited" : "pinned");
+      this.audit(requiredString(memory, "work_id"), "roleplay-memory.updated", "roleplay-memory", memoryId, {
+        characterId: requiredString(memory, "character_id")
+      });
+    });
+    const updated = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+    if (!updated) throw notFound("角色扮演记忆");
+    return this.mapRoleplayMemory(updated, true);
+  }
+
+  setRoleplayMemoryArchived(memoryId: string, archived: boolean, expectedVersion: number): Record<string, unknown> {
+    const memory = this.db.get(
+      "SELECT * FROM roleplay_memories WHERE id = ?",
+      memoryId
+    );
+    if (!memory) throw notFound("角色扮演记忆");
+    if (numberValue(memory, "version_no") !== expectedVersion) {
+      throw new AppError(409, "ROLEPLAY_MEMORY_VERSION_CONFLICT", "记忆已被其他操作更新，请刷新后重试");
+    }
+    const nextStatus = archived ? "archived" : "active";
+    if (requiredString(memory, "status") === nextStatus) return this.mapRoleplayMemory(memory, true);
+    this.db.transaction(() => {
+      const timestamp = now();
+      this.db.run(
+        `UPDATE roleplay_memories SET status = ?,
+         superseded_by_memory_id = CASE WHEN ? = 'active' THEN NULL ELSE superseded_by_memory_id END,
+         version_no = version_no + 1, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+        nextStatus,
+        nextStatus,
+        currentRequestActor()?.userId ?? null,
+        timestamp,
+        memoryId
+      );
+      const updated = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+      if (!updated) throw notFound("角色扮演记忆");
+      this.insertRoleplayMemoryVersion(updated, archived ? "archived" : "restored");
+      this.audit(requiredString(memory, "work_id"), archived ? "roleplay-memory.archived" : "roleplay-memory.restored", "roleplay-memory", memoryId, {
+        characterId: requiredString(memory, "character_id")
+      });
+    });
+    const updated = this.db.get("SELECT * FROM roleplay_memories WHERE id = ?", memoryId);
+    if (!updated) throw notFound("角色扮演记忆");
+    return this.mapRoleplayMemory(updated, true);
+  }
+
   getAiConversationContext(conversationId: string, workId: string, excludeMessageId?: string): AiConversationContext {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
@@ -8995,10 +9629,13 @@ export class Store {
         );
       }
     }
+    const roleplayCharacterId = optionalString(conversation, "roleplay_character_id");
     return {
       workId,
-      roleplayCharacterId: optionalString(conversation, "roleplay_character_id"),
+      taskType: (optionalString(conversation, "task_type") ?? (roleplayCharacterId ? "roleplay" : "chat")) as AiConversationTaskType,
+      roleplayCharacterId,
       roleplayUserCharacterId: optionalString(conversation, "roleplay_user_character_id"),
+      roleplayMemories: roleplayCharacterId ? this.getRoleplayMemoryPromptItems(workId, roleplayCharacterId) : [],
       summary: requiredString(conversation, "compacted_summary"),
       compactedMessageCount,
       totalMessageCount,
@@ -9937,6 +10574,53 @@ export class Store {
     };
   }
 
+  private mapRoleplayMemory(row: Row, includeDetails: boolean): Record<string, unknown> {
+    const memoryId = requiredString(row, "id");
+    const actor = currentRequestActor();
+    const sources = includeDetails
+      ? this.db.all(
+          `SELECT source.*, conversation.created_by_user_id AS conversation_owner_id
+           FROM roleplay_memory_sources source
+           LEFT JOIN ai_conversations conversation ON conversation.id = source.conversation_id
+           WHERE source.memory_id = ? ORDER BY source.source_created_at, source.id`,
+          memoryId
+        ).map((source) => {
+          const sourceOwnerId = optionalString(source, "conversation_owner_id") ?? optionalString(source, "source_created_by_user_id");
+          const canOpen = actor === null || actor.role === "admin" || (sourceOwnerId !== null && sourceOwnerId === actor.userId);
+          return {
+            id: requiredString(source, "id"),
+            role: requiredString(source, "message_role"),
+            sourceType: requiredString(row, "source_type"),
+            sourceAt: requiredString(source, "source_created_at"),
+            canOpen,
+            restricted: !canOpen,
+            conversationId: canOpen ? optionalString(source, "conversation_id") : null,
+            messageId: canOpen ? optionalString(source, "message_id") : null,
+            evidence: canOpen ? requiredString(source, "evidence_snapshot") : null
+          };
+        })
+      : undefined;
+    return {
+      id: memoryId,
+      workId: requiredString(row, "work_id"),
+      characterId: requiredString(row, "character_id"),
+      category: requiredString(row, "category"),
+      content: requiredString(row, "content"),
+      importance: requiredString(row, "importance"),
+      certainty: requiredString(row, "certainty"),
+      origin: "roleplay",
+      canonical: false,
+      status: requiredString(row, "status"),
+      isPinned: booleanValue(row, "is_pinned"),
+      versionNo: numberValue(row, "version_no"),
+      supersededByMemoryId: optionalString(row, "superseded_by_memory_id"),
+      sourceType: requiredString(row, "source_type"),
+      ...(sources ? { sources } : {}),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
   hashContent(content: string): string {
     return createHash("sha256").update(content).digest("hex");
   }
@@ -10740,8 +11424,20 @@ export class Store {
           return event.workId === workId ? [event] : [];
         } catch { return []; }
       });
-      summary = `提取并写入 ${events.length} 个时间轴事件候选。`;
-      metrics = [metric("写入事件", events.length), metric("已不存在", Math.max(0, ids.length - events.length))];
+      const hasChunkMetrics = typeof result.coveredChapterCount === "number" || typeof result.batchCount === "number";
+      summary = hasChunkMetrics
+        ? `覆盖 ${Number(result.coveredChapterCount ?? 0)} 章正文，识别 ${Number(result.rawCandidateCount ?? events.length)} 个原始候选，写入 ${events.length} 个时间轴事件候选。`
+        : `提取并写入 ${events.length} 个时间轴事件候选。`;
+      metrics = [
+        metric("写入事件", events.length),
+        ...(hasChunkMetrics ? [
+          metric("覆盖章节", result.coveredChapterCount),
+          metric("正文分片", result.batchCount),
+          metric("归并批次", result.aggregationBatchCount),
+          metric("原始候选", result.rawCandidateCount)
+        ] : []),
+        metric("已不存在", Math.max(0, ids.length - events.length))
+      ];
       storageTargets.unshift({ label: "时间轴候选", entity: "时间轴与事件", key: "timeline", count: events.length, note: "以候选状态写入，等待作者确认。" });
       sections = [section("事件候选", events, "没有形成可写入的时间轴事件。")];
     } else if (taskType === "worldview-analysis") {

@@ -216,7 +216,7 @@ const mockAi = createServer(async (request, response) => {
     return;
   }
   if (latestUserMessage.includes("浏览器压缩后测试")) {
-    const hasStructuredMemory = joined.includes("较早对话的结构化长期记忆")
+    const hasStructuredMemory = joined.includes("较早对话的上下文压缩摘要")
       && joined.includes("必须遵守跃迁冷却规则")
       && joined.includes("来源：");
     sendCompletion(response, {

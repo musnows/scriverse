@@ -6,11 +6,10 @@
     <meta name="description" content="面向长篇小说创作的 AI 协作工作台">
     <meta name="theme-color" content="#8b3d2c">
     <title>叙界 · 小说 AI 创作工作台</title>
-    <script src="/theme-init.js?v=20260801-work-audit-page-v1"></script>
+    <script src="/theme-init.js?v=20260827-reader-prefetch-v1"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=task-auto-run-ring-center-v3&feature=character-relationship-delete-v1&feature=ai-assistant-workspace-v2&feature=mobile-module-tab-position-v1&feature=volume-detail-icon-v1&feature=editor-actions-flow-v1&feature=reader-controls-subpanel-v1&feature=reader-focus-ring-v1&feature=ai-message-actions-v1&feature=assistant-responsive-navigation-v2&feature=ai-composer-square-controls-v2&feature=annotation-line-counts-v1&feature=line-number-gutter-fill-v1&feature=ai-relationship-roleplay-v1&feature=ai-model-picker-v1&feature=markdown-word-count-five-digit-v2&feature=ai-stream-character-count-stable-v1&feature=annotation-marker-offset-v1&feature=mobile-ai-entry-hidden-v1&feature=phone-client-entry-v1&feature=ai-stream-idle-timeout-v1&feature=ai-user-message-width-v2&feature=ai-chat-image-attachments-v9&feature=ai-message-image-preview-v1&feature=ai-thinking-scroll-v2&feature=toast-click-dismiss-v3&feature=character-avatar-v6&feature=admin-ai-conversations-v1&feature=ai-usage-pricing-v1&feature=ai-usage-pricing-badge-v2&feature=ai-token-quota-positive-v5&feature=ai-token-usage-details-v1&feature=ai-token-usage-details-centered-v1&feature=ai-stream-connection-seconds-v1&feature=ai-token-usage-estimated-price-v1&feature=record-favorites-v1&feature=entity-detail-favorites-v1&feature=entity-pin-v1&feature=character-persona-summary-v1&feature=ai-roleplay-scene-turn-v1&feature=admin-account-identity-v2&feature=task-detail-failure-orange-v1&feature=character-card-header-alignment-v6&feature=character-card-title-fit-v2&feature=book-import-progress-v1&feature=editor-toolbar-compact-v2">
+    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=task-auto-run-ring-center-v3&feature=character-relationship-delete-v1&feature=ai-assistant-workspace-v2&feature=mobile-module-tab-position-v1&feature=volume-detail-icon-v1&feature=editor-actions-flow-v1&feature=reader-controls-subpanel-v1&feature=reader-focus-ring-v1&feature=ai-message-actions-v1&feature=assistant-responsive-navigation-v2&feature=ai-composer-square-controls-v2&feature=annotation-line-counts-v1&feature=line-number-gutter-fill-v1&feature=ai-relationship-roleplay-v1&feature=ai-model-picker-v1&feature=markdown-word-count-five-digit-v2&feature=ai-stream-character-count-stable-v1&feature=ai-stream-character-count-five-digit-v1&feature=annotation-marker-offset-v1&feature=mobile-ai-entry-hidden-v1&feature=phone-client-entry-v1&feature=ai-stream-idle-timeout-v1&feature=ai-user-message-width-v2&feature=ai-chat-image-attachments-v9&feature=ai-message-image-preview-v1&feature=ai-thinking-scroll-v2&feature=toast-click-dismiss-v3&feature=character-avatar-v6&feature=admin-ai-conversations-v1&feature=ai-usage-pricing-v1&feature=ai-usage-pricing-badge-v2&feature=ai-token-quota-positive-v5&feature=ai-token-usage-details-v1&feature=ai-token-usage-details-centered-v1&feature=ai-stream-connection-seconds-v1&feature=ai-token-usage-estimated-price-v1&feature=record-favorites-v1&feature=entity-detail-favorites-v1&feature=entity-pin-v1&feature=character-persona-summary-v1&feature=ai-roleplay-scene-turn-v1&feature=admin-account-identity-v2&feature=task-detail-failure-orange-v1&feature=character-card-header-alignment-v6&feature=character-card-title-fit-v2&feature=book-import-progress-v1&feature=editor-toolbar-compact-v2&feature=reader-first-frame-v1&feature=auth-compact-v2&feature=editor-preview-toggle-v2&feature=setting-title-chrome-v2&feature=entity-pin-icon-center-v1&feature=chapter-center-bottom-space-v1&feature=work-editor-preferences-v1&feature=ai-roleplay-memory-v2&feature=ai-roleplay-memory-v3&feature=ai-roleplay-memory-v5&feature=character-editor-header-actions-v1&feature=roleplay-memory-header-actions-v1&feature=roleplay-memory-header-toolbar-v1&feature=roleplay-memory-action-icons-v1&feature=roleplay-memory-action-colors-v1&feature=roleplay-memory-pin-border-v1&feature=ai-write-tools-v2&feature=ai-write-card-actions-compact-v1&feature=ai-write-plan-actions-footer-v1&feature=ai-question-actions-footer-v1&feature=ai-question-selection-highlight-v1&feature=ai-question-submit-guidance-v1&feature=ai-question-answer-limit-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -251,12 +250,10 @@
             <input id="chapter-title" class="chapter-title" aria-label="章节标题" placeholder="章节标题">
             <div class="editor-actions">
               <span id="chapter-stats" class="chapter-stats">0 字 · v0</span>
-              <button id="chapter-reader-button" class="ghost-button" type="button">阅读预览</button>
               <button id="insight-button" class="ghost-button" type="button" aria-controls="chapter-insight-toast" aria-expanded="false">章节概览</button>
               <button id="versions-button" class="ghost-button" type="button">版本</button>
               <button id="chapter-annotations-button" class="ghost-button" type="button">评论</button>
-              <button id="chapter-delete-button" class="danger-button" type="button">删除章节</button>
-              <button id="chapter-edit-button" class="primary-button hidden" type="button">编辑</button>
+              <button id="chapter-edit-button" class="primary-button hidden" type="button" aria-pressed="false" aria-label="切换到编辑模式">编辑</button>
               <button id="tidy-blank-lines-button" class="ghost-button" type="button">整理空行</button>
               <button id="save-button" class="primary-button" type="button">保存正文</button>
             </div>
@@ -333,6 +330,7 @@
           <div class="ai-heading-actions">
             <button id="ai-conversation-switcher" class="ai-conversation-switcher" type="button" aria-label="切换打开的对话" aria-controls="ai-conversation-switcher-menu" aria-expanded="false" aria-haspopup="dialog" title="切换打开的对话"><span id="ai-conversation-title">新对话</span><small id="ai-open-conversation-count">1</small><svg viewBox="0 0 12 8" aria-hidden="true" focusable="false"><path d="M1 1.5 6 6.5l5-5"></path></svg></button>
             <button id="ai-history-toggle" type="button" aria-label="历史记录" aria-controls="ai-history-dialog" aria-expanded="false" aria-haspopup="dialog" title="历史记录"><svg class="ai-heading-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5M12 7v5l3.5 2"></path></svg></button>
+            <button id="ai-approval-center-toggle" type="button" aria-label="AI 操作审批中心" aria-controls="ai-approval-center-dialog" aria-expanded="false" aria-haspopup="dialog" title="AI 操作审批中心"><svg class="ai-heading-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3l7 3v5c0 4.4-2.9 8.2-7 10-4.1-1.8-7-5.6-7-10V6z"></path><path d="M9 12l2.2 2.2L15.5 9.5"></path></svg></button>
             <button id="ai-new-conversation" type="button" aria-label="新建对话" title="新建对话">＋</button>
           </div>
         </div>
@@ -463,7 +461,7 @@
           <div id="reader-page-shell" class="reader-page-shell">
             <div id="reader-content" class="reader-content"></div>
           </div>
-          <div id="reader-continuation" class="reader-continuation">
+          <div id="reader-continuation" class="reader-continuation hidden">
             <button id="reader-continue" class="ghost-button" type="button">继续下一章</button>
           </div>
         </article>
@@ -702,6 +700,7 @@
             <button type="button" role="tab" data-character-editor-tab="settings" aria-selected="false">扩展设定<small>属性与长篇章节</small></button>
             <button type="button" role="tab" data-character-editor-tab="state" aria-selected="false">状态与约束<small>当前状态与锁定项</small></button>
             <button type="button" role="tab" data-character-editor-tab="relationships" aria-selected="false">人物关系<small>关联人物与关系关键词</small></button>
+            <button type="button" role="tab" data-character-editor-tab="roleplay-memory" aria-selected="false">角色扮演记忆<small>该角色的作品内共享记忆库</small></button>
           </nav>
           <main id="character-editor-fields" class="character-editor-fields"></main>
           <aside id="character-history-panel" class="character-history-panel hidden" aria-label="人物版本历史">
@@ -1229,6 +1228,58 @@
       </div>
     </dialog>
 
+    <dialog id="ai-write-plan-dialog" class="dialog wide-dialog ai-write-plan-dialog" aria-labelledby="ai-write-plan-title">
+      <div class="dialog-header">
+        <div><span class="eyebrow">写入审批</span><h2 id="ai-write-plan-title">AI 修改计划 · 完整明细</h2></div>
+        <button id="ai-write-plan-close" class="dialog-close" aria-label="关闭审批详情" type="button">×</button>
+      </div>
+      <div id="ai-write-plan-body" class="ai-write-plan-body" aria-live="polite"></div>
+      <div class="card-actions ai-plan-actions">
+        <button id="ai-write-plan-refresh" class="ghost-button" type="button">刷新状态</button>
+        <button id="ai-write-plan-reject" class="ghost-button" type="button">拒绝</button>
+        <button id="ai-write-plan-undo" class="ghost-button hidden" type="button">撤销本次审批</button>
+        <button id="ai-write-plan-confirm" class="primary-button" type="button">确认执行</button>
+      </div>
+    </dialog>
+
+    <dialog id="ai-question-dialog" class="dialog ai-question-dialog" aria-labelledby="ai-question-title">
+      <div class="dialog-header">
+        <div><span class="eyebrow">AI 提问</span><h2 id="ai-question-title">需要你的回答</h2></div>
+        <button id="ai-question-close" class="dialog-close" aria-label="关闭提问" type="button">×</button>
+      </div>
+      <div class="ai-question-body">
+        <p id="ai-question-text" class="ai-question-text"></p>
+        <form id="ai-question-form">
+          <div id="ai-question-options" class="ai-question-options" role="radiogroup" aria-label="预设选项"></div>
+          <label class="ai-question-custom-field"><span class="field-label ai-question-custom-heading"><span>自定义回答 / 补充信息</span><output id="ai-question-answer-count" for="ai-question-custom-answer" aria-live="polite">已填写 0 / 3000</output></span><input id="ai-question-custom-answer" type="text" maxlength="3000" aria-describedby="ai-question-answer-count" placeholder="可补充所选方案；未选预设时作为自定义回答" autocomplete="off"></label>
+          <p id="ai-question-expiry" class="usage-measurement-note" role="status"></p>
+        </form>
+      </div>
+      <div class="card-actions ai-question-actions">
+        <button id="ai-question-skip" class="ghost-button" type="button">暂不回答</button>
+        <button id="ai-question-submit" class="primary-button" type="button" disabled>提交回答</button>
+      </div>
+    </dialog>
+
+    <dialog id="ai-approval-center-dialog" class="dialog wide-dialog ai-approval-center-dialog" aria-labelledby="ai-approval-center-title">
+      <div class="dialog-header">
+        <div><span class="eyebrow">审批工作流</span><h2 id="ai-approval-center-title">AI 操作审批中心</h2></div>
+        <button id="ai-approval-center-close" class="dialog-close" aria-label="关闭审批中心" type="button">×</button>
+      </div>
+      <div class="ai-approval-center-body">
+        <div class="ai-approval-filters" role="group" aria-label="按状态筛选审批记录">
+          <button type="button" data-status-filter="" aria-pressed="true">全部</button>
+          <button type="button" data-status-filter="pending" aria-pressed="false">待确认</button>
+          <button type="button" data-status-filter="executed" aria-pressed="false">执行成功</button>
+          <button type="button" data-status-filter="rejected" aria-pressed="false">已拒绝</button>
+          <button type="button" data-status-filter="invalidated" aria-pressed="false">已失效</button>
+          <button type="button" data-status-filter="expired" aria-pressed="false">已过期</button>
+          <button type="button" data-status-filter="failed" aria-pressed="false">执行失败</button>
+        </div>
+        <div id="ai-approval-list-host" class="ai-approval-list-host" aria-live="polite"></div>
+      </div>
+    </dialog>
+
     <dialog id="relationship-map-dialog" class="relationship-map-dialog" aria-label="放大人物关系图" data-testid="relationship-map-expanded">
       <button id="relationship-map-close" class="relationship-map-floating-close" aria-label="关闭放大关系图" type="button">×</button>
       <div id="relationship-map-expanded-host" class="relationship-map-expanded-host"></div>
@@ -1260,8 +1311,6 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
-    <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1&feature=calculate-time-tool-v2&feature=analysis-task-expired-toast-v1&feature=global-replace-volume-v1&feature=chapter-search-replace-v1&feature=chapter-save-toast-v1&feature=character-relationship-delete-v1&feature=character-relationship-group-v1&feature=analysis-task-stability-delay-v1&feature=ai-assistant-workspace-v2&feature=volume-detail-icon-v1&feature=volume-story-order-v1&feature=reader-manual-chapter-navigation-v1&feature=ai-message-reference-badges-v1&feature=ai-roleplay-message-reference-v1&feature=ai-message-actions-v1&feature=assistant-responsive-navigation-v3&feature=annotation-permissions-v1&feature=annotation-line-counts-v1&feature=ai-relationship-roleplay-v1&feature=ai-roleplay-user-character-visibility-v1&feature=ai-roleplay-story-recall-v1&feature=ai-model-picker-v1&feature=ai-fork-model-unlock-v1&feature=context-percent-format-v1&feature=annotation-precise-locate-v1&feature=markdown-word-count-stable-v1&feature=ai-stream-character-count-stable-v2&feature=ai-process-empty-intermediate-v1&feature=ai-feed-scroll-follow-v1&feature=ai-message-retry-v1&feature=ai-stream-idle-timeout-v2&feature=ai-config-delete-v1&feature=ai-provider-protocol-options-v1&feature=ai-provider-thinking-type-v1&feature=ai-chat-image-attachments-v8&feature=ai-message-image-preview-v1&feature=ai-thinking-scroll-v2&feature=ai-image-conversation-model-lock-v1&feature=toast-click-dismiss-v2&feature=system-restart-dialog-delay-v1&feature=character-avatar-v6&feature=character-death-position-v1&feature=admin-ai-conversations-v1&feature=ai-usage-pricing-v1&feature=ai-usage-pricing-badge-v2&feature=ai-usage-pricing-label-v1&feature=ai-usage-token-breakdown-v1&feature=ai-usage-pricing-cache-v2&feature=ai-usage-pricing-manual-refresh-v1&feature=ai-monthly-token-quota-v1&feature=ai-provider-token-quota-v1&feature=ai-token-quota-positive-v6&feature=ai-model-thinking-label-v1&feature=ai-model-picker-focus-v1&feature=ai-provider-model-import-v1&feature=ai-assistant-brain-icon-v1&feature=ai-token-usage-details-v1&feature=ai-token-usage-details-centered-v1&feature=ai-token-usage-raw-input-v1&feature=ai-stream-connection-seconds-v1&feature=phone-client-entry-v1&feature=ai-usage-pricing-cache-v1&feature=ai-model-thinking-label-v3&feature=ai-roleplay-speaker-label-v1&feature=toast-modal-host-v1&feature=api-key-copy-existing-v1&feature=character-favorite-v1&feature=record-favorites-v1&feature=ai-token-usage-estimated-price-v1&feature=entity-detail-favorites-v1&feature=entity-pin-v1&feature=entity-pin-icon-v1&feature=roleplay-favorite-label-v1&feature=ai-roleplay-knowledge-tools-v1&feature=character-persona-summary-v1&feature=ai-roleplay-scene-turn-v2&feature=admin-account-identity-v2&feature=ai-provider-analysis-timeout-v1&feature=task-detail-failure-orange-v1&feature=book-import-progress-v1&feature=presence-multiple-users-v1&feature=ai-context-input-output-v1&feature=editor-blank-lines-preserved-v1"></script>
+    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1&feature=calculate-time-tool-v2&feature=analysis-task-expired-toast-v1&feature=global-replace-volume-v1&feature=chapter-search-replace-v1&feature=chapter-save-toast-v1&feature=character-relationship-delete-v1&feature=character-relationship-group-v1&feature=analysis-task-stability-delay-v1&feature=ai-assistant-workspace-v2&feature=volume-detail-icon-v1&feature=volume-story-order-v1&feature=reader-manual-chapter-navigation-v1&feature=ai-message-reference-badges-v1&feature=ai-roleplay-message-reference-v1&feature=ai-message-actions-v1&feature=assistant-responsive-navigation-v3&feature=annotation-permissions-v1&feature=annotation-line-counts-v1&feature=ai-relationship-roleplay-v1&feature=ai-roleplay-user-character-visibility-v1&feature=ai-roleplay-story-recall-v1&feature=ai-model-picker-v1&feature=ai-fork-model-unlock-v1&feature=context-percent-format-v1&feature=annotation-precise-locate-v1&feature=markdown-word-count-stable-v1&feature=ai-stream-character-count-stable-v2&feature=ai-process-empty-intermediate-v1&feature=ai-feed-scroll-follow-v1&feature=ai-message-retry-v1&feature=ai-stream-idle-timeout-v2&feature=ai-config-delete-v1&feature=ai-provider-protocol-options-v1&feature=ai-provider-thinking-type-v1&feature=ai-chat-image-attachments-v8&feature=ai-message-image-preview-v1&feature=ai-thinking-scroll-v2&feature=ai-image-conversation-model-lock-v1&feature=toast-click-dismiss-v2&feature=system-restart-dialog-delay-v1&feature=character-avatar-v6&feature=character-death-position-v1&feature=admin-ai-conversations-v1&feature=ai-usage-pricing-v1&feature=ai-usage-pricing-badge-v2&feature=ai-usage-pricing-label-v1&feature=ai-usage-token-breakdown-v1&feature=ai-usage-pricing-cache-v2&feature=ai-usage-pricing-manual-refresh-v1&feature=ai-monthly-token-quota-v1&feature=ai-provider-token-quota-v1&feature=ai-token-quota-positive-v6&feature=ai-model-thinking-label-v1&feature=ai-model-picker-focus-v1&feature=ai-provider-model-import-v1&feature=ai-assistant-brain-icon-v1&feature=ai-token-usage-details-v1&feature=ai-token-usage-details-centered-v1&feature=ai-token-usage-raw-input-v1&feature=ai-stream-connection-seconds-v1&feature=phone-client-entry-v1&feature=ai-usage-pricing-cache-v1&feature=ai-model-thinking-label-v3&feature=ai-roleplay-speaker-label-v1&feature=toast-modal-host-v1&feature=api-key-copy-existing-v1&feature=character-favorite-v1&feature=record-favorites-v1&feature=ai-token-usage-estimated-price-v1&feature=entity-detail-favorites-v1&feature=entity-pin-v1&feature=entity-pin-icon-v1&feature=roleplay-favorite-label-v1&feature=ai-roleplay-knowledge-tools-v1&feature=character-persona-summary-v1&feature=ai-roleplay-scene-turn-v2&feature=admin-account-identity-v2&feature=ai-provider-analysis-timeout-v1&feature=task-detail-failure-orange-v1&feature=book-import-progress-v1&feature=presence-multiple-users-v1&feature=ai-context-input-output-v1&feature=editor-blank-lines-preserved-v1&feature=reader-first-frame-v1&feature=vditor-lazy-load-v1&feature=ui-module-preload-v1&feature=reader-initial-prefetch-v1&feature=editor-preview-toggle-v2&feature=vditor-fullscreen-disabled-v1&feature=chapter-auto-indent-v1&feature=chapter-centered-scroll-v1&feature=work-editor-preferences-v1&feature=ai-context-output-usage-v1&feature=ai-roleplay-memory-v4&feature=ai-roleplay-memory-v5&feature=roleplay-memory-header-actions-v1&feature=roleplay-memory-header-toolbar-v1&feature=roleplay-memory-action-icons-v1&feature=roleplay-memory-action-colors-v1&feature=annotation-line-anchor-v1&feature=stable-line-ids-v1&feature=ai-write-tools-v3&feature=ai-question-option-supplement-v1&feature=ai-question-selection-highlight-v1&feature=ai-question-continuation-ui-v1&feature=ai-question-tool-result-v1&feature=ai-question-submit-guidance-v1&feature=ai-question-answer-limit-v1"></script>
   </body>
 </html>

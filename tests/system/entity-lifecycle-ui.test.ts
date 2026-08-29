@@ -32,5 +32,7 @@ describe("实体存续状态界面", () => {
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(page.text).toContain("feature=character-death-position-v1");
+    expect(page.text).toContain('feature=ai-write-tools-v2');
+    expect(page.text).toContain('feature=ai-write-tools-v3');
   });
 });

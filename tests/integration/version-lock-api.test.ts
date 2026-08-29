@@ -13,12 +13,24 @@ describe("作品和分卷版本锁", () => {
     const created = await request(runtime.app).post("/api/works").send({ title: "初始标题", description: "初始简介" }).expect(201);
     const workId = created.body.data.id as string;
     expect(created.body.data.versionNo).toBe(1);
+    expect(created.body.data).toMatchObject({ editorAutoIndentEnabled: false, editorTypewriterModeEnabled: false });
 
     const updated = await request(runtime.app)
       .patch(`/api/works/${workId}`)
-      .send({ title: "更新标题", expectedVersionNo: 1, changeNote: "调整标题" })
+      .send({
+        title: "更新标题",
+        editorAutoIndentEnabled: true,
+        editorTypewriterModeEnabled: true,
+        expectedVersionNo: 1,
+        changeNote: "调整标题和正文编辑偏好"
+      })
       .expect(200);
-    expect(updated.body.data).toMatchObject({ title: "更新标题", versionNo: 2 });
+    expect(updated.body.data).toMatchObject({
+      title: "更新标题",
+      editorAutoIndentEnabled: true,
+      editorTypewriterModeEnabled: true,
+      versionNo: 2
+    });
 
     const conflict = await request(runtime.app)
       .patch(`/api/works/${workId}`)
@@ -29,13 +41,21 @@ describe("作品和分卷版本锁", () => {
 
     const history = await request(runtime.app).get(`/api/entity-versions/work/${workId}`).expect(200);
     expect(history.body.data.map((item: { versionNo: number }) => item.versionNo)).toEqual([2, 1]);
-    expect(history.body.data[0]).toMatchObject({ changeNote: "调整标题", snapshot: { title: "更新标题" } });
+    expect(history.body.data[0]).toMatchObject({
+      changeNote: "调整标题和正文编辑偏好",
+      snapshot: { title: "更新标题", editorAutoIndentEnabled: true, editorTypewriterModeEnabled: true }
+    });
 
     const restored = await request(runtime.app)
       .post(`/api/entity-versions/work/${workId}/restore`)
       .send({ versionNo: 1, expectedVersionNo: 2 })
       .expect(200);
-    expect(restored.body.data).toMatchObject({ title: "初始标题", versionNo: 3 });
+    expect(restored.body.data).toMatchObject({
+      title: "初始标题",
+      editorAutoIndentEnabled: false,
+      editorTypewriterModeEnabled: false,
+      versionNo: 3
+    });
   });
 
   it("保存分卷元数据版本并支持按当前版本恢复", async () => {

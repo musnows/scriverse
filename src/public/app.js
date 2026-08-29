@@ -15,6 +15,7 @@ import { createAiChatTabManager, normalizeAiChatTabLimit } from "/ai-chat-tabs.j
 import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260816-ai-chat-tabs-v1";
 import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
+import { CHAPTER_PARAGRAPH_INDENT, calculateChapterCaretScroll, chapterLineIndexAtOffset, insertIndentedParagraph } from "/chapter-editor-behavior.js?v=20260828-centered-scroll-v1";
 import {
   FORESHADOW_REMINDER_SNOOZE_STORAGE_KEY,
   foreshadowReminderRequestTargetsState,
@@ -32,14 +33,26 @@ import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount } from "/ai-usage.js?v=20260821-ai-usage-pricing-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260827-context-input-output-v1";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260828-context-output-usage-v1";
 import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
+import {
+  AI_WRITE_TOOLS_META,
+  cacheAiQuestionView,
+  cacheAiWritePlanDetail,
+  createInteractiveToolCard,
+  parseInteractiveToolPayload,
+  renderApprovalCenterRows,
+  renderWritePlanDetailMarkup,
+  isInteractiveToolPending,
+  aiFormatDateTime
+} from "/ai-interactive.js?v=20260829-question-tool-result-v5";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
 import { AI_CHAT_IMAGE_ATTACHMENT_MAX_COUNT, aiChatImageAttachmentIds, isAiChatImageFile, normalizeAiChatImageAttachments } from "/ai-image-attachments.js?v=20260820-ai-chat-image-attachments-v2";
 import { findTextMatches, replaceTextMatches } from "/chapter-search.js?v=20260818-chapter-search-replace-v1";
+import { MAX_CHAPTER_LINE_IDS, normalizeChapterLineIdDraft, reconcileChapterLineIdDraft } from "/chapter-line-id-tracker.js?v=20260828-stable-line-ids-v1";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260816-character-gender-v1";
@@ -274,6 +287,7 @@ let readingReturnRoute = null;
 let readingPreviousFocus = null;
 let readingPositionSaveTimer = null;
 let readingResizeFrame = null;
+const readingVolumeDirectoryConcurrency = 4;
 
 let timelineMultiSelectEnabled = false;
 let timelineActiveTrackId = null;
@@ -444,6 +458,10 @@ function canGlobalReplaceAny(work = state.work) {
   return Boolean(work) && (canGlobalReplaceScope("prose", work) || canGlobalReplaceScope("settings", work));
 }
 
+function applyChapterEditorPreferences() {
+  $("#app").classList.toggle("editor-typewriter-mode", Boolean(state.work?.editorTypewriterModeEnabled));
+}
+
 function applyWorkAccessMode() {
   const viewOnly = Boolean(state.work) && !canEditWork();
   const proseReadOnly = Boolean(state.work) && !canEditProse();
@@ -456,6 +474,7 @@ function applyWorkAccessMode() {
   $("#app").classList.toggle("prose-hidden-mode", proseHidden);
   $("#app").classList.toggle("ai-hidden-mode", aiHidden);
   document.body.classList.toggle("work-viewer-mode", moduleReadOnly);
+  applyChapterEditorPreferences();
   for (const item of WORK_PERMISSION_MODULES) {
     if (!item.uiModule) continue;
     const button = $(`#module-nav [data-module="${item.uiModule}"]`);
@@ -621,7 +640,10 @@ function assertAiRequestCurrent(request) {
 }
 
 function aiInteractionBusy() {
-  return aiRequestManager.hasActive(activeAiChatTab()?.id) || aiConversationNavigationPending !== null;
+  const activeTabId = activeAiChatTab()?.id;
+  return aiRequestManager.hasActive(activeTabId)
+    || (activeTabId ? aiQuestionContinuationTabIds.has(activeTabId) : false)
+    || aiConversationNavigationPending !== null;
 }
 
 function aiSendButtonIconMarkup(stateName) {
@@ -631,12 +653,14 @@ function aiSendButtonIconMarkup(stateName) {
 }
 
 function syncAiRequestControls() {
-  const sending = aiRequestManager.hasActive(activeAiChatTab()?.id);
+  const activeTabId = activeAiChatTab()?.id;
+  const sending = aiRequestManager.hasActive(activeTabId);
+  const continuingQuestion = activeTabId ? aiQuestionContinuationTabIds.has(activeTabId) : false;
   const switching = aiConversationNavigationPending !== null;
   const button = $("#ai-send");
-  const stateName = sending ? "stop" : switching ? "switching" : "send";
-  const label = sending ? "终止当前回复" : switching ? "正在切换对话" : "发送消息";
-  button.disabled = switching;
+  const stateName = sending ? "stop" : (switching || continuingQuestion) ? "switching" : "send";
+  const label = sending ? "终止当前回复" : continuingQuestion ? "AI 正在根据回答继续处理" : switching ? "正在切换对话" : "发送消息";
+  button.disabled = switching || continuingQuestion;
   button.dataset.state = stateName;
   button.classList.toggle("is-stop", sending);
   button.setAttribute("aria-label", label);
@@ -779,6 +803,8 @@ const aiConversationHistoryPageLimit = 20;
 let aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
 let workScopedUiGeneration = 0;
 let workSelectionRequestGeneration = 0;
+let initialWorkDetail = null;
+let initialReaderChapterRequest = null;
 let chapterSelectionRequestGeneration = 0;
 let aiConversationNavigationGeneration = 0;
 let aiConversationNavigationPending = null;
@@ -1461,6 +1487,7 @@ let chapterLineNumberFrame = null;
 let chapterLineNumberTimer = null;
 let chapterLineLayout = null;
 let chapterLineVirtualWindow = null;
+let chapterCaretScrollFrame = null;
 let chapterLineSelection = null;
 let chapterLineDrag = null;
 let chapterWhitespaceVisible = true;
@@ -1468,6 +1495,8 @@ let chapterAutoSaveTimer = null;
 let chapterSaveInFlight = null;
 let chapterSaveGuardInFlight = null;
 let lastSavedChapterSnapshot = null;
+let chapterDraftLineIdState = null;
+let chapterBeforeInputState = null;
 let chapterSearchMatchIndex = -1;
 let chapterSelectionRequestId = 0;
 let chapterForeshadowReminderRequestId = 0;
@@ -1553,6 +1582,7 @@ let characterSectionEditorDirty = false;
 let settingEditorVditor = null;
 let knowledgeSectionVditor = null;
 let characterSectionVditor = null;
+let vditorResourcesPromise = null;
 const settingEditorDirtyTracker = createEditorDirtyTracker();
 const characterSectionEditorDirtyTracker = createEditorDirtyTracker();
 let formDialogVditors = [];
@@ -1562,17 +1592,22 @@ let moduleContentInteractionsBound = false;
 function applyChapterEditorMode() {
   const permissionBlocked = Boolean(state.work) && !canEditProse();
   const viewOnly = permissionBlocked || chapterEditorReadOnly;
+  const editButton = $("#chapter-edit-button");
   $("#editor-view").classList.toggle("is-read-only", viewOnly);
   $("#chapter-title").readOnly = viewOnly;
   $("#chapter-content").readOnly = viewOnly;
   $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
-  $("#chapter-edit-button").classList.toggle("hidden", permissionBlocked || !chapterEditorReadOnly || !state.chapter);
-  $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);
+  editButton.classList.toggle("hidden", permissionBlocked || !state.chapter);
+  editButton.classList.toggle("primary-button", chapterEditorReadOnly);
+  editButton.classList.toggle("ghost-button", !chapterEditorReadOnly);
+  editButton.textContent = chapterEditorReadOnly ? "编辑" : "预览";
+  editButton.setAttribute("aria-pressed", String(!chapterEditorReadOnly));
+  editButton.setAttribute("aria-label", chapterEditorReadOnly ? "切换到编辑模式" : "切换到预览模式");
   $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter || !canReadModule("comments"));
-  $("#chapter-reader-button").classList.toggle("hidden", !state.chapter || !canReadModule("editor"));
   syncChapterSearchControls();
   if (viewOnly) cancelChapterAutoSave();
+  syncMobileAiPanelSafeTop();
 }
 
 function enterChapterEditMode() {
@@ -1583,6 +1618,19 @@ function enterChapterEditMode() {
   if (!sameChapterSnapshot(draft, lastSavedChapterSnapshot)) scheduleChapterAutoSave(120);
   else setSaveState("已保存");
   $("#chapter-content").focus();
+}
+
+function toggleChapterEditPreviewMode() {
+  if (!state.chapter || !canEditProse()) return;
+  if (chapterEditorReadOnly) {
+    enterChapterEditMode();
+    return;
+  }
+  chapterEditorReadOnly = true;
+  cancelChapterAutoSave();
+  applyChapterEditorMode();
+  setSaveState(state.dirty ? "预览中 · 有未保存修改" : "预览中", state.dirty);
+  $("#chapter-edit-button").focus();
 }
 
 function showEntityEditorPage(type, { readOnly = false } = {}) {
@@ -1935,6 +1983,37 @@ function scheduleChapterLineNumbers(delay = 0) {
     chapterLineNumberTimer = null;
     requestChapterLineNumberFrame();
   }, wait);
+}
+
+function scheduleChapterCaretScroll() {
+  if (!state.work?.editorTypewriterModeEnabled || chapterCaretScrollFrame !== null) return;
+  chapterCaretScrollFrame = requestAnimationFrame(() => {
+    chapterCaretScrollFrame = null;
+    const input = $("#chapter-content");
+    const measure = $("#chapter-line-measure");
+    if (!state.work?.editorTypewriterModeEnabled || document.activeElement !== input || input.readOnly || input.clientWidth === 0 || input.clientHeight === 0) return;
+    const style = getComputedStyle(input);
+    const paddingTop = parseFloat(style.paddingTop) || 0;
+    const paddingBottom = parseFloat(style.paddingBottom) || 0;
+    const contentWidth = Math.max(1, input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+    const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.55;
+    const layout = prepareChapterLineLayout(input, measure, style, contentWidth);
+    const scrollContentHeight = input.scrollHeight - paddingTop - paddingBottom;
+    const targetHeight = input.scrollHeight > input.clientHeight + 1 ? scrollContentHeight : null;
+    const { getLineBounds } = createChapterLineBoundsGetter(layout, measure, lineHeight, targetHeight);
+    const lineIndex = Math.min(layout.lines.length - 1, chapterLineIndexAtOffset(input.value, input.selectionEnd));
+    const caretBottom = getLineBounds(lineIndex).bottom + paddingTop;
+    const nextScrollTop = calculateChapterCaretScroll({
+      caretBottom,
+      scrollTop: input.scrollTop,
+      clientHeight: input.clientHeight,
+      scrollHeight: input.scrollHeight
+    });
+    if (nextScrollTop === input.scrollTop) return;
+    input.scrollTop = nextScrollTop;
+    syncChapterLineNumberScroll();
+    scheduleChapterLineNumbers();
+  });
 }
 
 function lineIndexAtPointer(clientY) {
@@ -2696,6 +2775,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   recall_other: "回忆相识角色",
   recall_known: "回忆知情设定",
   recall_story: "回忆故事",
+  recall_roleplay_memory: "回忆当前扮演线",
+  remember_roleplay: "整理扮演记忆",
   calculate_time: "计算日期"
 };
 
@@ -2712,6 +2793,8 @@ const AI_TOOL_DESCRIPTIONS = {
   recall_other: "读取自己通过关系、同一组织或共同参与时间线而认识的其他角色公开摘要。",
   recall_known: "读取自己所属种族、组织，以及与自己身份相关的世界设定。",
   recall_story: "查询自己姓名或别名出现过的正文段落，避免全知回忆。",
+  recall_roleplay_memory: "查询当前所扮演角色在作品内唯一共享的非正史记忆库，不读取其他角色或作品正史。",
+  remember_roleplay: "暂存本轮值得保持的扮演经历；最终角色回复成功保存后才提交。",
   calculate_time: "计算两个 YYYY-MM-DD 日期之间的天数差。"
 };
 
@@ -2875,6 +2958,10 @@ function openAiToolCallDetail(toolCall) {
 
 function createAiToolCallButton(toolCall) {
   const name = String(toolCall?.name ?? "unknown");
+  if (name === "propose_write_plan" || name === "ask_user_question") {
+    const card = createInteractiveToolCard(toolCall, AI_TOOL_CARD_ACTIONS);
+    if (card) return card;
+  }
   const button = document.createElement("button");
   button.type = "button";
   button.className = `ai-tool-call-summary${toolCall?.status === "failed" ? " is-failed" : ""}`;
@@ -2885,6 +2972,392 @@ function createAiToolCallButton(toolCall) {
   return button;
 }
 
+// ---------------------------------------------------------------------------
+// AI 可写工具：审批卡片动作、修改计划详情、撤销与用户提问
+// ---------------------------------------------------------------------------
+
+let aiWritePlanDialogPlanId = null;
+let aiWritePlanDialogBusy = false;
+let currentPlanDialogDetail = null;
+let currentPlanDialogFocusConfirm = false;
+let aiQuestionDialogQuestionId = null;
+let currentAiQuestionDialogView = null;
+let aiQuestionDialogBusy = false;
+const aiQuestionContinuationTabIds = new Set();
+let autoOpenedQuestionIds = new Set();
+const aiApprovalCenterState = { status: "" };
+
+/** 消息流中交互工具卡片绑定的动作：全部先取服务端最新状态，再弹窗确认。 */
+const AI_TOOL_CARD_ACTIONS = {
+  openPlanDetail(planId) {
+    openAiWritePlanDetail(planId).catch((error) => toast(`审批详情加载失败：${error.message}`, "error"));
+  },
+  confirmPlan(planId) {
+    openAiWritePlanDetail(planId, { focusConfirm: true }).catch((error) => toast(`审批详情加载失败：${error.message}`, "error"));
+  },
+  rejectPlan(planId) {
+    decideAiWritePlan(planId, "reject").catch((error) => toast(`拒绝失败：${error.message}`, "error"));
+  },
+  openQuestionDialog(questionId) {
+    openAiUserQuestionDialog(questionId).catch((error) => toast(`提问加载失败：${error.message}`, "error"));
+  },
+  rejectQuestion(questionId) {
+    respondAiUserQuestion(questionId, { action: "reject" }).catch((error) => toast(`操作失败：${error.message}`, "error"));
+  },
+  openApprovalCenter() {
+    openAiApprovalCenter();
+  }
+};
+
+/** 流式收到交互式可写工具调用时的提示与自动弹出提问。 */
+function handleInteractiveToolCallEvent(toolCall) {
+  const name = String(toolCall?.name ?? "");
+  if (name === "propose_write_plan") {
+    if (toolCall.status === "failed") {
+      const message = String(parseInteractiveToolPayload(toolCall)?.error?.message ?? "未知错误");
+      toast(`AI 的写入审批提交失败：${message}`, "error");
+      return;
+    }
+    const payload = parseInteractiveToolPayload(toolCall);
+    const targets = Array.isArray(payload?.plan?.targets) ? payload.plan.targets.join("、") : "待确认操作";
+    const summary = String(payload?.plan?.aiSummary ?? "");
+    toast(`AI 提交了写入审批：${targets}${summary ? ` · ${summary}` : ""}`);
+    return;
+  }
+  if (name !== "ask_user_question" || toolCall.status === "failed") return;
+  const question = toolCall.result?.question;
+  if (!question?.id) return;
+  cacheAiQuestionView(question);
+  const questionId = String(question.id);
+  if (autoOpenedQuestionIds.has(questionId)) return;
+  autoOpenedQuestionIds.add(questionId);
+  // 直接弹出回答框等待作者选择；不会预填任何答案。
+  openAiUserQuestionDialog(questionId).catch(() => undefined);
+}
+
+function questionsEndpoint(path) {
+  return `/api/works/${state.work.id}/ai/questions${path}`;
+}
+
+function plansEndpoint(path) {
+  return `/api/works/${state.work.id}/ai/write-plans${path}`;
+}
+
+async function fetchAiWritePlanDetail(planId) {
+  const detail = await api(plansEndpoint(`/${encodeURIComponent(String(planId))}`));
+  cacheAiWritePlanDetail(detail);
+  return detail;
+}
+
+async function decideAiWritePlan(planId, action) {
+  const buttonLabel = action === "confirm" ? "确认执行" : "拒绝";
+  const targetButton = $(action === "confirm" ? "#ai-write-plan-confirm" : "#ai-write-plan-reject");
+  if (targetButton?.disabled || aiWritePlanDialogBusy) return;
+  if (targetButton) targetButton.disabled = true;
+  aiWritePlanDialogBusy = true;
+  try {
+    const detail = await api(plansEndpoint(`/${encodeURIComponent(String(planId))}/${action}`), { method: "POST" });
+    cacheAiWritePlanDetail(detail);
+    toast(action === "confirm"
+      ? `已执行 AI 写入审批：${detail.aiSummary}`
+      : `已拒绝该写入审批，未产生任何写入`);
+    if ($("#ai-write-plan-dialog").open && aiWritePlanDialogPlanId === String(detail.id)) {
+      applyPlanDetailToDialog(detail);
+    }
+    if ($("#ai-approval-center-dialog").open) loadAiApprovalCenterPlans().catch(() => undefined);
+    return detail;
+  } catch (error) {
+    // 已被处理（409）等冲突也需要刷新展示的明细状态。
+    try {
+      const fresh = await fetchAiWritePlanDetail(planId);
+      if ($("#ai-write-plan-dialog").open && aiWritePlanDialogPlanId === String(planId)) applyPlanDetailToDialog(fresh);
+      else if (targetButton) targetButton.disabled = false;
+    } catch {
+      if (targetButton) targetButton.disabled = false;
+    }
+    throw new Error(`${buttonLabel}失败：${error.message}`);
+  } finally {
+    aiWritePlanDialogBusy = false;
+  }
+}
+
+async function undoAiWritePlan(planId) {
+  if (aiWritePlanDialogBusy) return;
+  const button = $("#ai-write-plan-undo");
+  button.disabled = true;
+  try {
+    const undoPlan = await api(plansEndpoint(`/${encodeURIComponent(String(planId))}/undo`), { method: "POST" });
+    cacheAiWritePlanDetail(undoPlan);
+    toast("已创建撤销审批，请在新弹窗中单独确认执行");
+    await openAiWritePlanDetail(undoPlan.id);
+  } catch (error) {
+    toast(`创建撤销审批失败：${error.message}`, "error");
+    button.disabled = false;
+  }
+}
+
+function applyPlanDetailToDialog(detail) {
+  currentPlanDialogDetail = detail;
+  aiWritePlanDialogPlanId = String(detail.id);
+  $("#ai-write-plan-body").innerHTML = renderWritePlanDetailMarkup(detail);
+  const isPending = detail.status === "pending";
+  const canUndo = Boolean(detail.undoAvailable) && detail.status === "executed";
+  $("#ai-write-plan-confirm").classList.toggle("hidden", !isPending);
+  $("#ai-write-plan-reject").classList.toggle("hidden", !isPending);
+  $("#ai-write-plan-undo").classList.toggle("hidden", !canUndo);
+  $("#ai-write-plan-confirm").disabled = false;
+  $("#ai-write-plan-reject").disabled = false;
+  $("#ai-write-plan-undo").disabled = false;
+  if (isPending && currentPlanDialogFocusConfirm) {
+    $("#ai-write-plan-dialog").querySelector(".card-actions")?.scrollIntoView({ block: "end" });
+  }
+}
+
+async function openAiWritePlanDetail(planId, options = {}) {
+  currentPlanDialogFocusConfirm = options.focusConfirm === true;
+  const dialog = $("#ai-write-plan-dialog");
+  if (!dialog.open) dialog.showModal();
+  $("#ai-write-plan-body").innerHTML = '<p class="usage-measurement-note">正在加载系统生成的完整修改明细……</p>';
+  try {
+    const detail = await fetchAiWritePlanDetail(planId);
+    applyPlanDetailToDialog(detail);
+  } catch (error) {
+    $("#ai-write-plan-body").innerHTML = `<p class="usage-measurement-note">加载失败：${esc(error.message)}</p>`;
+    throw error;
+  }
+}
+
+async function loadAiApprovalCenterPlans() {
+  const statusQuery = aiApprovalCenterState.status ? `?status=${encodeURIComponent(aiApprovalCenterState.status)}&limit=50` : "?limit=50";
+  const [planPayload, questionPayload] = await Promise.all([
+    api(plansEndpoint(statusQuery)),
+    api(questionsEndpoint(statusQuery))
+  ]);
+  const plans = Array.isArray(planPayload) ? planPayload : (Array.isArray(planPayload?.plans) ? planPayload.plans : []);
+  const questions = Array.isArray(questionPayload) ? questionPayload : (Array.isArray(questionPayload?.questions) ? questionPayload.questions : []);
+  $("#ai-approval-list-host").innerHTML = renderApprovalCenterRows(plans, questions);
+}
+
+function openAiApprovalCenter() {
+  const dialog = $("#ai-approval-center-dialog");
+  if (!dialog.open) dialog.showModal();
+  $("#ai-approval-center-toggle").setAttribute("aria-expanded", "true");
+  $("#ai-approval-list-host").innerHTML = '<p class="usage-measurement-note">正在加载审批记录……</p>';
+  loadAiApprovalCenterPlans().catch((error) => {
+    $("#ai-approval-list-host").innerHTML = `<p class="usage-measurement-note">加载失败：${esc(error.message)}</p>`;
+  });
+}
+
+async function fetchAiUserQuestion(questionId) {
+  const question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}`));
+  cacheAiQuestionView(question);
+  return question;
+}
+
+function syncAiQuestionOptionPresentation() {
+  const checked = document.querySelector('input[name="ai-question-choice"]:checked');
+  for (const label of document.querySelectorAll(".ai-question-option-item")) {
+    const input = label.querySelector('input[name="ai-question-choice"]');
+    const isSelected = Boolean(input && checked === input);
+    label.classList.toggle("is-selected", isSelected);
+    label.classList.toggle("is-recommended", label.dataset.recommended === "true" && (!checked || isSelected));
+  }
+}
+
+function syncAiQuestionAnswerCount() {
+  const input = $("#ai-question-custom-answer");
+  const maximum = Number(input.maxLength) || 3000;
+  $("#ai-question-answer-count").textContent = `已填写 ${input.value.length} / ${maximum}`;
+}
+
+function renderAiUserQuestionOptions(question) {
+  const host = $("#ai-question-options");
+  const customInput = $("#ai-question-custom-answer");
+  const isPending = question.status === "pending";
+  host.replaceChildren();
+  for (const option of question.options ?? []) {
+    const label = document.createElement("label");
+    label.className = "ai-question-option-item";
+    label.dataset.recommended = String(option.recommended === true);
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "ai-question-choice";
+    input.value = String(option.index);
+    input.checked = question.selectedOption === option.index;
+    input.disabled = !isPending;
+    const span = document.createElement("span");
+    span.textContent = `${option.recommended ? "（最推荐）" : ""}${option.label}`;
+    label.append(input, span);
+    host.append(label);
+  }
+  const customLabel = document.createElement("label");
+  customLabel.className = "ai-question-option-item ai-question-custom-choice";
+  const customRadio = document.createElement("input");
+  customRadio.type = "radio";
+  customRadio.name = "ai-question-choice";
+  customRadio.value = "custom";
+  customRadio.checked = question.selectedOption == null && question.isCustomAnswer === true;
+  customRadio.disabled = !isPending;
+  const customText = document.createElement("span");
+  customText.textContent = "自定义回答";
+  customLabel.append(customRadio, customText);
+  host.append(customLabel);
+  customInput.value = question.customAnswer ?? (question.selectedOption == null && question.isCustomAnswer ? (question.answerText ?? "") : "");
+  customInput.disabled = !isPending;
+  syncAiQuestionAnswerCount();
+  syncAiQuestionOptionPresentation();
+  // 提交按钮由选择状态驱动：待回答且已选择（或输入）时才可提交。
+  if (isPending) syncAiQuestionSubmitState();
+  else $("#ai-question-submit").disabled = true;
+  $("#ai-question-skip").disabled = !isPending;
+  $("#ai-question-expiry").textContent = isPending
+    ? `请选择一个预设选项，或填写自定义回答后提交。有效期至 ${aiFormatDateTime(question.expiresAt)}；过期未回答将自动失效，AI 不允许在未获得回答时自行假定答案。`
+    : `该问题当前状态：${question.statusLabel}${question.answerText ? ` · 回答：${question.answerText}` : ""}`;
+}
+
+async function refreshAiQuestionDialog() {
+  const question = await fetchAiUserQuestion(aiQuestionDialogQuestionId);
+  currentAiQuestionDialogView = question;
+  $("#ai-question-text").textContent = question.question;
+  renderAiUserQuestionOptions(question);
+  return question;
+}
+
+async function openAiUserQuestionDialog(questionId) {
+  aiQuestionDialogQuestionId = String(questionId);
+  const dialog = $("#ai-question-dialog");
+  if (!dialog.open) dialog.showModal();
+  $("#ai-question-text").textContent = "";
+  $("#ai-question-options").replaceChildren();
+  $("#ai-question-custom-answer").value = "";
+  syncAiQuestionAnswerCount();
+  $("#ai-question-expiry").textContent = "正在加载问题……";
+  try {
+    return await refreshAiQuestionDialog();
+  } catch (error) {
+    $("#ai-question-expiry").textContent = `加载失败：${error.message}`;
+    throw error;
+  }
+}
+
+function beginAiQuestionContinuationUi(conversationId, questionId) {
+  const tab = conversationId ? aiChatTabManager.findByConversation(conversationId) : null;
+  if (!tab) return null;
+  const card = questionId
+    ? tab.feed.querySelector(`.ai-question-card[data-question-id="${CSS.escape(String(questionId))}"]`)
+    : null;
+  const note = card?.querySelector(".ai-interactive-note") ?? null;
+  const status = card?.querySelector(".ai-status-chip") ?? null;
+  const previousNote = note?.textContent ?? "";
+  const previousStatus = status?.textContent ?? "";
+  const controlStates = card
+    ? [...card.querySelectorAll("button")].map((button) => ({ button, disabled: button.disabled }))
+    : [];
+  if (card) {
+    card.classList.add("is-resuming");
+    card.setAttribute("aria-busy", "true");
+    controlStates.forEach(({ button }) => { button.disabled = true; });
+    if (status) status.textContent = "处理中";
+    if (note) note.textContent = "回答已作为工具结果提交，正在根据你的回答继续处理…";
+  }
+  aiQuestionContinuationTabIds.add(tab.id);
+  setAiChatTabStatus(tab, "streaming");
+  if (isActiveAiChatTab(tab)) syncAiRequestControls();
+  scrollAiFeedToBottom(tab.feed);
+  return {
+    tab,
+    card,
+    note,
+    status,
+    previousNote,
+    previousStatus,
+    controlStates
+  };
+}
+
+function finishAiQuestionContinuationUi(continuationUi, failed = false) {
+  if (!continuationUi) return;
+  aiQuestionContinuationTabIds.delete(continuationUi.tab.id);
+  if (continuationUi.card?.isConnected) {
+    continuationUi.card.classList.remove("is-resuming");
+    continuationUi.card.removeAttribute("aria-busy");
+    continuationUi.controlStates.forEach(({ button, disabled }) => { button.disabled = disabled; });
+    if (continuationUi.note) continuationUi.note.textContent = continuationUi.previousNote;
+    if (continuationUi.status) continuationUi.status.textContent = continuationUi.previousStatus;
+  }
+  if (aiChatTabManager.get(continuationUi.tab.id)) setAiChatTabStatus(continuationUi.tab, failed ? "error" : "ready");
+  if (isActiveAiChatTab(continuationUi.tab)) syncAiRequestControls();
+}
+
+async function reloadAiQuestionConversation(conversationId) {
+  if (!conversationId) return null;
+  const tab = aiChatTabManager.findByConversation(conversationId);
+  if (!tab) return openAiConversation(conversationId);
+  const conversation = await api(`/api/ai-conversations/${encodeURIComponent(conversationId)}?page=1&limit=100`);
+  if (String(conversation.workId ?? "") !== String(state.work?.id ?? "")) throw new Error("AI 对话不属于当前作品");
+  upsertAiConversationSummary(conversation);
+  applyConversationToAiChatTab(tab, conversation);
+  activateAiChatTab(tab.id, { persistCurrent: false, force: true });
+  return conversation;
+}
+
+async function respondAiUserQuestion(questionId, payload) {
+  if (aiQuestionDialogBusy) return;
+  aiQuestionDialogBusy = true;
+  $("#ai-question-submit").disabled = true;
+  $("#ai-question-skip").disabled = true;
+  const questionDialog = $("#ai-question-dialog");
+  const approvalCenterDialog = $("#ai-approval-center-dialog");
+  let continuationUi = null;
+  let continuationFailed = false;
+  try {
+    const knownQuestion = currentAiQuestionDialogView?.id === String(questionId)
+      ? currentAiQuestionDialogView
+      : await fetchAiUserQuestion(questionId);
+    const conversationId = typeof knownQuestion?.conversationId === "string" ? knownQuestion.conversationId : null;
+    if (questionDialog.open) questionDialog.close();
+    if (approvalCenterDialog.open) approvalCenterDialog.close();
+    continuationUi = beginAiQuestionContinuationUi(conversationId, questionId);
+    let question;
+    if (payload.action === "reject") {
+      question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/reject`), { method: "POST" });
+    } else if (payload.action === "custom") {
+      question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/answer`), { method: "POST", body: { customAnswer: payload.customAnswer } });
+    } else {
+      question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/answer`), {
+        method: "POST",
+        body: {
+          selectedOption: payload.selectedOption,
+          ...(payload.customAnswer ? { customAnswer: payload.customAnswer } : {})
+        }
+      });
+    }
+    cacheAiQuestionView(question);
+    currentAiQuestionDialogView = question;
+    aiQuestionDialogQuestionId = String(question.id);
+    await reloadAiQuestionConversation(question.conversationId ?? conversationId);
+    toast(payload.action === "reject" ? "已跳过该问题，AI 已继续处理" : "回答已提交，AI 已继续处理");
+    return question;
+  } catch (error) {
+    continuationFailed = true;
+    const latestQuestion = await fetchAiUserQuestion(questionId).catch(() => null);
+    if (latestQuestion) {
+      currentAiQuestionDialogView = latestQuestion;
+      cacheAiQuestionView(latestQuestion);
+      if (latestQuestion.status === "pending") {
+        $("#ai-question-text").textContent = latestQuestion.question;
+        renderAiUserQuestionOptions(latestQuestion);
+        if (!questionDialog.open) questionDialog.showModal();
+      }
+    }
+    throw error;
+  } finally {
+    finishAiQuestionContinuationUi(continuationUi, continuationFailed);
+    aiQuestionDialogBusy = false;
+  }
+}
+
+/** Convert a persisted tool call back into a process step for history rendering. */
 function aiToolProcessStep(toolCall, round = 1) {
   const normalizedToolCall = { ...toolCall };
   delete normalizedToolCall.round;
@@ -2945,7 +3418,8 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null, visi
   if (!renderableSteps.length) return;
   const details = document.createElement("details");
   details.className = "ai-process-details";
-  details.open = !completed;
+  // 存在待确认/待回答的交互卡片时保持展开，避免审批入口在历史消息中被折叠。
+  details.open = !completed || steps.some((step) => step?.type === "tool" && isInteractiveToolPending(step.toolCall));
   const summary = document.createElement("summary");
   const title = document.createElement("span");
   title.textContent = completed ? "思考与执行过程" : "正在思考与执行";
@@ -3209,6 +3683,266 @@ function renderAiConversationHistory() {
   }
 }
 
+const roleplayMemoryCategoryLabels = Object.freeze({
+  event: "事件",
+  state: "状态",
+  relationship: "关系",
+  commitment: "承诺",
+  knowledge: "知识",
+  scene: "场景"
+});
+const roleplayMemoryImportanceLabels = Object.freeze({ low: "低重要度", medium: "中重要度", high: "高重要度" });
+const roleplayMemoryCertaintyLabels = Object.freeze({ experienced: "亲历", observed: "观察", heard: "听说", believed: "相信" });
+const roleplayMemoryStatusLabels = Object.freeze({ active: "生效中", superseded: "已取代", archived: "已删除" });
+let roleplayMemoryItems = [];
+let roleplayMemoryCharacter = null;
+let roleplayMemoryPagination = { cursor: 0, limit: 20, total: 0, nextCursor: null };
+let roleplayMemoryCursorHistory = [0];
+let roleplayMemorySearchTimer = null;
+let roleplayMemoryLoaded = false;
+let roleplayMemoryLoading = false;
+
+function roleplayMemoryReadOnly() {
+  return Boolean(state.work) && !canEditModule("characters");
+}
+
+function roleplayMemoryQuery() {
+  const parameters = new URLSearchParams({
+    cursor: String(roleplayMemoryCursorHistory.at(-1) ?? 0),
+    limit: "20"
+  });
+  const query = $("#roleplay-memory-search").value.trim();
+  const category = $("#roleplay-memory-category").value;
+  const status = $("#roleplay-memory-status").value;
+  if (query) parameters.set("q", query);
+  if (category) parameters.set("categories", category);
+  if (status === "all") parameters.set("statuses", "active,superseded,archived");
+  else parameters.set("statuses", status || "active");
+  return parameters;
+}
+
+function roleplayMemorySourceHtml(source) {
+  const canOpen = source.canOpen === true && source.conversationId && source.messageId;
+  const sourceLabel = source.role === "assistant" ? "角色回复" : "用户消息";
+  const detail = source.restricted
+    ? "来自其他用户的角色扮演对话，无权查看原文"
+    : source.evidence || "来源消息已删除，保留来源时间";
+  return `<article class="roleplay-memory-source"><p><strong>${sourceLabel}</strong> · ${esc(formatDateTime(source.sourceAt))} · ${esc(detail)}</p>${canOpen ? `<button type="button" data-roleplay-memory-source-id="${esc(source.id)}" data-roleplay-memory-source-conversation="${esc(source.conversationId)}" data-roleplay-memory-source-message="${esc(source.messageId)}">查看来源</button>` : ""}</article>`;
+}
+
+function renderRoleplayMemoryList() {
+  const host = $("#roleplay-memory-list");
+  if (!host) return;
+  $("#roleplay-memory-add").disabled = roleplayMemoryReadOnly();
+  if (roleplayMemoryLoading) {
+    host.innerHTML = '<p class="roleplay-memory-empty">正在读取角色扮演记忆……</p>';
+    return;
+  }
+  if (!roleplayMemoryLoaded) {
+    host.innerHTML = '<p class="roleplay-memory-empty">打开角色扮演记忆分区后读取该角色的共享记忆库。</p>';
+    return;
+  }
+  if (!roleplayMemoryItems.length) {
+    host.innerHTML = '<p class="roleplay-memory-empty">当前筛选下没有记忆。可以手工添加，AI 也会在成功回复后整理值得保留的扮演经历。</p>';
+  } else {
+    host.innerHTML = roleplayMemoryItems.map((memory) => {
+      const sources = Array.isArray(memory.sources) ? memory.sources : [];
+      const editable = !roleplayMemoryReadOnly();
+      const pinAction = memory.isPinned ? "取消置顶" : "置顶";
+      const actions = editable
+        ? memory.status === "archived"
+          ? `<button type="button" data-roleplay-memory-action="restore" data-memory-id="${esc(memory.id)}">恢复</button>`
+          : `<button class="danger-button roleplay-memory-icon-action" type="button" data-roleplay-memory-action="archive" data-memory-id="${esc(memory.id)}" aria-label="删除角色扮演记忆" title="删除">${trashIconMarkup()}</button><button class="roleplay-memory-icon-action${memory.isPinned ? " is-pinned" : ""}" type="button" data-roleplay-memory-action="pin" data-memory-id="${esc(memory.id)}" aria-label="${pinAction}角色扮演记忆" aria-pressed="${memory.isPinned === true}" title="${pinAction}">${roleplayMemoryPinIconMarkup()}</button><button class="roleplay-memory-icon-action" type="button" data-roleplay-memory-action="edit" data-memory-id="${esc(memory.id)}" aria-label="编辑角色扮演记忆" title="编辑">${pencilIconMarkup()}</button>`
+        : "";
+      return `<article class="roleplay-memory-card${memory.status === "archived" ? " is-archived" : ""}" data-roleplay-memory-id="${esc(memory.id)}">
+        <header class="roleplay-memory-card-header"><div class="roleplay-memory-card-badges"><span class="roleplay-memory-badge">${esc(roleplayMemoryCategoryLabels[memory.category] ?? memory.category)}</span><span class="roleplay-memory-badge">${esc(roleplayMemoryImportanceLabels[memory.importance] ?? memory.importance)}</span><span class="roleplay-memory-badge">${esc(roleplayMemoryCertaintyLabels[memory.certainty] ?? memory.certainty)}</span><span class="roleplay-memory-badge">${esc(roleplayMemoryStatusLabels[memory.status] ?? memory.status)}</span><span class="roleplay-memory-badge is-noncanonical">非正史</span>${memory.isPinned ? '<span class="roleplay-memory-badge is-pinned">已置顶</span>' : ""}</div><time datetime="${esc(memory.updatedAt)}">${esc(formatDateTime(memory.updatedAt))}</time></header>
+        <p class="roleplay-memory-content">${esc(memory.content)}</p>
+        <p class="roleplay-memory-card-meta">${memory.sourceType === "ai" ? "AI 整理" : "手工添加"} · 版本 ${Number(memory.versionNo ?? 1)} · 角色共享</p>
+        ${sources.length ? `<details class="roleplay-memory-sources"><summary>来源信息 · ${sources.length} 条</summary><div class="roleplay-memory-source-list">${sources.map(roleplayMemorySourceHtml).join("")}</div></details>` : ""}
+        ${actions ? `<div class="roleplay-memory-card-actions">${actions}</div>` : ""}
+      </article>`;
+    }).join("");
+  }
+  const page = roleplayMemoryCursorHistory.length;
+  const hasPrevious = roleplayMemoryCursorHistory.length > 1;
+  const hasNext = roleplayMemoryPagination.nextCursor !== null;
+  $("#roleplay-memory-pagination").classList.toggle("hidden", !hasPrevious && !hasNext);
+  $("#roleplay-memory-previous").disabled = !hasPrevious;
+  $("#roleplay-memory-next").disabled = !hasNext;
+  $("#roleplay-memory-page-label").textContent = `第 ${page} 页 · 共 ${Number(roleplayMemoryPagination.total ?? 0)} 条`;
+}
+
+async function loadRoleplayMemories({ resetCursor = false } = {}) {
+  if (!roleplayMemoryCharacter?.id || roleplayMemoryLoading) return;
+  if (resetCursor) roleplayMemoryCursorHistory = [0];
+  const characterId = roleplayMemoryCharacter.id;
+  roleplayMemoryLoading = true;
+  renderRoleplayMemoryList();
+  try {
+    const result = await api(`/api/characters/${encodeURIComponent(characterId)}/roleplay-memories?${roleplayMemoryQuery()}`);
+    if (roleplayMemoryCharacter?.id !== characterId) return;
+    roleplayMemoryItems = Array.isArray(result.items) ? result.items : [];
+    roleplayMemoryPagination = result.pagination ?? { cursor: 0, limit: 20, total: roleplayMemoryItems.length, nextCursor: null };
+    if (result.character) roleplayMemoryCharacter = { ...roleplayMemoryCharacter, ...result.character };
+    roleplayMemoryLoaded = true;
+  } catch (error) {
+    if (roleplayMemoryCharacter?.id === characterId) {
+      roleplayMemoryItems = [];
+      roleplayMemoryLoaded = false;
+    }
+    throw error;
+  } finally {
+    if (roleplayMemoryCharacter?.id === characterId) {
+      roleplayMemoryLoading = false;
+      renderRoleplayMemoryList();
+    }
+  }
+}
+
+function bindRoleplayMemorySurface(character) {
+  const surface = $("#character-roleplay-memory-surface");
+  if (!surface || !character?.id) return;
+  roleplayMemoryCharacter = { id: character.id, name: character.name, workId: character.workId ?? state.work?.id };
+  roleplayMemoryItems = [];
+  roleplayMemoryPagination = { cursor: 0, limit: 20, total: 0, nextCursor: null };
+  roleplayMemoryCursorHistory = [0];
+  roleplayMemoryLoaded = false;
+  roleplayMemoryLoading = false;
+  if (roleplayMemorySearchTimer) window.clearTimeout(roleplayMemorySearchTimer);
+  roleplayMemorySearchTimer = null;
+  renderRoleplayMemoryList();
+  $("#roleplay-memory-filter-toggle").addEventListener("click", (event) => {
+    const panel = $("#roleplay-memory-filter-panel");
+    const expanded = panel.classList.contains("hidden");
+    panel.classList.toggle("hidden", !expanded);
+    event.currentTarget.setAttribute("aria-expanded", String(expanded));
+    if (expanded) $("#roleplay-memory-search").focus();
+  });
+  $("#roleplay-memory-add").addEventListener("click", () => openRoleplayMemoryEditor());
+  $("#roleplay-memory-list").addEventListener("click", async (event) => {
+    const sourceButton = event.target.closest("[data-roleplay-memory-source-conversation]");
+    if (sourceButton) {
+      try {
+        if (!$("#character-editor-form").classList.contains("hidden")) await closeEntityEditor({ force: true });
+        await openAiConversation(
+          sourceButton.dataset.roleplayMemorySourceConversation,
+          true,
+          sourceButton.dataset.roleplayMemorySourceMessage,
+          sourceButton.dataset.roleplayMemorySourceId
+        );
+      } catch (error) {
+        toast(`来源消息打开失败：${error.message}`, "error");
+      }
+      return;
+    }
+    const actionButton = event.target.closest("[data-roleplay-memory-action]");
+    if (!actionButton) return;
+    const memory = roleplayMemoryItems.find((item) => item.id === actionButton.dataset.memoryId);
+    actionButton.disabled = true;
+    try {
+      await updateRoleplayMemoryAction(memory, actionButton.dataset.roleplayMemoryAction);
+    } catch (error) {
+      toast(`记忆操作失败：${error.message}`, "error");
+    } finally {
+      if (actionButton.isConnected) actionButton.disabled = false;
+    }
+  });
+  $("#roleplay-memory-search").addEventListener("input", () => {
+    if (roleplayMemorySearchTimer) window.clearTimeout(roleplayMemorySearchTimer);
+    roleplayMemorySearchTimer = window.setTimeout(() => {
+      void loadRoleplayMemories({ resetCursor: true }).catch((error) => toast(`记忆搜索失败：${error.message}`, "error"));
+    }, 250);
+  });
+  for (const select of [$("#roleplay-memory-category"), $("#roleplay-memory-status")]) {
+    select.addEventListener("change", () => {
+      void loadRoleplayMemories({ resetCursor: true }).catch((error) => toast(`记忆筛选失败：${error.message}`, "error"));
+    });
+  }
+  $("#roleplay-memory-filter-reset").addEventListener("click", () => {
+    $("#roleplay-memory-search").value = "";
+    $("#roleplay-memory-category").value = "";
+    $("#roleplay-memory-status").value = "active";
+    void loadRoleplayMemories({ resetCursor: true }).catch((error) => toast(`记忆筛选重置失败：${error.message}`, "error"));
+  });
+  $("#roleplay-memory-previous").addEventListener("click", () => {
+    if (roleplayMemoryCursorHistory.length <= 1) return;
+    roleplayMemoryCursorHistory.pop();
+    void loadRoleplayMemories().catch((error) => toast(`记忆分页失败：${error.message}`, "error"));
+  });
+  $("#roleplay-memory-next").addEventListener("click", () => {
+    if (roleplayMemoryPagination.nextCursor === null) return;
+    roleplayMemoryCursorHistory.push(roleplayMemoryPagination.nextCursor);
+    void loadRoleplayMemories().catch((error) => toast(`记忆分页失败：${error.message}`, "error"));
+  });
+}
+
+function roleplayMemoryEditorFields(memory = null) {
+  return field("category", "记忆类别", "select", memory?.category ?? "event", Object.entries(roleplayMemoryCategoryLabels))
+    + field("importance", "重要度", "select", memory?.importance ?? "medium", Object.entries(roleplayMemoryImportanceLabels))
+    + field("certainty", "可信状态", "select", memory?.certainty ?? "experienced", Object.entries(roleplayMemoryCertaintyLabels))
+    + field("isPinned", "置顶这条记忆", "checkbox", memory?.isPinned === true)
+    + field("content", "记忆内容", "textarea", memory?.content ?? "");
+}
+
+function openRoleplayMemoryEditor(memory = null) {
+  openDialog(memory ? "编辑角色扮演记忆" : "手工添加角色扮演记忆", roleplayMemoryEditorFields(memory), async (form) => {
+    const body = {
+      category: String(form.get("category") ?? "event"),
+      importance: String(form.get("importance") ?? "medium"),
+      certainty: String(form.get("certainty") ?? "experienced"),
+      isPinned: form.get("isPinned") === "on",
+      content: String(form.get("content") ?? "").trim(),
+      ...(memory ? { expectedVersion: Number(memory.versionNo) } : {})
+    };
+    if (!body.content) throw new Error("请输入记忆内容");
+    await api(memory
+      ? `/api/roleplay-memories/${encodeURIComponent(memory.id)}`
+      : `/api/characters/${encodeURIComponent(roleplayMemoryCharacter.id)}/roleplay-memories`, {
+      method: memory ? "PATCH" : "POST",
+      body
+    });
+    await loadRoleplayMemories();
+    toast(memory ? "角色扮演记忆已更新" : "角色扮演记忆已添加");
+  }, memory ? "版本化编辑" : "非正史 · 手工添加", {
+    submitLabel: memory ? "保存记忆" : "添加记忆",
+    errorPrefix: "记忆保存失败：",
+    meta: "记录该角色在作品内共享的非正史互动，不会写入正文、角色卡字段或设定库。"
+  });
+  const textarea = $("#dialog-fields textarea[name='content']");
+  if (textarea) {
+    textarea.maxLength = 2_000;
+    textarea.rows = 7;
+    textarea.focus();
+  }
+}
+
+async function updateRoleplayMemoryAction(memory, action) {
+  if (!memory) return;
+  if (action === "edit") return openRoleplayMemoryEditor(memory);
+  if (action === "archive" && !await confirmToast("删除后 AI 不再召回这条记忆，可稍后从“已删除”筛选中恢复。", {
+    title: "删除角色扮演记忆",
+    confirmLabel: "确认删除"
+  })) return;
+  if (action === "pin") {
+    await api(`/api/roleplay-memories/${encodeURIComponent(memory.id)}`, {
+      method: "PATCH",
+      body: { expectedVersion: Number(memory.versionNo), isPinned: memory.isPinned !== true }
+    });
+  } else if (action === "archive") {
+    await api(`/api/roleplay-memories/${encodeURIComponent(memory.id)}`, {
+      method: "DELETE",
+      body: { expectedVersion: Number(memory.versionNo) }
+    });
+  } else if (action === "restore") {
+    await api(`/api/roleplay-memories/${encodeURIComponent(memory.id)}/restore`, {
+      method: "POST",
+      body: { expectedVersion: Number(memory.versionNo) }
+    });
+  }
+  await loadRoleplayMemories();
+  toast(action === "pin" ? (memory.isPinned ? "已取消置顶" : "记忆已置顶") : action === "archive" ? "记忆已删除" : "记忆已恢复");
+}
+
 function defaultAiConversationTitle(prompt) {
   const normalized = roleplayUserTurnTitleSource(String(prompt ?? "")).replace(/\s+/gu, " ").trim();
   return Array.from(normalized).slice(0, 15).join("") || "新对话";
@@ -3297,7 +4031,7 @@ async function ensureAiConversationsLoaded() {
   }
 }
 
-async function openAiConversation(conversationId, hideHistory = true, focusMessageId = null) {
+async function openAiConversation(conversationId, hideHistory = true, focusMessageId = null, roleplayMemorySourceId = null) {
   if (!state.work) return null;
   const existingTab = aiChatTabManager.findByConversation(conversationId);
   const existingMessage = focusMessageId
@@ -3318,6 +4052,7 @@ async function openAiConversation(conversationId, hideHistory = true, focusMessa
   try {
     const parameters = new URLSearchParams({ page: "1", limit: "100" });
     if (focusMessageId) parameters.set("messageId", String(focusMessageId));
+    if (roleplayMemorySourceId) parameters.set("roleplayMemorySourceId", String(roleplayMemorySourceId));
     const [conversation] = await Promise.all([
       api(`/api/ai-conversations/${conversationId}?${parameters}`),
       ensureAiReferencesLoaded()
@@ -5617,12 +6352,44 @@ function setSaveState(text, dirty = false) {
   });
 }
 
+function resetChapterDraftLineIds(chapter = state.chapter) {
+  chapterBeforeInputState = null;
+  chapterDraftLineIdState = chapter ? {
+    chapterId: chapter.id,
+    content: String(chapter.content ?? ""),
+    lineIds: normalizeChapterLineIdDraft(chapter.content, chapter.lineIds)
+  } : null;
+}
+
+function syncChapterDraftLineIds(content, hint = null) {
+  if (!state.chapter) return [];
+  if (!chapterDraftLineIdState || chapterDraftLineIdState.chapterId !== state.chapter.id) {
+    resetChapterDraftLineIds(state.chapter);
+  }
+  if (chapterDraftLineIdState.content !== content) {
+    chapterDraftLineIdState = {
+      chapterId: state.chapter.id,
+      content,
+      lineIds: reconcileChapterLineIdDraft(
+        chapterDraftLineIdState.content,
+        content,
+        chapterDraftLineIdState.lineIds,
+        hint
+      )
+    };
+  }
+  return chapterDraftLineIdState.lineIds;
+}
+
 function chapterDraftSnapshot() {
   if (!state.chapter) return null;
+  const content = $("#chapter-content").value;
+  const lineIds = syncChapterDraftLineIds(content);
   return {
     chapterId: state.chapter.id,
     title: $("#chapter-title").value.trim(),
-    content: $("#chapter-content").value
+    content,
+    ...(lineIds.length <= MAX_CHAPTER_LINE_IDS ? { lineIds } : {})
   };
 }
 
@@ -5697,7 +6464,7 @@ async function persistChapter({ automatic = false } = {}) {
   const request = (async () => {
     const chapter = await api(`/api/chapters/${draft.chapterId}`, {
       method: "PATCH",
-      body: { title: draft.title, content: draft.content, source: automatic ? "auto" : "manual" }
+      body: { title: draft.title, content: draft.content, lineIds: draft.lineIds, source: automatic ? "auto" : "manual" }
     });
     const work = await api(`/api/works/${workId}`);
     return { chapter, work };
@@ -5708,9 +6475,15 @@ async function persistChapter({ automatic = false } = {}) {
     if (state.work?.id !== workId || state.chapter?.id !== draft.chapterId) return saved.chapter;
     state.chapter = saved.chapter;
     state.work = saved.work;
+    resetChapterDraftLineIds(state.chapter);
     lastSavedChapterSnapshot = draft;
     renderTree();
     updateChapterStats();
+    try {
+      await loadChapterAnnotationCounts(saved.chapter.id);
+    } catch (error) {
+      toast("正文评论位置已更新，但评论数量刷新失败，请稍后重试", "error");
+    }
     const currentDraft = chapterDraftSnapshot();
     if (sameChapterSnapshot(currentDraft, draft)) {
       setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
@@ -5785,13 +6558,35 @@ function restoredSettingsReturnContext(route) {
 }
 
 async function initializePage() {
+  const route = parsePageRoute(window.location.hash);
+  const earlyReaderChapterRequest = window.__scriverseReaderChapterPrefetch;
+  const earlyReaderWorksRequest = window.__scriverseReaderWorksPrefetch;
+  const earlyReaderWorkRequest = window.__scriverseReaderWorkPrefetch;
   const [authenticated] = await Promise.all([initializeAuthentication(), initializeProductFooters()]);
   if (!authenticated) {
     restoringPageRoute = false;
     return;
   }
-  const route = parsePageRoute(window.location.hash);
-  state.works = (await apiPage("/api/works")).items;
+  const requestedWorkDetailRequest = route.workId
+    ? earlyReaderWorkRequest?.workId === route.workId
+      ? earlyReaderWorkRequest.request.then((result) => result.work ?? api(`/api/works/${encodeURIComponent(route.workId)}?directory=volumes`).catch(() => null))
+      : api(`/api/works/${encodeURIComponent(route.workId)}?directory=volumes`).catch(() => null)
+    : Promise.resolve(null);
+  initialReaderChapterRequest = route.view === "reader" && route.chapterId
+    ? earlyReaderChapterRequest?.chapterId === route.chapterId
+      ? earlyReaderChapterRequest
+      : {
+        chapterId: route.chapterId,
+        request: api(`/api/chapters/${encodeURIComponent(route.chapterId)}`)
+          .then((chapter) => ({ chapter }), (error) => ({ error }))
+      }
+    : null;
+  const [worksPage, requestedWorkDetail] = await Promise.all([
+    earlyReaderWorksRequest?.request.then((result) => result.works ?? apiPage("/api/works")) ?? apiPage("/api/works"),
+    requestedWorkDetailRequest
+  ]);
+  state.works = worksPage.items;
+  initialWorkDetail = requestedWorkDetail;
   try {
     if (route.view === "shelf") {
       showShelf();
@@ -5832,7 +6627,7 @@ async function initializePage() {
         return;
       }
       const options = { readOnly: route.entityMode === "read" };
-      if (route.entity === "setting") openSettingEditor(item, options);
+      if (route.entity === "setting") await openSettingEditor(item, options);
       else if (route.entity === "character") await openCharacterEditor(item, options);
       else if (route.entity === "race") await openRaceDialog(item, options);
       else if (route.entity === "organization") await openOrganizationDialog(item, options);
@@ -5863,7 +6658,14 @@ async function initializePage() {
       settingsReturnContext = restoredSettingsReturnContext(route);
     }
   } finally {
+    delete window.__scriverseReaderChapterPrefetch;
+    delete window.__scriverseReaderWorksPrefetch;
+    delete window.__scriverseReaderWorkPrefetch;
+    initialWorkDetail = null;
+    initialReaderChapterRequest = null;
     document.body.classList.remove("auth-pending");
+    document.documentElement.removeAttribute("data-pending-view");
+    document.documentElement.classList.remove("pending-shelf-mode");
     restoringPageRoute = false;
     replacePageRoute(currentPageRoute());
     scheduleFirstUseOnboarding();
@@ -6971,6 +7773,7 @@ async function refreshWorkAfterGlobalReplace(route, result) {
     const chapter = await api(`/api/chapters/${encodeURIComponent(refreshPlan.selectedChapterId)}`);
     if (state.work?.id !== workId || refreshGeneration !== workScopedUiGeneration) return;
     state.chapter = chapter;
+    resetChapterDraftLineIds(state.chapter);
     mergeChapterDirectoryEntry(chapter);
     lastSavedChapterSnapshot = { chapterId: chapter.id, title: chapter.title, content: chapter.content };
     await loadVolumeChapters(chapter.volumeId);
@@ -7392,7 +8195,9 @@ async function selectWork(workId, preferredChapterId = null) {
     volumeChapterLoadingIds.clear();
     volumeChapterRequests.clear();
   }
-  const nextWork = await api(`/api/works/${workId}?directory=volumes`);
+  const prefetchedWork = initialWorkDetail?.id === workId ? initialWorkDetail : null;
+  initialWorkDetail = null;
+  const nextWork = prefetchedWork ?? await api(`/api/works/${workId}?directory=volumes`);
   if (selectionGeneration !== workSelectionRequestGeneration) return false;
   if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
   showSystemStatus();
@@ -7462,9 +8267,12 @@ async function loadVolumeChapters(volumeId) {
 async function loadAllVolumeChapters(workId) {
   const generation = workScopedUiGeneration;
   const volumeIds = state.work?.id === workId ? state.work.volumes.map((volume) => volume.id) : [];
-  for (const volumeId of volumeIds) {
-    if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
-    await loadVolumeChapters(volumeId);
+  for (let index = 0; index < volumeIds.length; index += readingVolumeDirectoryConcurrency) {
+    const batch = volumeIds.slice(index, index + readingVolumeDirectoryConcurrency);
+    await Promise.all(batch.map(async (volumeId) => {
+      if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
+      await loadVolumeChapters(volumeId);
+    }));
   }
 }
 
@@ -7837,9 +8645,14 @@ function currentChapterForeshadowReminder() {
 
 function syncMobileAiPanelSafeTop() {
   const container = $("#chapter-foreshadow-reminder");
-  const safeTop = container.classList.contains("hidden")
+  const toolbar = $("#editor-view .editor-toolbar");
+  const reminderBottom = container.classList.contains("hidden")
     ? 0
-    : Math.ceil(container.getBoundingClientRect().bottom);
+    : container.getBoundingClientRect().bottom;
+  const toolbarBottom = $("#editor-view").classList.contains("hidden")
+    ? 0
+    : toolbar.getBoundingClientRect().bottom;
+  const safeTop = Math.ceil(Math.max(reminderBottom, toolbarBottom));
   $("#app").style.setProperty("--mobile-ai-panel-safe-top", `${safeTop}px`);
 }
 
@@ -8061,6 +8874,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   $("#chapter-path").title = chapterPath;
   $("#chapter-title").value = state.chapter.title;
   $("#chapter-content").value = state.chapter.content;
+  resetChapterDraftLineIds(state.chapter);
   chapterAnnotationCounts = new Map();
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
@@ -8183,6 +8997,7 @@ function renderReadingNavigation() {
   $("#reader-next").disabled = !next || readingLoading;
   $("#reader-continue").disabled = !next || readingLoading;
   $("#reader-continue").textContent = next ? `继续下一章 · ${next.title}` : "已读到全书末尾";
+  $("#reader-continuation").classList.toggle("hidden", readingLoading || readingPreferences.mode === "paged");
   const paged = readingPreferences.mode === "paged";
   const previousPage = current && paged ? resolvePagedReadingStep({
     sequence: readingSequence,
@@ -8220,7 +9035,7 @@ function applyReadingPreferences() {
   $("#reader-font-size").value = String(readingPreferences.fontSize);
   $("#reader-line-height").value = String(readingPreferences.lineHeight);
   $("#reader-theme").value = readingPreferences.theme;
-  $("#reader-continuation").classList.toggle("hidden", readingPreferences.mode === "paged");
+  $("#reader-continuation").classList.toggle("hidden", readingLoading || readingPreferences.mode === "paged");
   $("#reader-page-previous").classList.toggle("hidden", readingPreferences.mode !== "paged");
   $("#reader-page-next").classList.toggle("hidden", readingPreferences.mode !== "paged");
 }
@@ -8355,7 +9170,13 @@ async function loadReadingChapter(chapterId, { scrollRatio = null, pageIndex = n
   renderReadingStatus("正在载入章节……");
   replacePageRoute({ view: "reader", workId: state.work.id, chapterId: target.id });
   try {
-    const chapter = await api(`/api/chapters/${encodeURIComponent(target.id)}`, { signal: request.signal });
+    const initialRequest = initialReaderChapterRequest?.chapterId === target.id
+      ? initialReaderChapterRequest.request
+      : null;
+    if (initialRequest) initialReaderChapterRequest = null;
+    const prefetchedResult = initialRequest ? await initialRequest : null;
+    if (prefetchedResult?.error) throw prefetchedResult.error;
+    const chapter = prefetchedResult?.chapter ?? await api(`/api/chapters/${encodeURIComponent(target.id)}`, { signal: request.signal });
     if (!readingRequestGate.isCurrent(request)) return false;
     if (String(chapter?.id ?? "") !== target.id || String(chapter?.workId ?? "") !== String(state.work.id)) {
       throw new Error("章节响应与当前作品不匹配");
@@ -8509,7 +9330,7 @@ function closeReadingPreview() {
   replacePageRoute(returnRoute);
   const focus = readingPreviousFocus;
   readingPreviousFocus = null;
-  const focusCandidates = [focus, $("#chapter-reader-button"), $("#reader-open-button"), $("#home-button")];
+  const focusCandidates = [focus, $("#reader-open-button"), $("#home-button")];
   for (const candidate of focusCandidates) {
     if (!(candidate instanceof HTMLElement) || !candidate.isConnected || candidate.matches(":disabled")) continue;
     const rect = candidate.getBoundingClientRect();
@@ -8746,6 +9567,14 @@ function bindEntityHistoryButtons(refresh) {
 
 function pencilIconMarkup() {
   return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"></path><path d="m16.5 3.5 1.4-1.4a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z"></path></svg>';
+}
+
+function trashIconMarkup() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16"></path><path d="M9 7V4h6v3M6.5 7l.8 13h9.4l.8-13M10 11v5M14 11v5"></path></svg>';
+}
+
+function roleplayMemoryPinIconMarkup() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 4h6"></path><path d="M10 4v5l-3 4h10l-3-4V4"></path><path d="M12 13v7"></path></svg>';
 }
 
 function characterFavoriteIconMarkup() {
@@ -12432,15 +13261,19 @@ async function renderBookAiSettings() {
     clearTimeout(relationshipSearchIndexRefreshTimer);
     relationshipSearchIndexRefreshTimer = null;
   }
-  const [settings, providers, models, taskDefaults, relationshipIndex, usage, protocolOptions] = await Promise.all([
+  const [settings, providers, models, taskDefaults, relationshipIndex, usage, protocolOptions, writeTools] = await Promise.all([
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings`),
     moduleApi("ai-settings", "/api/platform/ai/providers"),
     moduleApi("ai-settings", `/api/works/${state.work.id}/models`),
     moduleApi("ai-settings", `/api/works/${state.work.id}/task-defaults`),
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/relationship-search-index`),
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`),
-    moduleApi("ai-settings", "/api/platform/ai/protocols")
+    moduleApi("ai-settings", "/api/platform/ai/protocols"),
+    // 可写工具开关独立于 ai-settings 存储；加载失败时仍可展示其余配置。
+    api(`/api/works/${state.work.id}/ai/tools`).catch(() => null)
   ]);
+  const writeToolsState = writeTools?.tools ?? null;
+  const writeToolsMaxOperations = Number(writeTools?.maxOperations) > 0 ? Number(writeTools.maxOperations) : null;
   const host = $("#module-content");
   platformAiProtocolOptions = protocolOptions;
   const workId = String(state.work.id);
@@ -12490,6 +13323,7 @@ async function renderBookAiSettings() {
   host.querySelectorAll(".config-section").forEach((section) => {
     if (section.querySelector("h2")?.textContent === "Agent 工具调用上限") section.id = "agent-tool-call-limit-settings";
   });
+  host.insertAdjacentHTML("beforeend", `<section class="config-section"><div class="config-section-header"><div><h2>AI 可写工具</h2><p>默认全部关闭：逐项开启后，侧边栏 AI 才能在对应模块提交修改计划。计划只包含操作描述与 AI 简述；确认前系统会按当前数据库生成字段级明细（含修改前后值），执行时整体原子完成并再次校验权限、开关与目标版本，全程可在「AI 操作审批中心」追溯。AI 不能删除任何条目，也不能改写正文。</p></div><div class="card-actions"><button id="open-ai-approval-center-from-settings" class="ghost-button" type="button">打开 AI 操作审批中心</button></div></div><div class="ai-agent-tools ai-write-tools">${AI_WRITE_TOOLS_META.map((tool) => `<label><input name="ai-write-tool" type="checkbox" value="${esc(tool.id)}" ${writeToolsState?.[tool.id] === true ? "checked" : ""}><span><strong>${esc(tool.label)}</strong><small>${esc(tool.description)}</small></span></label>`).join("")}</div><p class="usage-measurement-note">${writeTools ? `当前单次审批最多 ${writeToolsMaxOperations} 个操作，可通过环境变量 AI_WRITE_PLAN_MAX_OPERATIONS 调整。` : "工具开关状态暂时无法加载，显示的勾选可能不是最新值。"}</p><div class="card-actions"><button id="save-ai-write-tools" class="ghost-button config-save-button" type="button">保存开关设置</button></div></section>`);
   bindUsageCalendarInteractions(host);
   scrollUsageCalendarsToLatest(host);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
@@ -12748,6 +13582,23 @@ async function renderBookAiSettings() {
       button.disabled = false;
     }
   });
+  $("#open-ai-approval-center-from-settings").addEventListener("click", () => openAiApprovalCenter());
+  $("#save-ai-write-tools").addEventListener("click", async () => {
+    const button = $("#save-ai-write-tools");
+    button.disabled = true;
+    try {
+      const tools = {};
+      host.querySelectorAll('input[name="ai-write-tool"]').forEach((input) => {
+        tools[input.value] = input.checked;
+      });
+      await api(`/api/works/${state.work.id}/ai/tools`, { method: "PUT", body: { tools } });
+      toast("AI 可写工具开关已保存");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
   host.querySelector("[data-title-generation-default]")?.addEventListener("change", async (event) => {
     const select = event.currentTarget;
     select.disabled = true;
@@ -12886,7 +13737,7 @@ function renderAiContextDistribution(usage) {
       const description = document.createElement("small");
       description.textContent = item.key === "skills"
         ? "待加入"
-        : item.key === "input" ? "用户和 agent 的交互" : "模型输出预留";
+        : item.key === "input" ? "用户和 agent 的交互" : "当前调用实际输出";
       title.append(" ", description);
     }
     const value = document.createElement("strong");
@@ -13205,7 +14056,7 @@ function commitRelationshipKeywordInputs(container) {
   container.querySelectorAll("[data-keyword-chips]").forEach(commitRelationshipKeywordInput);
 }
 
-function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
+async function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   formDialogVditors.forEach(destroyVditorEditor);
   formDialogVditors = [];
   void discardPendingMarkdownAttachments();
@@ -13255,6 +14106,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   dialog.classList.toggle("editor-dialog", Boolean(options.editor));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
+  if ($("#dialog-fields").querySelector("[data-vditor-editor]") && !(await loadVditorResources())) return;
   formDialogVditors = bindVditorEditors($("#dialog-fields"));
   form.onclick = null;
   form.onkeydown = null;
@@ -13498,18 +14350,36 @@ function openWorkSettingsDialog(work) {
     <div><strong id="whitespace-settings-title">正文空白符</strong><small>在编辑器正文中显示或隐藏空格、全角空格和 Tab 的可视标记。</small></div>
     <button id="toggle-whitespace-settings" class="ghost-button" data-toggle-whitespace type="button" aria-pressed="${chapterWhitespaceVisible}" title="用点标记半角空格，用方框标记全角空格，用箭头标记 Tab">${chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符"}</button>
   </section>` : "";
+  const editorPreferencesField = `<section class="work-access-field work-editor-preferences-field" aria-labelledby="work-editor-preferences-title">
+    <div><strong id="work-editor-preferences-title">正文编辑辅助</strong><small>仅对当前作品生效。新建作品默认关闭，不影响其他作品或系统设置。</small></div>
+    <div class="work-editor-preference-options" role="group" aria-labelledby="work-editor-preferences-title">
+      <label class="work-editor-preference-option"><input name="editorAutoIndentEnabled" type="checkbox" ${work.editorAutoIndentEnabled ? "checked" : ""}><span><b>自动空两字</b><small>按 Enter 新建段落时自动插入两个全角空格。</small></span></label>
+      <label class="work-editor-preference-option"><input name="editorTypewriterModeEnabled" type="checkbox" ${work.editorTypewriterModeEnabled ? "checked" : ""}><span><b>打字机模式</b><small>输入位置超过页面六成后，将当前行保持在页面中部。</small></span></label>
+    </div>
+  </section>`;
   openDialog("作品信息",
-    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField + exportField + recycleBinField + deleteField,
+    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + editorPreferencesField + whitespaceField + accessField + importHistoryField + exportField + recycleBinField + deleteField,
     async (form) => {
-      await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
+      await api(`/api/works/${work.id}`, { method: "PATCH", body: {
+        title: form.get("title"),
+        author: form.get("author"),
+        description: form.get("description"),
+        editorAutoIndentEnabled: form.has("editorAutoIndentEnabled"),
+        editorTypewriterModeEnabled: form.has("editorTypewriterModeEnabled")
+      } });
       state.works = (await apiPage("/api/works")).items;
       const updated = state.works.find((item) => item.id === work.id);
       if (updated) Object.assign(work, updated);
       if (state.work?.id === work.id) {
-        state.work.title = String(form.get("title") ?? state.work.title);
-        state.work.author = String(form.get("author") ?? state.work.author);
-        state.work.description = String(form.get("description") ?? state.work.description);
-        if (updated?.coverUrl !== undefined) state.work.coverUrl = updated.coverUrl;
+        if (updated) Object.assign(state.work, updated);
+        else {
+          state.work.title = String(form.get("title") ?? state.work.title);
+          state.work.author = String(form.get("author") ?? state.work.author);
+          state.work.description = String(form.get("description") ?? state.work.description);
+          state.work.editorAutoIndentEnabled = form.has("editorAutoIndentEnabled");
+          state.work.editorTypewriterModeEnabled = form.has("editorTypewriterModeEnabled");
+        }
+        applyChapterEditorPreferences();
         updateDocumentTitle(state.work);
         $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
       }
@@ -13673,7 +14543,8 @@ function syncSettingEditorDirty(markdown = null) {
   entityEditorDirty = settingEditorDirtyTracker.isDirty(settingEditorSnapshot(currentMarkdown));
 }
 
-function openSettingEditor(item = null, { readOnly = false } = {}) {
+async function openSettingEditor(item = null, { readOnly = false } = {}) {
+  if (!(await loadVditorResources())) return;
   entityEditorReadOnly = readOnly;
   destroyVditorEditor(settingEditorVditor);
   settingEditorVditor = null;
@@ -13688,7 +14559,7 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   $("#setting-editor-form").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = viewOnly; });
   const editButton = $("#setting-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("settings"));
-  editButton.onclick = () => openSettingEditor(settingEditorItem);
+  editButton.onclick = () => { void openSettingEditor(settingEditorItem); };
   bindEntityDetailPinButton($("#setting-editor-pin"), "setting", () => viewOnly ? settingEditorItem : null, (updated) => {
     settingEditorItem = updated;
     state.settings = upsertEntityCollection(state.settings, updated);
@@ -13801,9 +14672,13 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   (readOnly ? $("#setting-editor-back") : $("#setting-editor-name")).focus();
 }
 
-function characterEditorSection(key, title, description, content) {
-  return `<section class="character-editor-section${key === "basic" ? "" : " hidden"}" data-character-editor-panel="${esc(key)}" role="tabpanel">
-    <header><div><span class="eyebrow">${esc(title)}</span><h3>${esc(title)}</h3></div><p>${esc(description)}</p></header>
+function characterEditorSection(key, title, description, content, headerActions = "") {
+  const hasHeaderActions = Boolean(headerActions);
+  const header = hasHeaderActions
+    ? `<header><div class="character-editor-section-header-copy"><span class="eyebrow">${esc(title)}</span><h3>${esc(title)}</h3><p>${esc(description)}</p></div>${headerActions}</header>`
+    : `<header><div><span class="eyebrow">${esc(title)}</span><h3>${esc(title)}</h3></div><p>${esc(description)}</p></header>`;
+  return `<section class="character-editor-section${key === "basic" ? "" : " hidden"}${hasHeaderActions ? " has-header-actions" : ""}" data-character-editor-panel="${esc(key)}" role="tabpanel">
+    ${header}
     <div class="character-editor-section-fields">${content}</div>
   </section>`;
 }
@@ -13823,6 +14698,14 @@ function activateCharacterEditorTab(key) {
     && !characterEditorRelationshipsLoading
   ) {
     void loadCharacterEditorRelationships(characterEditorItem.id);
+  }
+  if (
+    key === "roleplay-memory"
+    && characterEditorItem?.id
+    && !roleplayMemoryLoaded
+    && !roleplayMemoryLoading
+  ) {
+    void loadRoleplayMemories({ resetCursor: true }).catch((error) => toast(`角色扮演记忆加载失败：${error.message}`, "error"));
   }
 }
 
@@ -14052,12 +14935,69 @@ function createVditorUploadHandler(uploadAttachment, getEditor) {
   };
 }
 
+function loadVditorStylesheet() {
+  const existing = document.getElementById("vditorStylesheet");
+  if (existing?.dataset.loaded === "true") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const link = existing ?? document.createElement("link");
+    link.id = "vditorStylesheet";
+    link.rel = "stylesheet";
+    link.href = "/vendor/vditor/dist/index.css?v=3.11.2";
+    link.addEventListener("load", () => {
+      link.dataset.loaded = "true";
+      resolve();
+    }, { once: true });
+    link.addEventListener("error", () => {
+      link.remove();
+      reject(new Error("Vditor stylesheet failed to load"));
+    }, { once: true });
+    if (!existing) document.head.append(link);
+  });
+}
+
+function loadVditorScript(id, src) {
+  const existing = document.getElementById(id);
+  if (existing?.dataset.loaded === "true") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = existing ?? document.createElement("script");
+    script.id = id;
+    script.src = src;
+    script.addEventListener("load", () => {
+      script.dataset.loaded = "true";
+      resolve();
+    }, { once: true });
+    script.addEventListener("error", () => {
+      script.remove();
+      reject(new Error(`Vditor script failed to load: ${id}`));
+    }, { once: true });
+    if (!existing) document.body.append(script);
+  });
+}
+
+async function loadVditorResources() {
+  if (window.Vditor && document.getElementById("vditorStylesheet")) return true;
+  if (!vditorResourcesPromise) {
+    vditorResourcesPromise = Promise.all([
+      loadVditorStylesheet(),
+      loadVditorScript("vditorIconScript", "/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"),
+      loadVditorScript("vditorMainScript", "/vendor/vditor/dist/index.min.js?v=3.11.2")
+    ]).then(() => {
+      if (!window.Vditor) throw new Error("Vditor constructor is unavailable");
+      return true;
+    }).catch(() => {
+      vditorResourcesPromise = null;
+      toast("Markdown 编辑器资源加载失败，请检查网络后重试", "error");
+      return false;
+    });
+  }
+  return vditorResourcesPromise;
+}
+
 function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment = null, attachmentModule = "settings", placeholder = "", readOnly = false, width = "auto" } = {}) {
   if (!window.Vditor) {
     toast("Markdown 编辑器资源加载失败，请刷新页面后重试", "error");
     return null;
   }
-  ensureVditorIconScript();
   let editor = null;
   editor = new window.Vditor(host, {
     cdn: "/vendor/vditor",
@@ -14078,7 +15018,7 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
       className: "vditor-line-number-button",
       icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h3M4 9h3M4 13h3M4 17h3M10 5h10M10 9h10M10 13h10M10 17h10" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"/></svg>',
       click: () => toggleVditorLineNumbers(editor)
-    }, "edit-mode", "fullscreen"],
+    }, "edit-mode"],
     upload: {
       accept: "image/*",
       max: 10 * 1024 * 1024,
@@ -14291,14 +15231,6 @@ function normalizeVditorAttachmentImages(editor) {
   });
 }
 
-function ensureVditorIconScript() {
-  if (document.getElementById("vditorIconScript")) return;
-  const script = document.createElement("script");
-  script.id = "vditorIconScript";
-  script.src = "/vendor/vditor/dist/js/icons/ant.js?v=3.11.2";
-  document.body.appendChild(script);
-}
-
 function destroyVditorEditor(editor) {
   if (!editor) return;
   editor.__attachmentObserver?.disconnect();
@@ -14407,6 +15339,7 @@ async function closeKnowledgeSectionEditor({ force = false } = {}) {
 
 async function openKnowledgeSectionEditor(index = null) {
   if (!canEditModule(knowledgeEditorKind === "race" ? "races" : "organizations")) return;
+  if (!(await loadVditorResources())) return;
   const label = knowledgeEditorKind === "race" ? "种族" : "组织";
   destroyVditorEditor(knowledgeSectionVditor);
   knowledgeSectionVditor = null;
@@ -14519,6 +15452,7 @@ function syncCharacterSectionEditorDirty(markdown = null) {
 }
 
 async function openCharacterSectionEditor(section = null) {
+  if (!(await loadVditorResources())) return;
   await discardPendingCharacterAttachments();
   destroyVditorEditor(characterSectionVditor);
   characterSectionVditor = null;
@@ -14699,6 +15633,30 @@ function renderCharacterAvatar(item) {
   }
 }
 
+function roleplayMemoryToolbarMarkup() {
+  return `<div class="roleplay-memory-toolbar">
+    <button id="roleplay-memory-filter-toggle" class="module-filter-toggle" type="button" aria-label="筛选角色扮演记忆" aria-controls="roleplay-memory-filter-panel" aria-expanded="false" title="筛选角色扮演记忆"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>
+    <button id="roleplay-memory-add" class="primary-button" type="button">手工添加</button>
+  </div>`;
+}
+
+function roleplayMemorySurfaceMarkup() {
+  return `<div id="character-roleplay-memory-surface" class="character-roleplay-memory-surface">
+    <section id="roleplay-memory-filter-panel" class="roleplay-memory-filter-panel hidden" aria-label="角色扮演记忆筛选">
+      <label for="roleplay-memory-search">搜索<input id="roleplay-memory-search" type="search" maxlength="200" placeholder="搜索事件、承诺、场景或角色状态"></label>
+      <label for="roleplay-memory-category">类别<select id="roleplay-memory-category"><option value="">全部类别</option><option value="event">事件</option><option value="state">状态</option><option value="relationship">关系</option><option value="commitment">承诺</option><option value="knowledge">知识</option><option value="scene">场景</option></select></label>
+      <label for="roleplay-memory-status">状态<select id="roleplay-memory-status"><option value="active">生效中</option><option value="superseded">已取代</option><option value="archived">已删除</option><option value="all">全部状态</option></select></label>
+      <button id="roleplay-memory-filter-reset" class="ghost-button" type="button">重置筛选</button>
+    </section>
+    <div id="roleplay-memory-list" class="roleplay-memory-list" aria-live="polite"></div>
+    <nav id="roleplay-memory-pagination" class="module-pagination roleplay-memory-pagination hidden" aria-label="角色扮演记忆分页">
+      <button id="roleplay-memory-previous" type="button" disabled>上一页</button>
+      <span id="roleplay-memory-page-label">第 1 页</span>
+      <button id="roleplay-memory-next" type="button" disabled>下一页</button>
+    </nav>
+  </div>`;
+}
+
 function renderCharacterEditorFields(item) {
   const raceOptions = [["", "未指定"], ...state.races.map((race) => [race.id, racePathLabel(race)])];
   const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
@@ -14747,7 +15705,12 @@ function renderCharacterEditorFields(item) {
       '<p class="character-editor-field-help">未修改的数字、布尔值、数组和对象会保留原有数据类型；被修改的值会按文本保存。</p>' +
       field("lockedFields", "锁定字段", "item-list", item?.lockedFields ?? [])),
     characterEditorSection("relationships", "人物关系", "查看与其他人物的关系及关键词；编辑入口与“关系”面板共用同一份关系数据。",
-      '<div id="character-editor-relationships" class="character-editor-relationships-field"></div>')
+      '<div id="character-editor-relationships" class="character-editor-relationships-field"></div>'),
+    characterEditorSection("roleplay-memory", "角色扮演记忆", "该角色在作品内唯一、所有有权用户共享的非正史角色扮演记忆库。",
+      item?.id
+        ? roleplayMemorySurfaceMarkup()
+        : '<div class="character-editor-empty-field"><b>角色扮演记忆</b><span>保存角色卡后即可管理该角色的共享记忆库。</span></div>',
+      item?.id ? roleplayMemoryToolbarMarkup() : "")
   ].join("");
   const name = $("#character-editor-fields [name='name']");
   if (name) name.required = true;
@@ -14755,6 +15718,7 @@ function renderCharacterEditorFields(item) {
   renderCharacterAvatar(item);
   renderCharacterEditorRelationships();
   renderCharacterMarkdownSections();
+  bindRoleplayMemorySurface(item);
   activateCharacterEditorTab("basic");
 }
 
@@ -14923,6 +15887,10 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
     $("#character-editor-fields").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = true; });
     $("#character-editor-fields").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = true; });
     $("#character-editor-fields").querySelectorAll("button").forEach((button) => { button.disabled = true; });
+    if (item) {
+      $("#character-roleplay-memory-surface")?.querySelectorAll("button, input, select").forEach((control) => { control.disabled = false; });
+      renderRoleplayMemoryList();
+    }
   }
   $("#character-change-note").readOnly = viewOnly;
   $("#character-editor-submit").classList.toggle("hidden", viewOnly);
@@ -14949,6 +15917,9 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   const relationshipTab = document.querySelector("[data-character-editor-tab='relationships']");
   relationshipTab.disabled = !item || !canReadModule("relationships");
   relationshipTab.title = !canReadModule("relationships") ? "当前账户没有关系模块读取权限" : item ? "查看和编辑人物关系" : "创建人物档案后即可维护人物关系";
+  const roleplayMemoryTab = document.querySelector("[data-character-editor-tab='roleplay-memory']");
+  roleplayMemoryTab.disabled = !item;
+  roleplayMemoryTab.title = item ? "查看和管理该角色的共享角色扮演记忆" : "创建人物档案后即可管理角色扮演记忆";
   const form = $("#character-editor-form");
   form.onsubmit = async (event) => {
     event.preventDefault();
@@ -16246,6 +17217,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
   const tab = activeAiChatTab();
   if (!tab) return toast("Agent 对话页签尚未就绪", "error");
   if (aiRequestManager.hasActive(tab.id)) return;
+  if (aiQuestionContinuationTabIds.has(tab.id)) return toast("AI 正在根据你的回答继续处理，请稍候");
   const composerSnapshot = captureAiPromptComposer();
   const requestComposerSnapshot = retry
     ? {
@@ -16727,6 +17699,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         toolCalls.push(toolCall);
         processSteps.push(aiToolProcessStep(toolCall, round));
         renderStreamingProcessSteps(false, elapsedProcessTime());
+        handleInteractiveToolCallEvent(toolCall);
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom(feed);
       } else if (eventName === "context_compacted") {
@@ -16986,6 +17959,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null, option
       try {
         const result = await api(`/api/suggestions/${suggestion.id}/accept`, { method: "POST", body: {} });
         state.chapter = result.chapter;
+        resetChapterDraftLineIds(state.chapter);
         lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
         $("#chapter-content").value = state.chapter.content;
         scheduleChapterLineNumbers();
@@ -17079,6 +18053,7 @@ async function showVersions() {
     }
     try {
       state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
+      resetChapterDraftLineIds(state.chapter);
       lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
       $("#chapter-title").value = state.chapter.title;
       $("#chapter-content").value = state.chapter.content;
@@ -18436,10 +19411,7 @@ $("#chapter-foreshadow-reminder").addEventListener("keydown", (event) => {
   renderChapterForeshadowReminder();
   $("#chapter-foreshadow-reminder-details-button").focus();
 });
-$("#chapter-delete-button").addEventListener("click", () => {
-  if (state.chapter) void deleteChapter(state.chapter.id);
-});
-$("#chapter-edit-button").addEventListener("click", enterChapterEditMode);
+$("#chapter-edit-button").addEventListener("click", toggleChapterEditPreviewMode);
 $("#tidy-blank-lines-button").addEventListener("click", tidyChapterBlankLines);
 $("#new-volume-button").addEventListener("click", () => openVolumeDialog());
 $("#chapter-batch-button").addEventListener("click", openChapterBatchDialog);
@@ -18552,11 +19524,59 @@ $("#appearance-form").addEventListener("submit", (event) => {
   toast(persisted ? "显示设置已保存" : "显示设置已应用，但当前浏览器无法保存偏好", persisted ? "info" : "error");
 });
 $("#chapter-title").addEventListener("input", () => scheduleChapterAutoSave());
-$("#chapter-content").addEventListener("input", () => {
+$("#chapter-content").addEventListener("beforeinput", (event) => {
+  if (!state.chapter) return;
+  const input = event.currentTarget;
+  syncChapterDraftLineIds(input.value);
+  chapterBeforeInputState = {
+    chapterId: state.chapter.id,
+    content: input.value,
+    selectionStart: input.selectionStart,
+    selectionEnd: input.selectionEnd,
+    inputType: event.inputType
+  };
+});
+$("#chapter-content").addEventListener("keydown", (event) => {
+  const input = event.currentTarget;
+  if (
+    event.key !== "Enter"
+    || !state.work?.editorAutoIndentEnabled
+    || event.isComposing
+    || event.altKey
+    || event.ctrlKey
+    || event.metaKey
+    || !state.chapter
+    || input.readOnly
+  ) return;
+  event.preventDefault();
+  syncChapterDraftLineIds(input.value);
+  chapterBeforeInputState = {
+    chapterId: state.chapter.id,
+    content: input.value,
+    selectionStart: input.selectionStart,
+    selectionEnd: input.selectionEnd,
+    inputType: "insertLineBreak"
+  };
+  const next = insertIndentedParagraph(input.value, input.selectionStart, input.selectionEnd);
+  input.setRangeText(`\n${CHAPTER_PARAGRAPH_INDENT}`, input.selectionStart, input.selectionEnd, "end");
+  input.setSelectionRange(next.selectionStart, next.selectionEnd);
+  input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertLineBreak" }));
+});
+$("#chapter-content").addEventListener("input", (event) => {
+  const input = event.currentTarget;
+  const beforeInput = chapterBeforeInputState;
+  const hint = beforeInput
+    && beforeInput.chapterId === state.chapter?.id
+    && chapterDraftLineIdState?.content === beforeInput.content
+      ? beforeInput
+      : null;
+  syncChapterDraftLineIds(input.value, hint);
+  chapterBeforeInputState = null;
   updateChapterStats();
   scheduleChapterAutoSave();
   clearChapterLineSelection();
   scheduleChapterLineNumbers(chapterLineInputRenderDelay);
+  scheduleChapterCaretScroll();
   setAiContextMeter(null);
 });
 $("#chapter-content").addEventListener("select", () => setAiContextMeter(null));
@@ -19279,6 +20299,109 @@ $("#ai-history-action-menu").addEventListener("click", async (event) => {
     if (label) label.textContent = "导出 Markdown";
   }
 });
+// --- AI 操作审批中心与写入审批 / 提问弹窗 ---
+$("#ai-approval-center-toggle").addEventListener("click", () => {
+  const dialog = $("#ai-approval-center-dialog");
+  if (dialog.open) {
+    dialog.close();
+    return;
+  }
+  openAiApprovalCenter();
+});
+$("#ai-approval-center-close").addEventListener("click", () => $("#ai-approval-center-dialog").close());
+$("#ai-approval-center-dialog").addEventListener("close", () => {
+  $("#ai-approval-center-toggle").setAttribute("aria-expanded", "false");
+});
+$("#ai-approval-center-dialog .ai-approval-filters").addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-status-filter]");
+  if (!chip) return;
+  aiApprovalCenterState.status = String(chip.dataset.statusFilter ?? "");
+  document.querySelectorAll("#ai-approval-center-dialog [data-status-filter]").forEach((item) => {
+    item.setAttribute("aria-pressed", String(item === chip));
+  });
+  $("#ai-approval-list-host").innerHTML = '<p class="usage-measurement-note">正在加载审批记录……</p>';
+  loadAiApprovalCenterPlans().catch((error) => {
+    $("#ai-approval-list-host").innerHTML = `<p class="usage-measurement-note">加载失败：${esc(error.message)}</p>`;
+  });
+});
+$("#ai-approval-list-host").addEventListener("click", (event) => {
+  const row = event.target.closest("[data-plan-id]");
+  if (row) {
+    openAiWritePlanDetail(row.dataset.planId).catch((error) => toast(`审批详情加载失败：${error.message}`, "error"));
+    return;
+  }
+  const questionRow = event.target.closest("[data-question-id]");
+  if (questionRow) openAiUserQuestionDialog(questionRow.dataset.questionId).catch((error) => toast(`提问详情加载失败：${error.message}`, "error"));
+});
+$("#ai-write-plan-close").addEventListener("click", () => $("#ai-write-plan-dialog").close());
+$("#ai-write-plan-refresh").addEventListener("click", () => {
+  if (!aiWritePlanDialogPlanId) return;
+  openAiWritePlanDetail(aiWritePlanDialogPlanId).catch((error) => toast(`状态刷新失败：${error.message}`, "error"));
+});
+$("#ai-write-plan-confirm").addEventListener("click", () => {
+  if (!aiWritePlanDialogPlanId) return;
+  decideAiWritePlan(aiWritePlanDialogPlanId, "confirm").catch((error) => toast(error.message, "error"));
+});
+$("#ai-write-plan-reject").addEventListener("click", () => {
+  if (!aiWritePlanDialogPlanId) return;
+  decideAiWritePlan(aiWritePlanDialogPlanId, "reject").catch((error) => toast(error.message, "error"));
+});
+$("#ai-write-plan-undo").addEventListener("click", () => {
+  if (!aiWritePlanDialogPlanId) return;
+  undoAiWritePlan(aiWritePlanDialogPlanId);
+});
+$("#ai-question-close").addEventListener("click", () => $("#ai-question-dialog").close());
+
+function syncAiQuestionSubmitState() {
+  const checked = document.querySelector('input[name="ai-question-choice"]:checked');
+  const customInput = $("#ai-question-custom-answer");
+  const submit = $("#ai-question-submit");
+  const disabled = !checked
+    || checked.disabled
+    || (checked.value === "custom" && !String(customInput.value).trim());
+  submit.disabled = disabled;
+  submit.title = disabled ? "请选择一个预设选项，或填写自定义回答后提交" : "";
+}
+$("#ai-question-form").addEventListener("change", (event) => {
+  const control = event.target;
+  if (control?.name !== "ai-question-choice") return;
+  const isCustom = control.value === "custom";
+  const customInput = $("#ai-question-custom-answer");
+  if (isCustom && !control.disabled) customInput.focus();
+  syncAiQuestionOptionPresentation();
+  syncAiQuestionSubmitState();
+});
+$("#ai-question-custom-answer").addEventListener("input", () => {
+  const customInput = $("#ai-question-custom-answer");
+  syncAiQuestionAnswerCount();
+  const checked = document.querySelector('input[name="ai-question-choice"]:checked');
+  if (!checked && String(customInput.value).trim()) {
+    const customRadio = document.querySelector('input[name="ai-question-choice"][value="custom"]');
+    if (customRadio && !customRadio.disabled) customRadio.checked = true;
+  }
+  syncAiQuestionOptionPresentation();
+  syncAiQuestionSubmitState();
+});
+$("#ai-question-submit").addEventListener("click", () => {
+  const checked = document.querySelector('input[name="ai-question-choice"]:checked');
+  if (!checked || aiQuestionDialogQuestionId == null) return;
+  if (checked.value === "custom") {
+    const text = String($("#ai-question-custom-answer").value).trim();
+    if (!text) return;
+    respondAiUserQuestion(aiQuestionDialogQuestionId, { action: "custom", customAnswer: text }).catch((error) => toast(error.message, "error"));
+    return;
+  }
+  const supplementalAnswer = String($("#ai-question-custom-answer").value).trim();
+  respondAiUserQuestion(aiQuestionDialogQuestionId, {
+    action: "option",
+    selectedOption: Number(checked.value),
+    ...(supplementalAnswer ? { customAnswer: supplementalAnswer } : {})
+  }).catch((error) => toast(error.message, "error"));
+});
+$("#ai-question-skip").addEventListener("click", () => {
+  if (aiQuestionDialogQuestionId == null) return;
+  respondAiUserQuestion(aiQuestionDialogQuestionId, { action: "reject" }).catch((error) => toast(error.message, "error"));
+});
 $("#ai-prompt").addEventListener("keydown", (event) => {
   const mentionMenuVisible = !$("#ai-mention-menu").classList.contains("hidden");
   if (mentionMenuVisible) {
@@ -19372,9 +20495,6 @@ $("#manuscript-export-menu").addEventListener("click", (event) => {
 });
 $("#reader-open-button").addEventListener("click", () => {
   void openReadingPreview({ restorePosition: true });
-});
-$("#chapter-reader-button").addEventListener("click", () => {
-  void openReadingPreview({ chapterId: state.chapter?.id ?? null, restorePosition: true });
 });
 $("#reader-close").addEventListener("click", closeReadingPreview);
 $("#reader-previous").addEventListener("click", () => void navigateReadingChapter(-1));

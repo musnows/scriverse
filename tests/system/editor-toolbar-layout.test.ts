@@ -23,7 +23,9 @@ describe("编辑器工具栏布局", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
 
     expect(page.text).toContain('<span id="chapter-path" class="eyebrow">未选择章节</span>\n            <input id="chapter-title"');
-    expect(page.text).toContain('id="chapter-edit-button" class="primary-button hidden"');
+    expect(page.text).toContain('id="chapter-edit-button" class="primary-button hidden" type="button" aria-pressed="false" aria-label="切换到编辑模式">编辑</button>');
+    expect(page.text).not.toContain('id="chapter-reader-button"');
+    expect(page.text).not.toContain('id="chapter-delete-button"');
     expect(page.text).toContain('id="chapter-annotations-button"');
     expect(page.text).toContain('id="chapter-annotations-dialog"');
     expect(page.text).toContain('class="module-nav-secondary hidden" type="button" data-module="comments"');
@@ -32,6 +34,8 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('id="add-line-annotation" type="button" role="menuitem">添加评论</button>');
     expect(page.text).toContain('id="add-line-todo"');
     expect(page.text).toContain('&feature=annotation-precise-locate-v1');
+    expect(page.text).toContain('&feature=annotation-line-anchor-v1');
+    expect(page.text).toContain('&feature=stable-line-ids-v1');
     expect(page.text).toMatch(/styles\.css\?[^"\n]*feature=markdown-word-count-five-digit-v2/u);
     expect(page.text).toMatch(/styles\.css\?[^"\n]*feature=annotation-marker-offset-v1/u);
     expect(application.text).toContain("async function createSelectedLineAnnotation(");
@@ -41,6 +45,9 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain("function revealChapterLines(startLine, endLine)");
     expect(application.text).toContain("revealChapterLines(annotation.startLine, annotation.endLine);");
     expect(application.text).toContain("/annotation-counts");
+    expect(application.text).toContain("await loadChapterAnnotationCounts(saved.chapter.id);");
+    expect(application.text).toContain("reconcileChapterLineIdDraft(");
+    expect(application.text).toContain("lineIds: draft.lineIds");
     expect(application.text).toContain("lineAnnotationCount");
     expect(application.text).toContain("?line=${encodeURIComponent(line)}");
     expect(application.text).toContain("async function renderWorkChapterComments(");
@@ -66,8 +73,11 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain("function enterChapterEditMode()");
     expect(application.text).toContain('persistentToast("正在保存中")');
     expect(application.text).toContain('toast(`保存成功（正文 v${saved.versionNo}）`)');
-    expect(application.text).toContain('$("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);');
-    expect(application.text).toContain('$("#chapter-edit-button").addEventListener("click", enterChapterEditMode)');
+    expect(application.text).toContain('editButton.textContent = chapterEditorReadOnly ? "编辑" : "预览";');
+    expect(application.text).toContain('function toggleChapterEditPreviewMode()');
+    expect(application.text).toContain('$("#chapter-edit-button").addEventListener("click", toggleChapterEditPreviewMode)');
+    expect(application.text).toContain('const toolbar = $("#editor-view .editor-toolbar");');
+    expect(application.text).toContain('const safeTop = Math.ceil(Math.max(reminderBottom, toolbarBottom));');
     expect(styles.text).toContain('#chapter-path { grid-area: path;');
     expect(styles.text).toContain('.file-button, .add-button { display: grid; place-items: center;');
     expect(page.text).toContain('id="new-volume-button" class="add-button"');

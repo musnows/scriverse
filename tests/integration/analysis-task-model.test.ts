@@ -217,4 +217,42 @@ describe("AI 分析任务模型", () => {
     });
     expect(compactPreview).toMatchObject({ allowed: true, overThreshold: false });
   });
+
+  it("百万字符时间线任务只按最大正文分片预检", async () => {
+    runtime = createTestRuntime();
+    const work = runtime.store.createWork({ title: "百万字符时间线预检" });
+    const workId = String(work.id);
+    const volume = runtime.store.createVolume(workId, { title: "第一卷" });
+    runtime.store.createChapter(workId, {
+      volumeId: String(volume.id),
+      title: "百万字符长章",
+      content: "星".repeat(1_000_000)
+    });
+    const provider = runtime.ai.createProvider({
+      name: "时间线短上下文模型",
+      baseUrl: "https://timeline-context-preview.test/v1",
+      apiKey: "sk-timeline-context-preview-test",
+      status: "enabled"
+    });
+    runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = ?", String(provider.id));
+    const model = runtime.ai.createModel(String(provider.id), {
+      displayName: "时间线短上下文模型",
+      modelId: "timeline-context-preview-model",
+      contextWindow: 32_768
+    });
+
+    const preview = runtime.ai.previewAnalysisTaskContext(workId, {
+      taskType: "timeline-analysis",
+      scope: { type: "book" },
+      modelId: String(model.id)
+    });
+
+    expect(preview).toMatchObject({ allowed: true, overThreshold: false });
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "timeline-analysis",
+      scope: { type: "book" },
+      modelId: model.id
+    }).expect(201);
+    expect(task.body.data).toMatchObject({ status: "pending", taskType: "timeline-analysis" });
+  });
 });

@@ -204,6 +204,14 @@ function workIdFromPath(database: Database, pathname: string): string | null {
   if (root !== "api") return null;
   if (resource === "works" && decoded[3] && decoded[3].toLocaleLowerCase("en-US") !== "import") return decoded[3];
   if (resource === "sync" && decoded[3]?.toLocaleLowerCase("en-US") === "works" && decoded[4]) return decoded[4];
+  if (resource === "roleplay-memories" && decoded[3]) {
+    const row = database.get<{ work_id: string }>(
+      "SELECT work_id FROM roleplay_memories WHERE id = ?",
+      decoded[3]
+    );
+    if (row) return row.work_id;
+    throw notFound("角色扮演记忆");
+  }
   const tableByResource: Record<string, string> = {
     volumes: "volumes",
     chapters: "chapters",
@@ -1188,7 +1196,8 @@ function syncPushWriteModules(request: Request): WorkPermissionModule[] {
   return [...modules];
 }
 
-function workModuleRequirements(request: Request, write: boolean, annotationAccess?: { kind: "note" | "todo"; createdByUserId: string | null }): WorkAuthorizationRequirements {
+/** 按 URL 与方法推导作品模块权限要求；导出供测试校验路径映射。 */
+export function workModuleRequirements(request: Request, write: boolean, annotationAccess?: { kind: "note" | "todo"; createdByUserId: string | null }): WorkAuthorizationRequirements {
   const pathname = normalizeApiPath(request.path);
   const direct = (module: WorkPermissionModule, extraWrite: WorkPermissionModule[] = []): WorkAuthorizationRequirements => (
     write ? { write: [module, ...extraWrite] } : { read: [module] }
@@ -1299,6 +1308,15 @@ function workModuleRequirements(request: Request, write: boolean, annotationAcce
   ];
   for (const [pattern, module] of rules) if (pattern.test(pathname)) return direct(module);
 
+  // AI 可写工具开关：查看要求 AI 设置读取权限，修改要求其编辑权限。
+  if (/^\/api\/works\/[^/]+\/ai\/tools$/u.test(pathname)) {
+    return write ? { write: ["ai-settings"] } : { read: ["ai-settings"] };
+  }
+  // 审批中心与提问接口：属于 AI 对话交互面；受影响模块的真实权限在执行前由计划引擎再校验。
+  if (/^\/api\/works\/[^/]+\/ai\/(?:write-plans|questions)(?:\/|$)/u.test(pathname)) {
+    return write ? { write: ["ai-chat"] } : { read: ["ai-chat"] };
+  }
+
   if (write && /^\/api\/reviews\/[^/]+\/character-resolution$/u.test(pathname)) {
     const merging = requestBodyRecord(request).action === "merge";
     return merging
@@ -1341,6 +1359,12 @@ function workModuleRequirements(request: Request, write: boolean, annotationAcce
   const conversationRoleplayWrite = /^\/api\/ai-conversations\/[^/]+\/roleplay$/u.test(pathname);
   if (write && conversationRoleplayWrite) {
     return { read: ["characters"], write: ["ai-chat"] };
+  }
+  if (/^\/api\/characters\/[^/]+\/roleplay-memories(?:\/|$)/u.test(pathname)) {
+    return write ? { write: ["characters"] } : { read: ["characters"] };
+  }
+  if (/^\/api\/roleplay-memories\/[^/]+(?:\/|$)/u.test(pathname)) {
+    return { write: ["characters"] };
   }
   const conversationHistoryWrite = /^\/api\/ai-conversations\/[^/]+\/(?:fork|context\/prepare|compact)$/u.test(pathname)
     || (/^\/api\/works\/[^/]+\/chat\/stream$/u.test(pathname) && typeof requestBodyRecord(request).conversationId === "string");

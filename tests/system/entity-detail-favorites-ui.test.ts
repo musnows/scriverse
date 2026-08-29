@@ -44,9 +44,14 @@ describe("资料详情收藏界面", () => {
     expect(application.text).toContain('button.innerHTML = characterFavoriteIconMarkup();');
     expect(styles.text).toContain('.entity-detail-favorite-button { display: inline-grid;');
     expect(styles.text).toContain('.entity-detail-favorite-button.is-favorite svg { fill: currentColor; }');
+    expect(styles.text).toContain('.entity-detail-pin-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; transform: translateY(.5px); }');
     expect(styles.text).toContain('.entity-detail-pin-button.is-pinned svg { fill: currentColor; }');
     expect(styles.text).toContain('.dialog-context-actions { display: flex; align-items: center; gap: 8px; }');
     expect(styles.text).toContain('.entity-editor-mode-actions > .entity-detail-favorite-button, .entity-editor-mode-actions > .entity-detail-pin-button, .character-editor-header-actions > .entity-detail-favorite-button, .character-editor-header-actions > .entity-detail-pin-button { flex: 0 0 40px;');
-    expect(page.text.match(/feature=entity-detail-favorites-v1/gu)).toHaveLength(2);
+    expect(styles.text).toContain('.character-editor-header { grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr) auto; }');
+    expect(styles.text).toContain('.character-editor-header-actions > .primary-button, .character-editor-header-actions > .ghost-button { flex: 0 0 auto; white-space: nowrap; }');
+    expect(page.text.match(/<(?:link rel="stylesheet"|script type="module")[^>]*feature=entity-detail-favorites-v1/gu)).toHaveLength(2);
+    expect(page.text).toContain('feature=entity-pin-icon-center-v1');
+    expect(page.text).toContain("feature=character-editor-header-actions-v1");
   });
 });

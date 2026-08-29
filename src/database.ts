@@ -8,14 +8,19 @@ import {
 } from "./ai-analysis-timeout.js";
 import { documentParagraphLineRanges } from "./hybrid-search.js";
 import { logger, sanitizeError } from "./logger.js";
-import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentParagraphs } from "./utils.js";
+import { documentShortSearchTerms, id, normalizeDocumentSearchText, splitDocumentParagraphs } from "./utils.js";
+import {
+  createChapterLineIds,
+  parseChapterAnnotationLineHashes,
+  parseChapterLineIds
+} from "./chapter-annotation-anchor.js";
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
 export const SYSTEM_USER_ID = "__scriverse_system_user__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0；版本 111 扩展模型思考强度为 auto；版本 112 为 CLI API Key 增加可复制的加密密文；版本 113 增加角色收藏状态与列表索引；版本 114 增加组织、设定档案与想法收藏状态及列表索引；版本 115 增加 AI 对话会话级场景钉；版本 116 增加可持久化且可撤销的 Desktop Bearer 会话；版本 117 增加作品离线授权、同步变更游标与幂等变更结果；版本 118 增加供应商分析请求超时配置；版本 119 记录分析任务是否由 API Key 创建；版本 120 将书籍资料收藏按用户隔离并增加书籍级共享置顶；版本 121 强制作品 Owner 非空并建立用户外键约束。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0；版本 111 扩展模型思考强度为 auto；版本 112 为 CLI API Key 增加可复制的加密密文；版本 113 增加角色收藏状态与列表索引；版本 114 增加组织、设定档案与想法收藏状态及列表索引；版本 115 增加 AI 对话会话级场景钉；版本 116 增加可持久化且可撤销的 Desktop Bearer 会话；版本 117 增加作品离线授权、同步变更游标与幂等变更结果；版本 118 增加供应商分析请求超时配置；版本 119 记录分析任务是否由 API Key 创建；版本 120 将书籍资料收藏按用户隔离并增加书籍级共享置顶；版本 121 强制作品 Owner 非空并建立用户外键约束；版本 122 创建 AI 写入审批与持久化提问表，并增加按角色归属的共享角色扮演记忆及作品级正文编辑偏好；版本 123 为正文评论持久化逐行哈希锚点；版本 124 为正文行和评论锚点持久化稳定行身份。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 121;
+export const DATABASE_SCHEMA_VERSION = 124;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -59,7 +64,6 @@ export function logSqliteDiskIoError(filename: string, error: unknown): void {
     message: "SQLite reported a disk I/O error. Check the host disk's available space and ensure the database directory is writable before restarting Scriverse."
   });
 }
-
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
   let database: DatabaseSync | null = null;
@@ -195,6 +199,8 @@ export class Database {
         tags_json TEXT NOT NULL DEFAULT '[]',
         is_internal INTEGER NOT NULL DEFAULT 0,
         offline_access_enabled INTEGER NOT NULL DEFAULT 0 CHECK(offline_access_enabled IN (0, 1)),
+        editor_auto_indent_enabled INTEGER NOT NULL DEFAULT 0 CHECK(editor_auto_indent_enabled IN (0, 1)),
+        editor_typewriter_mode_enabled INTEGER NOT NULL DEFAULT 0 CHECK(editor_typewriter_mode_enabled IN (0, 1)),
         version_no INTEGER NOT NULL DEFAULT 1,
         deleted_at TEXT,
         created_at TEXT NOT NULL,
@@ -643,6 +649,61 @@ export class Database {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS roleplay_memories (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        category TEXT NOT NULL CHECK(category IN ('event', 'state', 'relationship', 'commitment', 'knowledge', 'scene')),
+        content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 2000),
+        content_hash TEXT NOT NULL CHECK(length(content_hash) = 64),
+        importance TEXT NOT NULL DEFAULT 'medium' CHECK(importance IN ('low', 'medium', 'high')),
+        certainty TEXT NOT NULL DEFAULT 'experienced' CHECK(certainty IN ('experienced', 'observed', 'heard', 'believed')),
+        origin TEXT NOT NULL DEFAULT 'roleplay' CHECK(origin = 'roleplay'),
+        canonical INTEGER NOT NULL DEFAULT 0 CHECK(canonical = 0),
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'archived')),
+        is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0, 1)),
+        version_no INTEGER NOT NULL DEFAULT 1 CHECK(version_no > 0),
+        superseded_by_memory_id TEXT REFERENCES roleplay_memories(id) ON DELETE SET NULL,
+        source_type TEXT NOT NULL CHECK(source_type IN ('ai', 'manual')),
+        source_assistant_message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
+        idempotency_key TEXT,
+        created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(character_id, content_hash),
+        UNIQUE(character_id, idempotency_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_memory_sources (
+        id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL REFERENCES roleplay_memories(id) ON DELETE CASCADE,
+        conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE SET NULL,
+        message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
+        message_role TEXT NOT NULL CHECK(message_role IN ('user', 'assistant')),
+        source_created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        source_created_at TEXT NOT NULL,
+        evidence_snapshot TEXT NOT NULL CHECK(length(evidence_snapshot) <= 2000),
+        created_at TEXT NOT NULL,
+        UNIQUE(memory_id, message_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS roleplay_memory_versions (
+        id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL REFERENCES roleplay_memories(id) ON DELETE CASCADE,
+        version_no INTEGER NOT NULL CHECK(version_no > 0),
+        category TEXT NOT NULL CHECK(category IN ('event', 'state', 'relationship', 'commitment', 'knowledge', 'scene')),
+        content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 2000),
+        importance TEXT NOT NULL CHECK(importance IN ('low', 'medium', 'high')),
+        certainty TEXT NOT NULL CHECK(certainty IN ('experienced', 'observed', 'heard', 'believed')),
+        status TEXT NOT NULL CHECK(status IN ('active', 'superseded', 'archived')),
+        is_pinned INTEGER NOT NULL CHECK(is_pinned IN (0, 1)),
+        action TEXT NOT NULL CHECK(action IN ('created', 'edited', 'pinned', 'archived', 'restored', 'superseded', 'merged')),
+        actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(memory_id, version_no)
+      );
+
       CREATE TABLE IF NOT EXISTS ai_conversation_stream_requests (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
@@ -824,6 +885,12 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_ai_suggestions_work ON ai_suggestions(work_id, status, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversations_work ON ai_conversations(work_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversation_messages ON ai_conversation_messages(conversation_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_memories_character
+        ON roleplay_memories(work_id, character_id, status, is_pinned DESC, importance DESC, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_memory_sources_memory
+        ON roleplay_memory_sources(memory_id, created_at, id);
+      CREATE INDEX IF NOT EXISTS idx_roleplay_memory_versions_memory
+        ON roleplay_memory_versions(memory_id, version_no DESC);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_conversation_stream_requests_active
         ON ai_conversation_stream_requests(conversation_id) WHERE status = 'in_progress';
       CREATE INDEX IF NOT EXISTS idx_ai_conversation_stream_requests_lease
@@ -4542,6 +4609,293 @@ export class Database {
       } finally {
         this.raw.exec("PRAGMA foreign_keys = ON");
       }
+    }
+    const aiWritePlanTablesPresent = [
+      "work_ai_tool_settings",
+      "ai_write_plans",
+      "ai_write_plan_operations",
+      "ai_user_questions"
+    ].every((table) => this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?",
+      table
+    ) !== undefined);
+    if (!applied.has(122) || !aiWritePlanTablesPresent) {
+      this.transaction(() => {
+        const conversationColumns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!conversationColumns.has("ai_write_tools_json")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN ai_write_tools_json TEXT");
+        }
+        // 作品级 AI 可写工具开关：默认全部关闭，仅拥有 AI 设置权限的用户可修改。
+        this.run(`
+          CREATE TABLE IF NOT EXISTS work_ai_tool_settings (
+            work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+            tools_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL,
+            updated_by_user_id TEXT
+          )
+        `);
+        // AI 修改计划（审批）：AI 只能提交计划，确认接口只接收审批 ID。
+        this.run(`
+          CREATE TABLE IF NOT EXISTS ai_write_plans (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            conversation_id TEXT,
+            plan_kind TEXT NOT NULL DEFAULT 'write' CHECK(plan_kind IN ('write', 'undo')),
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'rejected', 'expired', 'invalidated', 'executing', 'executed', 'failed')),
+            ai_summary TEXT NOT NULL DEFAULT '',
+            max_operations INTEGER NOT NULL,
+            invalid_reason TEXT NOT NULL DEFAULT '',
+            failure_message TEXT,
+            initiator_user_id TEXT,
+            conversation_owner_user_id TEXT,
+            source_plan_id TEXT,
+            created_at TEXT NOT NULL,
+            decided_at TEXT,
+            executed_at TEXT,
+            executed_by_user_id TEXT
+          )
+        `);
+        // 计划操作明细：创建时由系统根据当前数据库内容生成不可变 diff，执行成功后补充结果列。
+        this.run(`
+          CREATE TABLE IF NOT EXISTS ai_write_plan_operations (
+            id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL REFERENCES ai_write_plans(id) ON DELETE CASCADE,
+            seq INTEGER NOT NULL,
+            op_type TEXT NOT NULL CHECK(op_type IN ('create_entry', 'update_entry', 'create_annotation', 'create_task')),
+            module TEXT NOT NULL,
+            entity_type TEXT NOT NULL DEFAULT '',
+            entity_id TEXT,
+            target_version_no INTEGER,
+            title TEXT NOT NULL DEFAULT '',
+            operation_input_json TEXT NOT NULL DEFAULT '{}',
+            detail_json TEXT NOT NULL DEFAULT '{}',
+            required_modules_json TEXT NOT NULL DEFAULT '[]',
+            result_entity_id TEXT,
+            result_version_no INTEGER,
+            result_summary TEXT NOT NULL DEFAULT ''
+          )
+        `);
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_write_plans_work ON ai_write_plans(work_id, created_at)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_write_plans_initiator ON ai_write_plans(initiator_user_id)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_write_plans_owner ON ai_write_plans(conversation_owner_user_id)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_write_plan_operations_plan ON ai_write_plan_operations(plan_id, seq)");
+        // AskUserQuestions 提问记录：一次一个问题，持久化保存，支持刷新后继续查看。
+        this.run(`
+          CREATE TABLE IF NOT EXISTS ai_user_questions (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            conversation_id TEXT,
+            initiator_user_id TEXT,
+            recipient_user_id TEXT,
+            question TEXT NOT NULL,
+            options_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'answered', 'rejected', 'expired')),
+            selected_option INTEGER,
+            answer_text TEXT NOT NULL DEFAULT '',
+            is_custom_answer INTEGER NOT NULL DEFAULT 0,
+            tool_call_id TEXT,
+            continuation_json TEXT NOT NULL DEFAULT '{}',
+            resume_state TEXT NOT NULL DEFAULT 'pending' CHECK(resume_state IN ('pending', 'claimed', 'completed', 'failed')),
+            resume_result_json TEXT NOT NULL DEFAULT '{}',
+            resumed_at TEXT,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            decided_at TEXT
+          )
+        `);
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_user_questions_conversation ON ai_user_questions(conversation_id, status)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_user_questions_work ON ai_user_questions(work_id, created_at)");
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (122, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const roleplayMemoryTablesPresent = [
+      "roleplay_memories",
+      "roleplay_memory_sources",
+      "roleplay_memory_versions",
+      "roleplay_memory_fts"
+    ].every((name) => this.get("SELECT 1 AS present FROM sqlite_master WHERE name = ?", name) !== undefined);
+    const roleplayMemoryColumns = new Set(this.all("PRAGMA table_info(roleplay_memories)").map((column) => String(column.name)));
+    if (!applied.has(122) || !roleplayMemoryTablesPresent || !roleplayMemoryColumns.has("character_id") || !roleplayMemoryColumns.has("content_hash")) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS roleplay_memories (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+          category TEXT NOT NULL CHECK(category IN ('event', 'state', 'relationship', 'commitment', 'knowledge', 'scene')),
+          content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 2000),
+          content_hash TEXT NOT NULL CHECK(length(content_hash) = 64),
+          importance TEXT NOT NULL DEFAULT 'medium' CHECK(importance IN ('low', 'medium', 'high')),
+          certainty TEXT NOT NULL DEFAULT 'experienced' CHECK(certainty IN ('experienced', 'observed', 'heard', 'believed')),
+          origin TEXT NOT NULL DEFAULT 'roleplay' CHECK(origin = 'roleplay'),
+          canonical INTEGER NOT NULL DEFAULT 0 CHECK(canonical = 0),
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'archived')),
+          is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0, 1)),
+          version_no INTEGER NOT NULL DEFAULT 1 CHECK(version_no > 0),
+          superseded_by_memory_id TEXT REFERENCES roleplay_memories(id) ON DELETE SET NULL,
+          source_type TEXT NOT NULL CHECK(source_type IN ('ai', 'manual')),
+          source_assistant_message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
+          idempotency_key TEXT,
+          created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(character_id, content_hash),
+          UNIQUE(character_id, idempotency_key)
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS roleplay_memory_sources (
+          id TEXT PRIMARY KEY,
+          memory_id TEXT NOT NULL REFERENCES roleplay_memories(id) ON DELETE CASCADE,
+          conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE SET NULL,
+          message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
+          message_role TEXT NOT NULL CHECK(message_role IN ('user', 'assistant')),
+          source_created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          source_created_at TEXT NOT NULL,
+          evidence_snapshot TEXT NOT NULL CHECK(length(evidence_snapshot) <= 2000),
+          created_at TEXT NOT NULL,
+          UNIQUE(memory_id, message_id)
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS roleplay_memory_versions (
+          id TEXT PRIMARY KEY,
+          memory_id TEXT NOT NULL REFERENCES roleplay_memories(id) ON DELETE CASCADE,
+          version_no INTEGER NOT NULL CHECK(version_no > 0),
+          category TEXT NOT NULL CHECK(category IN ('event', 'state', 'relationship', 'commitment', 'knowledge', 'scene')),
+          content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 2000),
+          importance TEXT NOT NULL CHECK(importance IN ('low', 'medium', 'high')),
+          certainty TEXT NOT NULL CHECK(certainty IN ('experienced', 'observed', 'heard', 'believed')),
+          status TEXT NOT NULL CHECK(status IN ('active', 'superseded', 'archived')),
+          is_pinned INTEGER NOT NULL CHECK(is_pinned IN (0, 1)),
+          action TEXT NOT NULL CHECK(action IN ('created', 'edited', 'pinned', 'archived', 'restored', 'superseded', 'merged')),
+          actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(memory_id, version_no)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memories_character ON roleplay_memories(work_id, character_id, status, is_pinned DESC, importance DESC, updated_at DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memory_sources_memory ON roleplay_memory_sources(memory_id, created_at, id)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_roleplay_memory_versions_memory ON roleplay_memory_versions(memory_id, version_no DESC)");
+        this.raw.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS roleplay_memory_fts USING fts5(
+            memory_id UNINDEXED,
+            character_id UNINDEXED,
+            category UNINDEXED,
+            status UNINDEXED,
+            content,
+            tokenize='trigram'
+          );
+          CREATE TRIGGER IF NOT EXISTS roleplay_memory_fts_ai AFTER INSERT ON roleplay_memories BEGIN
+            INSERT INTO roleplay_memory_fts(memory_id, character_id, category, status, content)
+            VALUES (new.id, new.character_id, new.category, new.status, lower(new.content));
+          END;
+          CREATE TRIGGER IF NOT EXISTS roleplay_memory_fts_ad AFTER DELETE ON roleplay_memories BEGIN
+            DELETE FROM roleplay_memory_fts WHERE memory_id = old.id;
+          END;
+          CREATE TRIGGER IF NOT EXISTS roleplay_memory_fts_au AFTER UPDATE OF character_id, category, status, content ON roleplay_memories BEGIN
+            DELETE FROM roleplay_memory_fts WHERE memory_id = old.id;
+            INSERT INTO roleplay_memory_fts(memory_id, character_id, category, status, content)
+            VALUES (new.id, new.character_id, new.category, new.status, lower(new.content));
+          END;
+        `);
+        this.run("DELETE FROM roleplay_memory_fts");
+        this.run(`INSERT INTO roleplay_memory_fts(memory_id, character_id, category, status, content)
+          SELECT id, character_id, category, status, lower(content) FROM roleplay_memories`);
+        const timestamp = new Date().toISOString();
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (122, ?)", timestamp);
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const workPreferenceColumns = new Set(
+      this.all<{ name: string }>("PRAGMA table_info(works)").map((column) => column.name)
+    );
+    if (!applied.has(122) || !workPreferenceColumns.has("editor_auto_indent_enabled") || !workPreferenceColumns.has("editor_typewriter_mode_enabled")) {
+      this.transaction(() => {
+        if (!workPreferenceColumns.has("editor_auto_indent_enabled")) {
+          this.run("ALTER TABLE works ADD COLUMN editor_auto_indent_enabled INTEGER NOT NULL DEFAULT 0 CHECK(editor_auto_indent_enabled IN (0, 1))");
+        }
+        if (!workPreferenceColumns.has("editor_typewriter_mode_enabled")) {
+          this.run("ALTER TABLE works ADD COLUMN editor_typewriter_mode_enabled INTEGER NOT NULL DEFAULT 0 CHECK(editor_typewriter_mode_enabled IN (0, 1))");
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (122, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const chapterAnnotationLineHashesPresent = this.all<{ name: string }>("PRAGMA table_info(chapter_annotations)")
+      .some((column) => column.name === "line_hashes_json");
+    if (!applied.has(123) || !chapterAnnotationLineHashesPresent) {
+      this.transaction(() => {
+        if (!chapterAnnotationLineHashesPresent) {
+          this.run("ALTER TABLE chapter_annotations ADD COLUMN line_hashes_json TEXT NOT NULL DEFAULT '[]'");
+        }
+        const annotations = this.all<{ id: string; quote: string; line_hashes_json: string }>(
+          "SELECT id, quote, line_hashes_json FROM chapter_annotations"
+        );
+        for (const annotation of annotations) {
+          this.run(
+            "UPDATE chapter_annotations SET line_hashes_json = ? WHERE id = ?",
+            JSON.stringify(parseChapterAnnotationLineHashes(annotation.line_hashes_json, annotation.quote)),
+            annotation.id
+          );
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (123, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const chapterLineIdsPresent = this.all<{ name: string }>("PRAGMA table_info(chapters)")
+      .some((column) => column.name === "line_ids_json");
+    const chapterAnnotationLineIdsPresent = this.all<{ name: string }>("PRAGMA table_info(chapter_annotations)")
+      .some((column) => column.name === "anchor_line_ids_json");
+    if (!applied.has(124) || !chapterLineIdsPresent || !chapterAnnotationLineIdsPresent) {
+      this.transaction(() => {
+        if (!chapterLineIdsPresent) {
+          this.run("ALTER TABLE chapters ADD COLUMN line_ids_json TEXT NOT NULL DEFAULT '[]'");
+        }
+        if (!chapterAnnotationLineIdsPresent) {
+          this.run("ALTER TABLE chapter_annotations ADD COLUMN anchor_line_ids_json TEXT NOT NULL DEFAULT '[]'");
+        }
+        const chapters = this.all<{ id: string; content: string; line_ids_json: string }>(
+          "SELECT id, content, line_ids_json FROM chapters"
+        );
+        for (const chapter of chapters) {
+          const existingLineIds = parseChapterLineIds(chapter.line_ids_json, chapter.content);
+          const lineIds = existingLineIds.length > 0
+            ? existingLineIds
+            : createChapterLineIds(chapter.content, () => id("chapterLine"));
+          this.run("UPDATE chapters SET line_ids_json = ? WHERE id = ?", JSON.stringify(lineIds), chapter.id);
+          const annotations = this.all<{ id: string; start_line: number; end_line: number }>(
+            "SELECT id, start_line, end_line FROM chapter_annotations WHERE chapter_id = ?",
+            chapter.id
+          );
+          for (const annotation of annotations) {
+            const startIndex = Math.max(0, Math.min(lineIds.length - 1, Number(annotation.start_line) - 1));
+            const endIndex = Math.max(startIndex, Math.min(lineIds.length - 1, Number(annotation.end_line) - 1));
+            this.run(
+              "UPDATE chapter_annotations SET anchor_line_ids_json = ? WHERE id = ?",
+              JSON.stringify(lineIds.slice(startIndex, endIndex + 1)),
+              annotation.id
+            );
+          }
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (124, ?)", new Date().toISOString());
+      });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
         throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);

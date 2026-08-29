@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import { shouldRenderGalaxyLabel } from "./galaxy-visibility.js";
 
 type RelationKind = "亲属" | "社交" | "情感" | "冲突";
@@ -21,6 +22,18 @@ type StoryEdge = {
   kind: RelationKind;
   label: string;
   evidence: string;
+};
+
+type DesktopDownload = {
+  label: string;
+  detail: string;
+  href: string;
+};
+
+type DesktopPlatform = {
+  name: string;
+  description: string;
+  downloads: DesktopDownload[];
 };
 
 const storyNodes: StoryNode[] = [
@@ -74,7 +87,38 @@ const latestCapabilities = [
   ["N4", "加密 S3 系统备份", "将数据库和图片增量备份到多个 S3 目标；支持本机加密、定时执行、留存与运行记录。"],
 ];
 
-const sectionIds = new Set(["top", "workspace", "abilities", "relationships", "galaxy"]);
+const desktopRepositoryUrl = "https://github.com/musnows/scriverse-desktop";
+const mobileRepositoryUrl = "https://github.com/musnows/scriverse-app";
+const desktopReleaseVersion = "v0.1.9";
+
+const desktopPlatforms: DesktopPlatform[] = [
+  {
+    name: "macOS",
+    description: "DMG 安装包",
+    downloads: [
+      { label: "Apple 芯片", detail: "ARM64 · DMG", href: "https://github.com/musnows/scriverse-desktop/releases/download/v0.1.9/scriverse-desktop-darwin-arm64-0.1.9.dmg" },
+      { label: "Intel 芯片", detail: "x64 · DMG", href: "https://github.com/musnows/scriverse-desktop/releases/download/v0.1.9/scriverse-desktop-darwin-x64-0.1.9.dmg" },
+    ],
+  },
+  {
+    name: "Windows",
+    description: "Setup 安装程序",
+    downloads: [
+      { label: "x64", detail: "Intel / AMD · EXE", href: "https://github.com/musnows/scriverse-desktop/releases/download/v0.1.9/scriverse-desktop-win32-x64-0.1.9-Setup.exe" },
+      { label: "ARM64", detail: "Windows on ARM · EXE", href: "https://github.com/musnows/scriverse-desktop/releases/download/v0.1.9/scriverse-desktop-win32-arm64-0.1.9-Setup.exe" },
+    ],
+  },
+  {
+    name: "Linux",
+    description: "Debian / Ubuntu 安装包",
+    downloads: [
+      { label: "x64", detail: "amd64 · DEB", href: "https://github.com/musnows/scriverse-desktop/releases/download/v0.1.9/scriverse-desktop_0.1.9_amd64.deb" },
+      { label: "ARM64", detail: "arm64 · DEB", href: "https://github.com/musnows/scriverse-desktop/releases/download/v0.1.9/scriverse-desktop_0.1.9_arm64.deb" },
+    ],
+  },
+];
+
+const sectionIds = new Set(["top", "workspace", "abilities", "relationships", "galaxy", "downloads"]);
 
 function scrollToSection(id: string, behavior: ScrollBehavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth") {
   document.getElementById(id)?.scrollIntoView({ behavior, block: "start" });
@@ -97,7 +141,7 @@ function ScrollLink({ children, className, targetId, ariaLabel }: { children: Re
 function Brand() {
   return (
     <ScrollLink className="brand" targetId="top" ariaLabel="叙界首页">
-      <span className="brand-mark">叙</span>
+      <span className="brand-mark"><Image src="/favicon.svg" alt="" width={36} height={36} /></span>
       <span><strong>叙界</strong><small>SCRIVERSE</small></span>
     </ScrollLink>
   );
@@ -538,7 +582,7 @@ export default function Home() {
     <main id="top">
       <header className="site-header">
         <Brand />
-        <nav aria-label="主导航"><ScrollLink targetId="workspace">工作台</ScrollLink><ScrollLink targetId="abilities">能力</ScrollLink><ScrollLink targetId="relationships">关系图</ScrollLink><ScrollLink targetId="galaxy">银河图</ScrollLink></nav>
+        <nav aria-label="主导航"><ScrollLink targetId="workspace">工作台</ScrollLink><ScrollLink targetId="abilities">能力</ScrollLink><ScrollLink targetId="relationships">关系图</ScrollLink><ScrollLink targetId="galaxy">银河图</ScrollLink><ScrollLink targetId="downloads">下载</ScrollLink></nav>
         <div className="header-actions">
           <a className="header-cta" href="https://showcase.scriverse.top/">在线体验 <span>↗</span></a>
           <a
@@ -647,11 +691,48 @@ export default function Home() {
         <div className="access-card"><header><span>作品协作</span><small>《烬城来信》</small></header><div className="member"><i>陆</i><span><strong>陆离</strong><small>作品所有者</small></span><b>可管理</b></div><div className="member"><i>姚</i><span><strong>姚青</strong><small>联合作者</small></span><b>可编辑</b></div><div className="member"><i>沈</i><span><strong>沈越</strong><small>设定顾问</small></span><b>只读</b></div><footer><span>所有修改均记录操作者</span><button type="button">邀请协作</button></footer></div>
       </section>
 
+      <section className="section platform-section" id="downloads" aria-labelledby="downloads-title">
+        <div className="section-heading split-heading"><div><span className="eyebrow">CHOOSE YOUR PLATFORM</span><h2 id="downloads-title">把叙界带到<br />你的创作现场。</h2></div><p>桌面端提供 macOS、Windows 与 Linux 的原生安装包。移动端源码也在持续开放，按你的设备选择合适的入口。</p></div>
+        <div className="platform-grid">
+          <article className="desktop-download-card">
+            <header>
+              <div><span className="platform-card-label">SCRIVERSE DESKTOP</span><h3>叙界桌面端</h3><p>当前正式版 {desktopReleaseVersion}</p></div>
+              <a href={desktopRepositoryUrl} target="_blank" rel="noreferrer">桌面端仓库 <span>↗</span></a>
+            </header>
+            <div className="desktop-platform-list">
+              {desktopPlatforms.map((platform) => (
+                <section className="desktop-platform" key={platform.name} aria-label={`${platform.name} 下载`}>
+                  <div><h4>{platform.name}</h4><p>{platform.description}</p></div>
+                  <ul>
+                    {platform.downloads.map((download) => (
+                      <li key={download.href}>
+                        <a href={download.href}>
+                          <span><strong>{download.label}</strong><small>{download.detail}</small></span>
+                          <b>下载 <i>→</i></b>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
+            <footer><span>需要 RPM、ZIP 或其他发布文件？</span><a href={`${desktopRepositoryUrl}/releases/tag/${desktopReleaseVersion}`} target="_blank" rel="noreferrer">查看完整发布页 <span>↗</span></a></footer>
+          </article>
+          <article className="mobile-repository-card">
+            <span className="platform-card-label">SCRIVERSE APP</span>
+            <h3>叙界移动端</h3>
+            <p>查看移动端的开发进展、源码与后续发布信息。</p>
+            <a className="mobile-repository-link" href={mobileRepositoryUrl} target="_blank" rel="noreferrer">前往移动端仓库 <span>↗</span></a>
+            <small>GitHub · musnows/scriverse-app</small>
+          </article>
+        </div>
+      </section>
+
       <section className="final-cta">
         <span className="eyebrow">YOUR STORY, IN YOUR HANDS</span>
         <h2>世界由你创造，<br />秩序交给叙界。</h2>
         <p>为复杂、漫长、值得被认真对待的故事而生。</p>
-        <a href="https://github.com/musnows/Scriverse" target="_blank" rel="noreferrer">开始构建你的叙事世界 <span>↗</span></a>
+        <ScrollLink className="final-cta-action" targetId="downloads">选择你的下载版本 <span>↓</span></ScrollLink>
       </section>
 
       <footer className="site-footer"><Brand /><p>面向长篇小说创作的本地 AI 工作台</p><span>SCRIVERSE · 叙事有界，想象无边</span></footer>

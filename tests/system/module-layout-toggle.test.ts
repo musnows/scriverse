@@ -29,6 +29,8 @@ describe("知识模块布局切换", () => {
     expect(page.text).toContain('&feature=assistant-responsive-navigation-v3')
     expect(page.text).toContain('&feature=annotation-permissions-v1')
     expect(page.text).toContain('&feature=annotation-line-counts-v1')
+    expect(page.text).toContain('&feature=ai-write-tools-v2')
+    expect(page.text).toContain('&feature=ai-write-tools-v3')
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -80,11 +82,12 @@ expect(application.text).toContain('/display-labels.js?v=20260816-character-gend
     expect(page.text).toContain('id="character-editor-edit"');
     expect(page.text).toContain('id="knowledge-editor-edit"');
     expect(page.text).toContain('id="chapter-edit-button"');
-    expect(page.text).toContain('id="chapter-delete-button"');
+    expect(page.text).not.toContain('id="chapter-delete-button"');
     expect(page.text).toContain(">编辑</button>");
     expect(application.text).toContain("function applyChapterEditorMode()");
     expect(application.text).toContain("function enterChapterEditMode()");
-    expect(application.text).toContain('$("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);');
+    expect(application.text).toContain("function toggleChapterEditPreviewMode()");
+    expect(application.text).toContain('editButton.textContent = chapterEditorReadOnly ? "编辑" : "预览";');
     expect(application.text).toContain("let chapterEditorReadOnly = true");
     expect(application.text).toContain("async function selectChapter(chapterId, { editMode = false } = {})");
     expect(application.text).toContain("await selectChapter(chapter.id, { editMode: true })");
