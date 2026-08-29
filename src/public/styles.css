@@ -2999,7 +2999,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-actions { display: flex; gap: 7px; margin-top: 10px; }
 .message-actions button { border: 1px solid rgba(139,61,44,.25); background: var(--surface); color: var(--accent-dark); font-size: 10px; padding: 5px 8px; border-radius: 3px; }
 .prompt-box { border-top: 1px solid var(--line); padding-top: 12px; }
-.ai-semantic-search-panel { display: grid; max-height: min(520px, 58vh); margin-bottom: 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 12px 30px rgba(49,42,32,.12); }
+.ai-semantic-search-panel { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; min-height: 0; height: min(520px, 58vh); max-height: min(520px, 58vh); margin-bottom: 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 12px 30px rgba(49,42,32,.12); }
 .ai-semantic-search-panel > header, .ai-semantic-search-panel > footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border-bottom: 1px solid var(--line); }
 .ai-semantic-search-panel > header > div { display: grid; min-width: 0; gap: 2px; }
 .ai-semantic-search-panel > header strong { font-size: 11px; }
@@ -3009,7 +3009,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-semantic-search-form label { display: grid; gap: 4px; color: var(--muted); font-size: 9px; }
 .ai-semantic-search-form button { grid-column: 1 / -1; }
 #ai-semantic-search-status { margin: 0; padding: 0 10px 8px; }
-.ai-semantic-search-results { display: grid; gap: 6px; min-height: 0; padding: 0 10px 10px; overflow-y: auto; }
+.ai-semantic-search-results { display: grid; align-content: start; gap: 6px; min-height: 0; padding: 0 10px 10px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; -webkit-overflow-scrolling: touch; }
 .ai-semantic-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 7px; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
 .ai-semantic-result > label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 7px; min-width: 0; cursor: pointer; }
 .ai-semantic-result-copy { display: grid; min-width: 0; gap: 4px; }
@@ -3019,15 +3019,17 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-semantic-result > button { min-height: 25px; padding: 4px 7px; font-size: 8px; }
 .ai-semantic-view-only { padding: 2px 5px; border-radius: 3px; background: var(--paper-deep); color: var(--muted); font-size: 8px; white-space: nowrap; }
 .ai-semantic-empty { margin: 0; padding: 14px; color: var(--muted); font-size: 9px; text-align: center; }
-.ai-semantic-search-panel > footer { border-top: 1px solid var(--line); border-bottom: 0; }
+.ai-semantic-search-panel > footer { position: relative; z-index: 1; min-width: 0; border-top: 1px solid var(--line); border-bottom: 0; background: var(--surface); }
 .ai-semantic-injection { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; padding: 7px 8px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 .ai-semantic-injection > div { display: grid; min-width: 0; gap: 2px; }
 .ai-semantic-injection strong { color: var(--accent-dark); font-size: 9px; }
 .ai-semantic-injection span, .ai-semantic-injection small { overflow: hidden; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .ai-semantic-injection button { width: 23px; min-width: 23px; height: 23px; padding: 0; }
 @container (max-width: 460px) {
-  .ai-semantic-search-panel { max-height: 40vh; }
-  .ai-semantic-search-form { grid-template-columns: minmax(0, 1fr); }
+  .ai-semantic-search-panel { height: 40vh; max-height: 40vh; }
+  .ai-semantic-search-form { grid-template-columns: minmax(0, 1fr) minmax(112px, .48fr); }
+  .ai-semantic-search-form label:first-child { grid-column: 1 / -1; }
+  .ai-semantic-search-form button { grid-column: 2; align-self: end; }
   .ai-semantic-result { grid-template-columns: minmax(0, 1fr); }
   .ai-semantic-result > button { justify-self: end; }
 }

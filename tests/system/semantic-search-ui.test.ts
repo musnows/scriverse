@@ -18,7 +18,7 @@ describe("主动语义检索界面", () => {
     expect(page).toContain("只在点击检索后调用 embedding；结果默认仅查看");
     expect(page).toContain('id="ai-semantic-inject"');
     expect(page).toContain('id="ai-semantic-injection"');
-    expect(page).toContain("feature=semantic-search-v5");
+    expect(page).toContain("feature=semantic-search-v6");
 
     expect(application).toContain("这是一个 embedding 模型");
     expect(application).toContain("这是一个 rerank 模型");
@@ -42,5 +42,30 @@ describe("主动语义检索界面", () => {
     expect(styles).toContain(".ai-semantic-result { display: grid;");
     expect(styles).toContain("@container (max-width: 460px)");
     expect(styles).toContain(".usage-call-type-chip");
+  });
+
+  it("锁定 390×844 与 1280×720 的结果滚动和 footer 可达契约", async () => {
+    const publicPath = join(process.cwd(), "src", "public");
+    const [page, styles] = await Promise.all([
+      readFile(join(publicPath, "index.html"), "utf8"),
+      readFile(join(publicPath, "styles.css"), "utf8")
+    ]);
+    const requiredViewports = [
+      { width: 390, height: 844 },
+      { width: 1280, height: 720 }
+    ];
+
+    expect(requiredViewports).toEqual([
+      { width: 390, height: 844 },
+      { width: 1280, height: 720 }
+    ]);
+    expect(page).toContain('id="ai-semantic-search-results" class="ai-semantic-search-results" tabindex="0" aria-label="语义检索结果，可滚动"');
+    expect(styles).toContain("grid-template-rows: auto auto auto minmax(0, 1fr) auto;");
+    expect(styles).toContain(".ai-semantic-search-results { display: grid; align-content: start; gap: 6px; min-height: 0;");
+    expect(styles).toContain("overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable;");
+    expect(styles).toContain(".ai-semantic-search-panel > footer { position: relative; z-index: 1; min-width: 0;");
+    expect(styles).toContain(".ai-semantic-search-panel { height: 40vh; max-height: 40vh; }");
+    expect(styles).toContain(".ai-semantic-search-form label:first-child { grid-column: 1 / -1; }");
+    expect(styles).toContain(".ai-semantic-search-form button { grid-column: 2; align-self: end; }");
   });
 });
