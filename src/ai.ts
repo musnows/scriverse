@@ -2675,17 +2675,17 @@ export class ContextBuilder {
         merged.push({ ...item });
       }
       if (merged.length > 0) {
-        contentSections.push(wrapAiContextRegion(
-          "semantic",
-          [
-            `用户主动语义检索快照（查询：${String(snapshot.query)}；快照 ID：${String(snapshot.id)}）：`,
-            "以下均为可追溯原文，不得用摘要替代或改写权威状态。",
-            ...merged.map((item) => [
+        for (const item of merged) {
+          contentSections.push(wrapAiContextRegion(
+            "semantic",
+            [
+              `用户主动语义检索快照（查询：${String(snapshot.query)}；快照 ID：${String(snapshot.id)}）：`,
+              "以下均为可追溯原文，不得用摘要替代或改写权威状态。",
               `[${String(item.sourceType)}:${String(item.sourceId)}${item.sectionId ? ` / section:${String(item.sectionId)}` : ""} | 版本 ${String(item.sourceVersion)} | 行 ${Number(item.startLine)}-${Number(item.endLine)}] ${String(item.sourceTitle)}`,
               String(item.content)
-            ].join("\n"))
-          ].join("\n\n")
-        ));
+            ].join("\n\n")
+          ));
+        }
       }
     }
 
@@ -2805,7 +2805,7 @@ export class ContextBuilder {
     }
     const sections: ContextSection[] = contentSections.map((text, order) => {
       const required = /^(?:<(?:selection|referenced_chapters|settings_analysis)>|<chapter>\n(?:当前章节|所在章节)|当前选中文本|当前章节|所在章节|作者主动引用的章节|待分析设定)/u.test(text);
-      const summary = /<book_summary>|章节概要（/u.test(text);
+      const summary = /<book_summary>|<semantic>|章节概要（/u.test(text);
       return {
         id: `context-${order}`,
         text,
@@ -12229,7 +12229,7 @@ export class AiManager {
       enabled: settings.semanticSearchEnabled === true,
       status,
       ready: status === "ready" && indexedChunkCount > 0,
-      progress: totalSources > 0 ? Math.min(100, Math.round((processedSources + Number(row?.failed_sources ?? 0)) / totalSources * 100)) : 0,
+      progress: status === "ready" ? 100 : totalSources > 0 ? Math.min(100, Math.round((processedSources + Number(row?.failed_sources ?? 0)) / totalSources * 100)) : 0,
       totalSources,
       processedSources,
       failedSources: Number(row?.failed_sources ?? 0),
@@ -12406,18 +12406,20 @@ export class AiManager {
 
   private completeSemanticAiCall(callId: string, usage: unknown, inputCharacters: number, outputCharacters = 0): void {
     const resolved = resolveAiTokenUsage(usage, Math.ceil(inputCharacters / 3), Math.ceil(outputCharacters / 3));
+    const inputTokens = resolved.inputTokens > 0 ? resolved.inputTokens : Math.max(1, Math.ceil(inputCharacters / 3));
+    const usageSource = resolved.inputTokens > 0 ? resolved.source : "estimated";
     this.store.db.run(
       `UPDATE ai_calls SET status = 'completed', output_chars = ?, input_tokens = ?, output_tokens = ?,
        cached_input_tokens = ?, cache_write_input_tokens = ?, cache_eligible_input_tokens = ?,
        cache_usage_available = ?, token_usage_source = ?, completed_at = ? WHERE id = ?`,
       outputCharacters,
-      resolved.inputTokens,
+      inputTokens,
       resolved.outputTokens,
       resolved.cachedInputTokens,
       resolved.cacheWriteInputTokens,
       resolved.cacheEligibleInputTokens,
       resolved.cacheEligibleInputTokens > 0 ? 1 : 0,
-      resolved.source,
+      usageSource,
       now(),
       callId
     );
@@ -12910,7 +12912,10 @@ export class AiManager {
     );
     if (!rerankError) {
       this.store.db.run(
-        "UPDATE semantic_index_state SET consecutive_failures = 0, error = '', status = 'ready', updated_at = ? WHERE work_id = ? AND status <> 'building'",
+        `UPDATE semantic_index_state SET consecutive_failures = 0,
+         error = CASE WHEN failed_sources > 0 THEN error ELSE '' END,
+         status = CASE WHEN failed_sources > 0 THEN 'failed' ELSE 'ready' END,
+         updated_at = ? WHERE work_id = ? AND status <> 'building'`,
         now(),
         workId
       );
@@ -14025,7 +14030,7 @@ export class AiManager {
         const item = this.store.getSetting(sourceId);
         if (String(item.workId) !== workId) return null;
         return source(String(item.title), {
-          category: item.category, content: item.content, tags: item.tags, status: item.status, authorNote: item.authorNote
+          category: item.category, content: item.content, tags: item.tags, status: item.status, locked: item.locked, authorNote: item.authorNote
         }, item.versionNo ?? item.updatedAt);
       }
       if (sourceType === "character") {

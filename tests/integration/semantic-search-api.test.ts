@@ -30,7 +30,7 @@ describe("主动语义检索 API", () => {
                 : value.includes("南城") ? [0, 1, 0]
                   : [0, 0, 1]
           })),
-          usage: { prompt_tokens: values.length * 3, total_tokens: values.length * 3 }
+          usage: { prompt_tokens: 0, total_tokens: 0 }
         }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       if (url.endsWith("/chat/completions")) {
@@ -143,6 +143,14 @@ describe("主动语义检索 API", () => {
     }, 10_000);
     expect(context.context).toContain("用户主动语义检索快照");
     expect(context.context).toContain(String(selected.snippet));
+    const tightContext = new ContextBuilder(runtime.store).buildPlan(workId, {
+      type: "none",
+      semanticSnapshotId: snapshot.body.data.id
+    }, 120);
+    expect(tightContext.degradedBlockIds).toEqual([]);
+    if (tightContext.context.includes("用户主动语义检索快照")) {
+      expect(tightContext.context).toContain(String(selected.snippet));
+    }
 
     const embeddingCalls = runtime.database.get(
       "SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ? AND task_type = 'embedding'",
@@ -154,6 +162,10 @@ describe("主动语义检索 API", () => {
     );
     expect(Number(embeddingCalls?.count)).toBeGreaterThan(1);
     expect(Number(rerankCalls?.count)).toBeGreaterThan(0);
+    expect(Number(runtime.database.get(
+      "SELECT MIN(input_tokens) AS minimum FROM ai_calls WHERE work_id = ? AND task_type = 'embedding'",
+      workId
+    )?.minimum)).toBeGreaterThan(0);
 
     runtime.store.updateWorkAiSettings(workId, {
       agentTools: [...runtime.store.getWorkAiSettings(workId).agentTools as string[], "semantic_search_story"]
