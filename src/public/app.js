@@ -1530,6 +1530,11 @@ let taskListPage = 1;
 let draftTypeFilter = "all";
 let draftBindingFilters = [];
 let draftFiltersPanelOpen = false;
+const chapterCommentFilters = { chapterId: "", keyword: "" };
+let chapterCommentFiltersPanelOpen = false;
+let chapterCommentChapterOptions = [];
+let chapterCommentSearchTimer = null;
+let chapterCommentRenderRequestId = 0;
 const moduleListPages = {
   drafts: 1,
   settings: 1,
@@ -8160,6 +8165,13 @@ function resetWorkScopedUiCaches() {
   draftTypeFilter = "all";
   draftBindingFilters = [];
   draftFiltersPanelOpen = false;
+  chapterCommentFilters.chapterId = "";
+  chapterCommentFilters.keyword = "";
+  chapterCommentFiltersPanelOpen = false;
+  chapterCommentChapterOptions = [];
+  clearTimeout(chapterCommentSearchTimer);
+  chapterCommentSearchTimer = null;
+  chapterCommentRenderRequestId += 1;
   settingFilters.keyword = "";
   settingFilters.category = "";
   settingFilters.lockState = "all";
@@ -10052,6 +10064,17 @@ function mountOutlineBoardFilterToggle() {
   });
 }
 
+function mountChapterCommentFilterToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="chapter-comment-filter-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="chapter-comment-filter-toggle" aria-label="筛选正文评论与待办" aria-controls="chapter-comment-filter-panel" aria-expanded="${chapterCommentFiltersPanelOpen}" title="筛选正文评论与待办"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  const toggle = $("#module-header-actions").querySelector('[data-module-header-action="chapter-comment-filter-toggle"]');
+  toggle?.addEventListener("click", () => {
+    chapterCommentFiltersPanelOpen = !chapterCommentFiltersPanelOpen;
+    $("#chapter-comment-filter-panel")?.classList.toggle("hidden", !chapterCommentFiltersPanelOpen);
+    toggle.setAttribute("aria-expanded", String(chapterCommentFiltersPanelOpen));
+  });
+}
+
 function bindRecordPreview(selector, open) {
   $("#module-content").querySelectorAll(selector).forEach((card) => {
     const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization ?? card.dataset.openReview;
@@ -11302,32 +11325,102 @@ async function renderRelationships(page = moduleListPages.relationships) {
 }
 
 async function renderWorkChapterComments(page = moduleListPages.comments) {
-  const pageSize = pageSizeFor("comments");
-  const result = await moduleApiPage(
-    "comments",
-    `/api/works/${encodeURIComponent(state.work.id)}/chapter-annotations`,
-    page,
-    pageSize
-  );
-  if (!result.items.length && page > 1) return renderWorkChapterComments(page - 1);
-  const total = Number(result.total ?? result.items.length);
-  const pageCount = Math.max(1, Math.ceil(total / result.limit));
-  const pageResult = { ...result, total, pageCount, itemCount: result.items.length };
-  moduleListPages.comments = pageResult.page;
-  mountModuleCount(total);
-  $("#module-content").innerHTML = result.items.length
-    ? `<div class="chapter-comment-module-list">${result.items.map((annotation) => chapterAnnotationCard(annotation, { showSource: true })).join("")}</div>${renderModulePagination(pageResult, "comments", "正文评论与待办列表")}`
-    : emptyModule("还没有正文评论或待办", "在任一正文行上点击右键，即可添加评论或待办。");
-  bindModulePagination("comments", renderWorkChapterComments);
-  bindChapterAnnotationCards($("#module-content"), result.items, {
-    refresh: () => renderWorkChapterComments(pageResult.page),
-    locate: async (annotation) => {
-      const selected = await selectChapter(annotation.chapterId);
-      if (!selected || String(state.chapter?.id ?? "") !== String(annotation.chapterId)) return;
-      await new Promise((resolve) => window.requestAnimationFrame(resolve));
-      revealChapterLines(annotation.startLine, annotation.endLine);
+  const workId = state.work.id;
+  const generation = workScopedUiGeneration;
+  const hasFilters = () => Boolean(chapterCommentFilters.chapterId || chapterCommentFilters.keyword.trim());
+  const chapterOptionsMarkup = () => `<option value="">全部章节</option>${chapterCommentChapterOptions.map((chapter) => `<option value="${esc(chapter.id)}" ${chapterCommentFilters.chapterId === chapter.id ? "selected" : ""}>${esc(chapter.volumeTitle)} / ${esc(chapter.title)}</option>`).join("")}`;
+  const filterToolbar = `<section id="chapter-comment-filter-panel" class="character-filter-toolbar chapter-comment-filter-toolbar${chapterCommentFiltersPanelOpen ? "" : " hidden"}" aria-label="正文评论与待办筛选">
+    <label class="setting-filter-field" for="chapter-comment-chapter-filter"><span>按章节筛选</span><select id="chapter-comment-chapter-filter" aria-label="按章节筛选正文评论与待办">${chapterOptionsMarkup()}</select></label>
+    <label class="setting-filter-field" for="chapter-comment-keyword-filter"><span>按关键词搜索</span><input id="chapter-comment-keyword-filter" type="search" value="${esc(chapterCommentFilters.keyword)}" placeholder="搜索评论、待办或引用正文" aria-label="按关键词搜索正文评论与待办" autocomplete="off" maxlength="100"></label>
+    <div class="character-filter-toolbar-actions"><span id="chapter-comment-filter-result-count" class="character-filter-result-count${hasFilters() ? "" : " hidden"}" role="status" aria-live="polite"></span><button id="clear-chapter-comment-filters" class="ghost-button" type="button" ${hasFilters() ? "" : "disabled"}>重置筛选</button></div>
+  </section><div id="chapter-comment-filter-results"></div>`;
+  $("#module-content").innerHTML = filterToolbar;
+  mountChapterCommentFilterToggle();
+
+  const refreshResults = async (requestedPage = moduleListPages.comments) => {
+    const requestId = ++chapterCommentRenderRequestId;
+    const pageSize = pageSizeFor("comments");
+    const parameters = new URLSearchParams();
+    if (chapterCommentFilters.chapterId) parameters.set("chapterId", chapterCommentFilters.chapterId);
+    if (chapterCommentFilters.keyword.trim()) parameters.set("q", chapterCommentFilters.keyword.trim());
+    const path = `/api/works/${encodeURIComponent(workId)}/chapter-annotations${parameters.size ? `?${parameters}` : ""}`;
+    $("#chapter-comment-filter-results")?.setAttribute("aria-busy", "true");
+    let result;
+    try {
+      result = await moduleApiPage("comments", path, requestedPage, pageSize);
+    } finally {
+      if (requestId === chapterCommentRenderRequestId) $("#chapter-comment-filter-results")?.removeAttribute("aria-busy");
     }
+    if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== chapterCommentRenderRequestId || state.module !== "comments") return;
+    chapterCommentChapterOptions = Array.isArray(result.chapterOptions) ? result.chapterOptions : [];
+    if (chapterCommentFilters.chapterId && !chapterCommentChapterOptions.some((chapter) => chapter.id === chapterCommentFilters.chapterId)) {
+      chapterCommentFilters.chapterId = "";
+      $("#chapter-comment-chapter-filter").innerHTML = chapterOptionsMarkup();
+      return refreshResults(1);
+    }
+    $("#chapter-comment-chapter-filter").innerHTML = chapterOptionsMarkup();
+    if (!result.items.length && requestedPage > 1) return refreshResults(requestedPage - 1);
+    const total = Number(result.total ?? result.items.length);
+    const pageCount = Math.max(1, Math.ceil(total / result.limit));
+    const pageResult = { ...result, total, pageCount, itemCount: result.items.length };
+    moduleListPages.comments = pageResult.page;
+    mountModuleCount(total);
+    const completedTodos = result.items.filter((annotation) => annotation.kind === "todo" && annotation.status === "resolved");
+    const visibleAnnotations = result.items.filter((annotation) => annotation.kind !== "todo" || annotation.status !== "resolved");
+    const visibleMarkup = visibleAnnotations.map((annotation) => chapterAnnotationCard(annotation, { showSource: true })).join("");
+    const completedMarkup = completedTodos.length ? `<details class="chapter-comment-completed-group"><summary><span>已完成待办</span><strong>${completedTodos.length}</strong><small>默认折叠，点击展开</small></summary><div class="chapter-comment-completed-list">${completedTodos.map((annotation) => chapterAnnotationCard(annotation, { showSource: true })).join("")}</div></details>` : "";
+    const filtersActive = hasFilters();
+    $("#chapter-comment-filter-results").innerHTML = result.items.length
+      ? `<div class="chapter-comment-module-list">${visibleMarkup}${completedMarkup}</div>${renderModulePagination(pageResult, "comments", "正文评论与待办列表")}`
+      : chapterCommentChapterOptions.length
+        ? emptyModule("没有符合筛选条件的评论或待办", "可以切换章节、修改关键词或重置筛选。")
+        : emptyModule("还没有正文评论或待办", "在任一正文行上点击右键，即可添加评论或待办。");
+    const resultCount = $("#chapter-comment-filter-result-count");
+    resultCount.textContent = filtersActive ? `筛选后共 ${total} 条评论与待办` : "";
+    resultCount.classList.toggle("hidden", !filtersActive);
+    $("#clear-chapter-comment-filters").disabled = !filtersActive;
+    bindModulePagination("comments", refreshResults);
+    bindChapterAnnotationCards($("#chapter-comment-filter-results"), result.items, {
+      refresh: () => refreshResults(pageResult.page),
+      locate: async (annotation) => {
+        const selected = await selectChapter(annotation.chapterId);
+        if (!selected || String(state.chapter?.id ?? "") !== String(annotation.chapterId)) return;
+        await new Promise((resolve) => window.requestAnimationFrame(resolve));
+        revealChapterLines(annotation.startLine, annotation.endLine);
+      }
+    });
+  };
+
+  $("#chapter-comment-chapter-filter").addEventListener("change", (event) => {
+    chapterCommentFilters.chapterId = event.currentTarget.value;
+    chapterCommentFiltersPanelOpen = true;
+    moduleListPages.comments = 1;
+    clearTimeout(chapterCommentSearchTimer);
+    chapterCommentSearchTimer = null;
+    void refreshResults(1).catch((error) => toast(error.message, "error"));
   });
+  $("#chapter-comment-keyword-filter").addEventListener("input", (event) => {
+    chapterCommentFilters.keyword = event.currentTarget.value;
+    chapterCommentFiltersPanelOpen = true;
+    moduleListPages.comments = 1;
+    clearTimeout(chapterCommentSearchTimer);
+    chapterCommentSearchTimer = window.setTimeout(() => {
+      chapterCommentSearchTimer = null;
+      void refreshResults(1).catch((error) => toast(error.message, "error"));
+    }, 250);
+  });
+  $("#clear-chapter-comment-filters").addEventListener("click", () => {
+    chapterCommentFilters.chapterId = "";
+    chapterCommentFilters.keyword = "";
+    chapterCommentFiltersPanelOpen = true;
+    moduleListPages.comments = 1;
+    clearTimeout(chapterCommentSearchTimer);
+    chapterCommentSearchTimer = null;
+    $("#chapter-comment-chapter-filter").value = "";
+    $("#chapter-comment-keyword-filter").value = "";
+    void refreshResults(1).then(() => $("#chapter-comment-keyword-filter")?.focus()).catch((error) => toast(error.message, "error"));
+  });
+  await refreshResults(page);
 }
 
 async function renderReviews(page = moduleListPages.reviews) {

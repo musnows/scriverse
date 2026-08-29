@@ -108,7 +108,46 @@ function recycleBinExpiresAt(deletedAt: string): string {
 
 type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ChapterAnnotationKind = "note" | "todo";
+type ChapterAnnotationListFilters = {
+  chapterId?: string;
+  query?: string;
+};
 type ImportMode = "append" | "overwrite";
+
+function chapterAnnotationListFilter(
+  kinds?: readonly ChapterAnnotationKind[],
+  filters: ChapterAnnotationListFilters = {}
+): { sql: string; params: string[] } {
+  const where: string[] = [];
+  const params: string[] = [];
+  if (kinds !== undefined) {
+    if (kinds.length > 0) {
+      where.push(`annotation.kind IN (${kinds.map(() => "?").join(",")})`);
+      params.push(...kinds);
+    } else {
+      where.push("1 = 0");
+    }
+  }
+  if (filters.chapterId) {
+    where.push("annotation.chapter_id = ?");
+    params.push(filters.chapterId);
+  }
+  const normalizedQuery = filters.query?.normalize("NFKC").trim().slice(0, 100) ?? "";
+  if (normalizedQuery) {
+    const pattern = `%${escapeSqlLikePattern(normalizedQuery)}%`;
+    where.push(`(
+      annotation.note LIKE ? ESCAPE '\\' COLLATE NOCASE
+      OR annotation.quote LIKE ? ESCAPE '\\' COLLATE NOCASE
+      OR chapter.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+      OR volume.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+    )`);
+    params.push(pattern, pattern, pattern, pattern);
+  }
+  return {
+    sql: where.map((clause) => ` AND ${clause}`).join(""),
+    params
+  };
+}
 
 type VolumeInput = {
   title: string;
@@ -3859,13 +3898,13 @@ export class Store {
     ).map((row) => ({ line: Number(row.line), count: Number(row.count) }));
   }
 
-  listWorkChapterAnnotations(workId: string, kinds?: readonly ChapterAnnotationKind[]): Record<string, unknown>[] {
+  listWorkChapterAnnotations(
+    workId: string,
+    kinds?: readonly ChapterAnnotationKind[],
+    filters: ChapterAnnotationListFilters = {}
+  ): Record<string, unknown>[] {
     this.getWork(workId);
-    const kindFilter = kinds === undefined
-      ? { sql: "", params: [] as string[] }
-      : kinds.length > 0
-        ? { sql: ` AND annotation.kind IN (${kinds.map(() => "?").join(",")})`, params: [...kinds] }
-        : { sql: " AND 1 = 0", params: [] as string[] };
+    const filter = chapterAnnotationListFilter(kinds, filters);
     return this.db.all(
       `SELECT annotation.*, user.display_name AS actor_display_name, user.username AS actor_username,
         chapter.title AS chapter_title, volume.title AS volume_title
@@ -3873,12 +3912,16 @@ export class Store {
        JOIN chapters chapter ON chapter.id = annotation.chapter_id
        JOIN volumes volume ON volume.id = chapter.volume_id
        LEFT JOIN users user ON user.id = annotation.updated_by_user_id
-       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL${kindFilter.sql}
-       ORDER BY CASE annotation.status WHEN 'open' THEN 0 ELSE 1 END,
+       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL${filter.sql}
+       ORDER BY CASE
+         WHEN annotation.kind = 'todo' AND annotation.status = 'resolved' THEN 2
+         WHEN annotation.status = 'open' THEN 0
+         ELSE 1
+       END,
          volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at,
          annotation.start_line, annotation.created_at`,
       workId,
-      ...kindFilter.params
+      ...filter.params
     ).map((row) => ({
       ...this.mapChapterAnnotation(row),
       volumeTitle: requiredString(row, "volume_title"),
@@ -3886,14 +3929,18 @@ export class Store {
     }));
   }
 
-  listWorkChapterAnnotationsPage(workId: string, pagination: Pagination, kinds?: readonly ChapterAnnotationKind[]): PaginatedResult<Record<string, unknown>> {
+  listWorkChapterAnnotationsPage(
+    workId: string,
+    pagination: Pagination,
+    kinds?: readonly ChapterAnnotationKind[],
+    filters: ChapterAnnotationListFilters = {}
+  ): PaginatedResult<Record<string, unknown>> & {
+    chapterOptions: Array<{ id: string; title: string; volumeTitle: string }>;
+  } {
     this.getWork(workId);
     const page = paginationSql(pagination);
-    const kindFilter = kinds === undefined
-      ? { sql: "", params: [] as string[] }
-      : kinds.length > 0
-        ? { sql: ` AND annotation.kind IN (${kinds.map(() => "?").join(",")})`, params: [...kinds] }
-        : { sql: " AND 1 = 0", params: [] as string[] };
+    const filter = chapterAnnotationListFilter(kinds, filters);
+    const optionFilter = chapterAnnotationListFilter(kinds);
     const rows = this.db.all(
       `SELECT annotation.*, user.display_name AS actor_display_name, user.username AS actor_username,
         chapter.title AS chapter_title, volume.title AS volume_title
@@ -3901,27 +3948,48 @@ export class Store {
        JOIN chapters chapter ON chapter.id = annotation.chapter_id
        JOIN volumes volume ON volume.id = chapter.volume_id
        LEFT JOIN users user ON user.id = annotation.updated_by_user_id
-       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL${kindFilter.sql}
-       ORDER BY CASE annotation.status WHEN 'open' THEN 0 ELSE 1 END,
+       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL${filter.sql}
+       ORDER BY CASE
+         WHEN annotation.kind = 'todo' AND annotation.status = 'resolved' THEN 2
+         WHEN annotation.status = 'open' THEN 0
+         ELSE 1
+       END,
          volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at,
          annotation.start_line, annotation.created_at${page.sql}`,
       workId,
-      ...kindFilter.params,
+      ...filter.params,
       ...page.params
     );
     const total = numberValue(this.db.get(
       `SELECT COUNT(*) AS count
        FROM chapter_annotations annotation
        JOIN chapters chapter ON chapter.id = annotation.chapter_id
-       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL${kindFilter.sql}`,
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL${filter.sql}`,
       workId,
-      ...kindFilter.params
+      ...filter.params
     ) ?? {}, "count");
-    return paginated(rows.map((row) => ({
+    const chapterOptions = this.db.all(
+      `SELECT DISTINCT chapter.id, chapter.title, volume.title AS volume_title,
+        volume.sort_order AS volume_sort_order, volume.created_at AS volume_created_at,
+        chapter.sort_order AS chapter_sort_order, chapter.created_at AS chapter_created_at
+       FROM chapter_annotations annotation
+       JOIN chapters chapter ON chapter.id = annotation.chapter_id
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL${optionFilter.sql}
+       ORDER BY volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at`,
+      workId,
+      ...optionFilter.params
+    ).map((row) => ({
+      id: requiredString(row, "id"),
+      title: requiredString(row, "title"),
+      volumeTitle: requiredString(row, "volume_title")
+    }));
+    return { ...paginated(rows.map((row) => ({
       ...this.mapChapterAnnotation(row),
       volumeTitle: requiredString(row, "volume_title"),
       chapterTitle: requiredString(row, "chapter_title")
-    })), pagination, total);
+    })), pagination, total), chapterOptions };
   }
 
   createChapterAnnotation(chapterId: string, input: { kind: "note" | "todo"; startLine: number; endLine: number; note: string }): Record<string, unknown> {

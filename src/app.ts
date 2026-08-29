@@ -2204,10 +2204,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/works/:workId/chapter-annotations", (request, response) => {
     const pagination = parsePagination(request.query);
+    const chapterId = request.query.chapterId === undefined ? undefined : parse(identifier, request.query.chapterId);
+    const query = request.query.q === undefined ? undefined : parse(z.string().trim().max(100), request.query.q);
+    const filters = { chapterId, query };
     const permissions = requestPermissions(request, String(request.params.workId));
     data(response, pagination
-      ? store.listWorkChapterAnnotationsPage(request.params.workId, pagination, readableChapterAnnotationKinds(permissions))
-      : store.listWorkChapterAnnotations(request.params.workId, readableChapterAnnotationKinds(permissions)));
+      ? store.listWorkChapterAnnotationsPage(request.params.workId, pagination, readableChapterAnnotationKinds(permissions), filters)
+      : store.listWorkChapterAnnotations(request.params.workId, readableChapterAnnotationKinds(permissions), filters));
   });
   app.post("/api/chapters/:chapterId/annotations", (request, response) => {
     const input = parse(z.object({

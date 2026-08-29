@@ -54,7 +54,7 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain("lineAnnotationCount");
     expect(application.text).toContain("?line=${encodeURIComponent(line)}");
     expect(application.text).toContain("async function renderWorkChapterComments(");
-    expect(application.text).toContain('/chapter-annotations`');
+    expect(application.text).toContain('/chapter-annotations${parameters.size ? `?${parameters}` : ""}`');
     expect(application.text).toContain('renderModulePagination(pageResult, "comments", "正文评论与待办列表")');
     expect(application.text).toContain('$("#chapter-content").addEventListener("contextmenu"');
     expect(application.text).toContain("value: annotation.note");

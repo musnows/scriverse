@@ -632,6 +632,81 @@ describe("作品、导入和章节版本 API", () => {
     expect(active.body.data).toEqual([expect.objectContaining({ chapterTitle: "第一章", status: "resolved" })]);
   });
 
+  it("按章节或关键词筛选评论并将已完成待办排在末尾", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "评论筛选作品" }).expect(201);
+    const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
+    const firstChapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "龙纹出现在门上"
+    }).expect(201);
+    const secondChapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第二章",
+      content: "战斗仍需补充"
+    }).expect(201);
+    const note = await request(runtime.app).post(`/api/chapters/${firstChapter.body.data.id}/annotations`).send({
+      kind: "note",
+      startLine: 1,
+      endLine: 1,
+      note: "核对龙纹伏笔"
+    }).expect(201);
+    const completedTodo = await request(runtime.app).post(`/api/chapters/${firstChapter.body.data.id}/annotations`).send({
+      kind: "todo",
+      startLine: 1,
+      endLine: 1,
+      note: "已处理的措辞"
+    }).expect(201);
+    await request(runtime.app).patch(`/api/chapter-annotations/${completedTodo.body.data.id}`).send({
+      status: "resolved",
+      expectedVersionNo: 1
+    }).expect(200);
+    const openTodo = await request(runtime.app).post(`/api/chapters/${secondChapter.body.data.id}/annotations`).send({
+      kind: "todo",
+      startLine: 1,
+      endLine: 1,
+      note: "补写战斗动作"
+    }).expect(201);
+
+    const all = await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=30`)
+      .expect(200);
+    expect(all.body.data.items.map((item: { id: string }) => item.id)).toEqual([
+      note.body.data.id,
+      openTodo.body.data.id,
+      completedTodo.body.data.id
+    ]);
+    expect(all.body.data.chapterOptions).toEqual([
+      { id: firstChapter.body.data.id, title: "第一章", volumeTitle: "第一卷" },
+      { id: secondChapter.body.data.id, title: "第二章", volumeTitle: "第一卷" }
+    ]);
+
+    const chapterFiltered = await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=30&chapterId=${firstChapter.body.data.id}`)
+      .expect(200);
+    expect(chapterFiltered.body.data).toMatchObject({ total: 2 });
+    expect(chapterFiltered.body.data.items.every((item: { chapterId: string }) => item.chapterId === firstChapter.body.data.id)).toBe(true);
+
+    const noteFiltered = await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=30&q=${encodeURIComponent("核对龙纹伏笔")}`)
+      .expect(200);
+    expect(noteFiltered.body.data.items.map((item: { id: string }) => item.id)).toEqual([note.body.data.id]);
+
+    const quoteFiltered = await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=30&q=${encodeURIComponent("战斗仍需补充")}`)
+      .expect(200);
+    expect(quoteFiltered.body.data.items.map((item: { id: string }) => item.id)).toEqual([openTodo.body.data.id]);
+
+    const literalWildcard = await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=30&q=${encodeURIComponent("%")}`)
+      .expect(200);
+    expect(literalWildcard.body.data).toMatchObject({ total: 0, items: [] });
+
+    await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=30&q=${"超".repeat(101)}`)
+      .expect(400);
+  });
+
   it("保存写作目标并从正文版本重建字数趋势", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "写作目标作品" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
