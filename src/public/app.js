@@ -4718,7 +4718,7 @@ async function persistAiRequestInterruption(request, interruption = null) {
   const cancelledByClient = request.signal.reason?.code === "AI_REQUEST_CANCELLED";
   const metadata = cancelledByClient
     ? {
-        ...(partialContent ? interruption.metadata : {}),
+        ...(interruption?.metadata ?? {}),
         interrupted: true,
         interruptionCode: "AI_REQUEST_CANCELLED",
         interruptionMessage: cancellationMessage.slice(0, 500)
@@ -18178,14 +18178,17 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   } catch (error) {
     const streamFailure = error instanceof Error ? error : new Error(String(error ?? "AI 流式调用失败"));
     const interruptionCode = typeof streamFailure.code === "string" ? streamFailure.code.slice(0, 100) : "AI_STREAM_FAILED";
-    const interruption = streamedText ? {
+    const hasRenderableProcessSteps = processSteps.some(shouldRenderAiProcessStep);
+    const interruption = streamedText || hasRenderableProcessSteps ? {
       content: streamedText,
       message,
       metadata: {
         interrupted: true,
         interruptionCode,
         interruptionMessage: streamFailure.message.slice(0, 500),
-        processDurationMs: Math.min(86_400_000, elapsedProcessTime())
+        processDurationMs: Math.min(86_400_000, elapsedProcessTime()),
+        ...(toolCalls.length ? { toolCalls } : {}),
+        ...(processSteps.length ? { processSteps } : {})
       }
     } : null;
     if (interruption) streamFailure.streamInterruption = interruption;
