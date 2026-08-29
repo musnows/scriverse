@@ -13992,7 +13992,7 @@ function field(name, label, type = "text", value = "", options = []) {
     const chipLabel = String(label).includes("关键词") ? "关键词" : label;
     const values = uniqueRelationshipKeywords(Array.isArray(value) ? value : []);
     const chips = values.map((keyword) => `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除${esc(chipLabel)}：${esc(keyword)}">×</button></span>`).join("");
-    return `<div class="form-field keyword-chip-field" data-keyword-chips data-name="${esc(name)}"><span>${esc(label)}</span><div class="keyword-chip-editor" data-remove-label="${esc(chipLabel)}" role="group" aria-label="${esc(label)}">${chips}<input type="text" data-keyword-input aria-label="${esc(label)}" placeholder="输入${esc(chipLabel)}后按回车添加，逗号可批量添加" autocomplete="off"></div><small>输入${esc(chipLabel)}后按回车添加；也可用逗号一次添加多个。</small></div>`;
+    return `<div class="form-field keyword-chip-field" data-keyword-chips data-name="${esc(name)}" data-remove-label="${esc(chipLabel)}"><span>${esc(label)}</span><div class="keyword-chip-editor" role="group" aria-label="${esc(label)}">${chips}<input type="text" data-keyword-input aria-label="${esc(label)}" placeholder="输入${esc(chipLabel)}后按回车添加，逗号可批量添加" autocomplete="off"></div><small>输入${esc(chipLabel)}后按回车添加；也可用逗号一次添加多个。</small></div>`;
   }
   if (type === "key-value-list") {
     const config = Array.isArray(options) ? {} : options;
