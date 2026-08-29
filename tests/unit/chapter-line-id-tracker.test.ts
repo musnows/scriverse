@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_CHAPTER_LINE_IDS, reconcileChapterLineIdDraft } from "../../src/public/chapter-line-id-tracker.js";
+import { MAX_CHAPTER_LINE_IDS, reconcileChapterLineIdDraft, remapChapterLineCounts } from "../../src/public/chapter-line-id-tracker.js";
 
 describe("正文行身份跟踪", () => {
   it("删除两条相同正文中的第一条时保留第二条身份", () => {
@@ -41,5 +41,26 @@ describe("正文行身份跟踪", () => {
   it("超大行数正文跳过浏览器行身份跟踪", () => {
     expect(reconcileChapterLineIdDraft("", "\n".repeat(MAX_CHAPTER_LINE_IDS), ["line-first"]))
       .toEqual([]);
+  });
+
+  it("在评论前插入新行时立即把气泡移动到原正文的新行号", () => {
+    expect(remapChapterLineCounts(
+      ["line-first", "line-second"],
+      [null, "line-first", "line-second"],
+      new Map([[1, 2], [2, 1]])
+    )).toEqual(new Map([[2, 2], [3, 1]]));
+  });
+
+  it("修改评论所在行的内容时保留该行气泡", () => {
+    expect(remapChapterLineCounts(
+      ["line-first", "line-second"],
+      ["line-first", "line-second"],
+      new Map([[2, 3]])
+    )).toEqual(new Map([[2, 3]]));
+  });
+
+  it("没有稳定行身份时保留后端行号等待保存校准", () => {
+    expect(remapChapterLineCounts([], [], new Map([[2, 1]])))
+      .toEqual(new Map([[2, 1]]));
   });
 });
