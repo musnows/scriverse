@@ -53,6 +53,7 @@ import {
   reconcileChapterLineIds,
   reanchorChapterAnnotations
 } from "./chapter-annotation-anchor.js";
+import { renumberChapterTitle, type ChapterNumberStyle } from "./chapter-title-numbering.js";
 import {
   normalizeRoleplayMemoryContent,
   roleplayMemoryCandidateIsSafe,
@@ -4073,6 +4074,7 @@ export class Store {
       | { type: "move"; volumeId: string }
       | { type: "setType"; chapterType: ChapterType }
       | { type: "setAnalysisExclusion"; excludedFromAnalysis: boolean }
+      | { type: "renumberTitles"; template: string; numberStyle: ChapterNumberStyle; startAt: number }
       | { type: "delete" }
   ): Record<string, unknown> {
     this.getWork(workId);
@@ -4086,6 +4088,73 @@ export class Store {
         return chapter;
       });
       const timestamp = now();
+      if (action.type === "renumberTitles") {
+        if (action.startAt + currentChapters.length - 1 > 999_999) {
+          throw new AppError(400, "CHAPTER_NUMBER_RANGE", "起始序号与所选章节数量超出最大序号 999999");
+        }
+        const currentById = new Map(currentChapters.map((chapter) => [String(chapter.id), chapter]));
+        const placeholders = currentChapters.map(() => "?").join(", ");
+        const orderedChapters = this.db.all(
+          `SELECT chapter.id FROM chapters chapter
+           JOIN volumes volume ON volume.id = chapter.volume_id
+           WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL
+             AND volume.deleted_at IS NULL AND chapter.id IN (${placeholders})
+           ORDER BY volume.sort_order, volume.created_at, volume.id,
+             chapter.sort_order, chapter.created_at, chapter.id`,
+          workId,
+          ...currentChapters.map((chapter) => String(chapter.id))
+        ).map((row) => currentById.get(requiredString(row, "id"))).filter((chapter): chapter is Record<string, unknown> => Boolean(chapter));
+        const renumbered = orderedChapters.map((chapter, index) => ({
+          chapter,
+          title: renumberChapterTitle(String(chapter.title), action.startAt + index, action.template, action.numberStyle),
+          sequence: action.startAt + index
+        }));
+        const oversized = renumbered.find((item) => item.title.length > 300);
+        if (oversized) {
+          throw new AppError(400, "CHAPTER_TITLE_TOO_LONG", `章节“${String(oversized.chapter.title).slice(0, 40)}”重排后的标题超过 300 个字符`);
+        }
+        let updated = 0;
+        for (const item of renumbered) {
+          const chapter = item.chapter;
+          if (item.title === chapter.title) continue;
+          const chapterId = String(chapter.id);
+          const versionNo = Number(chapter.versionNo) + 1;
+          this.db.run(
+            "UPDATE chapters SET title = ?, version_no = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?",
+            item.title,
+            versionNo,
+            timestamp,
+            chapterId
+          );
+          this.syncChapterParagraphSearchVersion(chapterId, versionNo);
+          this.insertChapterVersionRow({
+            workId,
+            chapterId,
+            versionNo,
+            title: item.title,
+            content: String(chapter.content),
+            volumeId: String(chapter.volumeId),
+            sortOrder: Number(chapter.sortOrder),
+            chapterType: String(chapter.chapterType),
+            source: "manual",
+            sourceRef: null,
+            changeNote: "批量重排章节标题序号",
+            timestamp
+          });
+          this.invalidateChapter(workId, chapterId, versionNo);
+          this.audit(workId, "chapter.saved", "chapter", chapterId, {
+            previousTitle: chapter.title,
+            title: item.title,
+            sequence: item.sequence,
+            versionNo,
+            batch: true,
+            renumbered: true
+          });
+          updated += 1;
+        }
+        this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+        return { processed: currentChapters.length, updated, action: action.type };
+      }
       if (action.type === "move") {
         const targetVolume = this.getVolume(action.volumeId);
         if (targetVolume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
