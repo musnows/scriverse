@@ -3177,6 +3177,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-mention-option:hover, .ai-mention-option:focus-visible, .ai-mention-option.is-active { background: var(--paper-deep); }
 .ai-mention-option small { color: var(--accent); font-size: 8px; }
 .ai-mention-option strong { overflow: hidden; font-size: 10px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.ai-skill-option > span { display: grid; gap: 2px; min-width: 0; }
+.ai-skill-option em { color: var(--muted); font-size: 9px; font-style: normal; line-height: 1.35; overflow-wrap: anywhere; }
 .ai-mention-empty { margin: 0; padding: 10px; color: var(--muted); font-size: 10px; text-align: center; }
 .ai-prompt { display: block; width: 100%; min-height: 104px; margin: 0; padding: 10px 10px 44px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; cursor: text; }
 .ai-prompt:empty::before { color: var(--muted); content: attr(data-placeholder); pointer-events: none; }
@@ -4572,6 +4574,7 @@ body { font-size: var(--ui-font-size); }
 .ai-context-warning p, .ai-context-warning button { font-size: calc(9px * var(--ai-font-scale)); }
 .prompt-options select, .ai-model-popover > label, .ai-model-option-copy strong, .ai-model-options-empty, .ai-mention-option strong, .ai-mention-empty { font-size: calc(10px * var(--ai-font-scale)); }
 .ai-mention-option small { font-size: calc(8px * var(--ai-font-scale)); }
+.ai-skill-option em { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-prompt { font-size: var(--ai-font-size); }
 .ai-scene-panel label { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-scene-panel input, .ai-scene-panel textarea { font-size: calc(10px * var(--ai-font-scale)); }
