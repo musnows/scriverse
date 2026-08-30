@@ -36,6 +36,6 @@ describe("人物扩展属性内容换行", () => {
     expect(styles.text).toContain("field-sizing: content");
     expect(styles.text).toContain("overflow-wrap: anywhere");
     expect(page.text).toMatch(/<link rel="stylesheet" href="[^"]*feature=character-detail-value-wrap-v2">/u);
-    expect(page.text).toMatch(/<script type="module" src="[^"]*feature=character-detail-value-wrap-v2"><\/script>/u);
+    expect(page.text).toMatch(/<script type="module" src="[^"]*feature=character-detail-value-wrap-v2[^"]*"><\/script>/u);
   });
 });
