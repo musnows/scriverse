@@ -13716,7 +13716,7 @@ async function renderBookAiSettings() {
   );
   host.querySelector('input[name="agent-tool"][value="read_character_sections"]').closest("label").insertAdjacentHTML(
     "afterend",
-    `<label><input name="agent-tool" type="checkbox" value="semantic_search_story" ${agentTools.has("semantic_search_story") ? "checked" : ""} ${settings.semanticSearchEnabled ? "" : "disabled"}><span><strong>语义检索作品原文</strong><small>允许 Agent 显式调用 semantic_search_story；只影响保存后新建的对话，普通消息不会自动检索。</small></span></label>`
+    `<label><input name="agent-tool" type="checkbox" value="semantic_search_story" ${agentTools.has("semantic_search_story") ? "checked" : ""} ${settings.semanticSearchEnabled ? "" : "disabled"}><span><strong>语义检索作品原文（RAG）</strong><small>允许 Agent 显式调用 semantic_search_story；只影响保存后新建的对话，普通消息不会自动检索。</small></span></label>`
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",

@@ -19,6 +19,7 @@ describe("主动语义检索界面", () => {
     expect(page).toContain('id="ai-semantic-inject"');
     expect(page).toContain('id="ai-semantic-injection"');
     expect(page).toContain("feature=semantic-search-v6");
+    expect(page.match(/feature=semantic-search-rag-label-v1/gu)).toHaveLength(1);
 
     expect(application).toContain("这是一个 embedding 模型");
     expect(application).toContain("这是一个 rerank 模型");
@@ -30,6 +31,7 @@ describe("主动语义检索界面", () => {
     expect(application).toContain("完整重建 RAG");
     expect(application).toContain("API Key 由所选模型所属供应商的凭证保险库加密保存");
     expect(application).toContain('value="semantic_search_story"');
+    expect(application).toContain("<strong>语义检索作品原文（RAG）</strong>");
     expect(application).toContain("function runAiSemanticSearch()");
     expect(application).toContain("function injectAiSemanticSelection()");
     expect(application).toContain('if (!$("#ai-semantic-search-panel").classList.contains("hidden"))');
