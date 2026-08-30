@@ -2,6 +2,7 @@ import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate,
 import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
+import { applyAiSkillCommand, findAiSkillCommand, listAiSkillOptions } from "/ai-skill-menu.js?v=20260830-ai-skill-slash-menu-v1";
 import {
   emptyRoleplayScenePin,
   normalizeRoleplayScenePin,
@@ -31,7 +32,7 @@ import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-s
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
 import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260818-ai-agent-turn-process-v1";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
-import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount } from "/ai-usage.js?v=20260821-ai-usage-pricing-v1";
+import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount, usageCalendarYears } from "/ai-usage.js?v=20260830-ai-usage-year-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260828-context-output-usage-v1";
 import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
@@ -1526,6 +1527,7 @@ let moduleNavExpanded = false;
 const chapterAutoSaveDelay = 800;
 const chapterLineInputRenderDelay = 32;
 let aiMentionMatch = null;
+let aiSkillMatch = null;
 let aiMentionRange = null;
 let aiMentionActiveIndex = -1;
 let settingsReturnContext = null;
@@ -2705,7 +2707,7 @@ function resetAiFeed(
   const roleplayUserName = roleplayUserCharacter?.name;
   feed.innerHTML = roleplayName
     ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我可以通过角色卡、人物关系、知情设定和故事正文回答。"}</p></div></div>`
-    : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后即可开始问答；提到续写或润色时会自动加载对应 Skill，也可用 /continue-writing 或 /polish-writing 强制加载。所有引用都基于已保存正文。</p></div></div>';
+    : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后即可开始问答；所有引用都基于已保存正文。</p></div></div>';
 }
 
 function aiAssistantLabel(suffix = "", roleplayCharacter = state.aiRoleplayCharacter) {
@@ -5030,6 +5032,7 @@ function aiPromptTextBoundary(prompt, offset) {
 
 function hideAiMentionMenu() {
   aiMentionMatch = null;
+  aiSkillMatch = null;
   aiMentionRange = null;
   aiMentionActiveIndex = -1;
   const prompt = $("#ai-prompt");
@@ -5086,21 +5089,37 @@ function syncAiReferencesWithPrompt() {
 function updateAiMentionMenu() {
   syncAiReferencesWithPrompt();
   const prompt = $("#ai-prompt");
-  const match = findAiMention(aiPromptTextBeforeCursor());
-  if (!match) return hideAiMentionMenu();
+  const textBeforeCursor = aiPromptTextBeforeCursor();
+  const skillMatch = $("#ai-task").value === "roleplay" ? null : findAiSkillCommand(textBeforeCursor);
+  const mentionMatch = skillMatch ? null : findAiMention(textBeforeCursor);
+  if (!skillMatch && !mentionMatch) return hideAiMentionMenu();
   const selection = window.getSelection();
   if (!selection?.rangeCount || !prompt.contains(selection.anchorNode)) return hideAiMentionMenu();
-  aiMentionMatch = match;
+  aiSkillMatch = skillMatch;
+  aiMentionMatch = mentionMatch;
   aiMentionRange = selection.getRangeAt(0).cloneRange();
   const menu = $("#ai-mention-menu");
+  if (skillMatch) {
+    const options = listAiSkillOptions(skillMatch.query);
+    aiMentionActiveIndex = -1;
+    prompt.removeAttribute("aria-activedescendant");
+    menu.setAttribute("aria-label", "选择写作 Skill");
+    menu.innerHTML = options.length
+      ? options.map((item, index) => `<button id="ai-skill-option-${index}" class="ai-mention-option ai-skill-option" type="button" role="option" aria-selected="false" tabindex="-1" data-ai-skill-name="${esc(item.name)}"><small>Skill</small><span><strong>/${esc(item.name)}</strong><em>${esc(item.label)} · ${esc(item.description)}</em></span></button>`).join("")
+      : '<p class="ai-mention-empty">没有匹配的写作 Skill</p>';
+    menu.classList.remove("hidden");
+    prompt.setAttribute("aria-expanded", "true");
+    return;
+  }
   const chapters = state.work?.volumes.flatMap((volume) => volume.chapters.map((chapter) => ({
     ...chapter,
     volumeTitle: volume.title
   }))) ?? [];
-  const options = listAiMentionOptions(state.characters, state.settings, chapters, match.query)
+  const options = listAiMentionOptions(state.characters, state.settings, chapters, mentionMatch.query)
     .filter((item) => item.kind !== "context-settings" || $("#ai-task").value !== "roleplay");
   aiMentionActiveIndex = -1;
   prompt.removeAttribute("aria-activedescendant");
+  menu.setAttribute("aria-label", "引用角色、设定、章节或上下文能力");
   menu.innerHTML = options.length
     ? options.map((item, index) => `<button id="ai-mention-option-${index}" class="ai-mention-option" type="button" role="option" aria-selected="false" tabindex="-1" data-ai-reference-kind="${esc(item.kind)}" data-ai-reference-id="${esc(item.id)}" data-ai-reference-name="${esc(item.name)}"><small>${esc(item.kindLabel)}</small><strong>${esc(item.name)}</strong></button>`).join("")
     : '<p class="ai-mention-empty">没有匹配的角色、设定、章节或上下文能力</p>';
@@ -5138,6 +5157,30 @@ function selectAiMention(button) {
   selection?.addRange(range);
   prompt.focus();
   renderAiReferences();
+  hideAiMentionMenu();
+}
+
+function selectAiSkill(button) {
+  if (!aiSkillMatch || !aiMentionRange) return;
+  const prompt = $("#ai-prompt");
+  const cursorText = aiPromptTextFromRange(aiMentionRange, prompt);
+  const localSkill = findAiSkillCommand(cursorText);
+  if (!localSkill) return hideAiMentionMenu();
+  const applied = applyAiSkillCommand(cursorText, localSkill, button.dataset.aiSkillName);
+  const range = document.createRange();
+  const startBoundary = aiPromptTextBoundary(prompt, localSkill.start);
+  const endBoundary = aiPromptTextBoundary(prompt, cursorText.length);
+  range.setStart(startBoundary.node, startBoundary.offset);
+  range.setEnd(endBoundary.node, endBoundary.offset);
+  range.deleteContents();
+  const command = document.createTextNode(`${applied.command} `);
+  range.insertNode(command);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  range.setStartAfter(command);
+  range.collapse(true);
+  selection?.addRange(range);
+  prompt.focus();
   hideAiMentionMenu();
 }
 
@@ -13301,20 +13344,22 @@ async function renderPlatformAiConfig() {
 }
 
 function tokenUsageDateLabel(date) {
+  const [year, month, day] = String(date).split("-").map(Number);
   return new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
     month: "short",
     day: "numeric",
-    weekday: "short"
-  }).format(new Date(`${date}T00:00:00`));
+    weekday: "short",
+    timeZone: "UTC"
+  }).format(new Date(Date.UTC(year, month - 1, day)));
 }
 
-function tokenUsageCalendarMarkup(daily) {
-  const calendar = buildUsageCalendar(daily);
+function tokenUsageCalendarMarkup(daily, year, serverDate) {
+  const calendar = buildUsageCalendar(daily, year, serverDate);
   const cells = calendar.cells.map((cell) => {
     const label = `${tokenUsageDateLabel(cell.date)}：${Number(cell.totalTokens).toLocaleString("zh-CN")} Token`;
-    return cell.future
-      ? `<span class="usage-calendar-cell is-future" data-level="${cell.level}" role="gridcell" aria-disabled="true"></span>`
+    return cell.outsideYear || cell.future
+      ? `<span class="usage-calendar-cell ${cell.outsideYear ? "is-outside-year" : "is-future"}" data-level="${cell.level}" role="gridcell" aria-disabled="true"></span>`
       : `<button class="usage-calendar-cell" type="button" data-level="${cell.level}" data-usage-calendar-label="${esc(label)}" role="gridcell" aria-label="${esc(label)}"></button>`;
   }).join("");
   const months = calendar.months.map((month) => `<span style="grid-column:${month.week + 1}">${esc(month.label)}</span>`).join("");
@@ -13324,13 +13369,28 @@ function tokenUsageCalendarMarkup(daily) {
         <div class="usage-calendar-months" aria-hidden="true">${months}</div>
         <div class="usage-calendar-body">
           <div class="usage-calendar-weekdays" aria-hidden="true"><span>一</span><span>三</span><span>五</span></div>
-          <div class="usage-calendar-grid" role="grid" aria-label="过去 53 周每日 Token 用量">${cells}</div>
+          <div class="usage-calendar-grid" role="grid" aria-label="${calendar.year} 年每日 Token 用量">${cells}</div>
         </div>
       </div>
     </div>
     <output class="usage-calendar-tooltip" role="tooltip" hidden></output>
   </div>
   <div class="usage-calendar-legend"><span>少</span>${[0, 1, 2, 3, 4].map((level) => `<i data-level="${level}" aria-hidden="true"></i>`).join("")}<span>多</span></div>`;
+}
+
+function bindUsageCalendar(root, usage) {
+  root.querySelectorAll("[data-usage-calendar-year]").forEach((select) => {
+    select.addEventListener("change", () => {
+      const section = select.closest(".usage-calendar-section");
+      const calendarHost = section?.querySelector("[data-usage-calendar-host]");
+      if (!calendarHost) return;
+      calendarHost.innerHTML = tokenUsageCalendarMarkup(usage?.daily, Number(select.value), usage?.serverDate);
+      bindUsageCalendarInteractions(calendarHost);
+      scrollUsageCalendarsToLatest(calendarHost);
+    });
+  });
+  bindUsageCalendarInteractions(root);
+  scrollUsageCalendarsToLatest(root);
 }
 
 function bindUsageCalendarInteractions(root) {
@@ -13556,6 +13616,15 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
   const callTypeUsage = (Array.isArray(usage?.callTypes) ? usage.callTypes : [])
     .map((item) => `<span class="usage-call-type-chip"><strong>${esc(callTypeLabels[item.callType] ?? item.callType)}</strong><span>${esc(formatTokenCount(item.totalTokens))} Token · ${Number(item.requestCount || 0).toLocaleString("zh-CN")} 次</span></span>`)
     .join("");
+  const calendarYears = usageCalendarYears(usage?.daily);
+  const selectedCalendarYear = calendarYears[0] ?? null;
+  const usageTimezone = String(usage?.timezone || "服务器本地时区");
+  const calendarYearSelect = selectedCalendarYear === null
+    ? ""
+    : `<select class="usage-calendar-year-select" data-usage-calendar-year aria-label="每日用量年份">${calendarYears.map((year) => `<option value="${year}">${year} 年</option>`).join("")}</select>`;
+  const calendarMarkup = selectedCalendarYear === null
+    ? '<p class="usage-calendar-empty">尚无每日 Token 用量记录。</p>'
+    : tokenUsageCalendarMarkup(usage?.daily, selectedCalendarYear, usage?.serverDate);
   return `<section class="usage-overview" aria-labelledby="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">
     <div class="config-section-header usage-overview-header"><div><h2 id="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">${esc(title || "Token 用量")}</h2><p>${esc(description || "统计该范围内的全部 AI 调用。")}</p></div><button class="ghost-button usage-details-button" type="button" data-token-usage-details aria-haspopup="dialog" aria-expanded="false" aria-controls="token-usage-details-toast">详细数据</button></div>
     <div class="usage-stat-grid">
@@ -13567,8 +13636,8 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
     <p class="usage-measurement-note">${requestCount.toLocaleString("zh-CN")} 次有用量记录的调用。${esc(estimateNote)} 有 ${unpricedModelCount.toLocaleString("zh-CN")} 个模型在价格表中未找到对应价格</p>
     ${callTypeUsage ? `<div class="usage-call-types" aria-label="按调用类型区分的 Token 用量">${callTypeUsage}</div>` : ""}
     <section class="usage-calendar-section" aria-labelledby="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">
-      <header><div><h3 id="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">每日用量</h3><p>GitHub 风格网格展示过去 53 周；颜色越深，当天消耗越高。</p></div></header>
-      ${tokenUsageCalendarMarkup(usage?.daily)}
+      <header><div><h3 id="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">每日用量</h3><p>GitHub 风格网格按服务器时区（${esc(usageTimezone)}）分年展示；颜色越深，当天消耗越高。</p></div>${calendarYearSelect}</header>
+      <div data-usage-calendar-host>${calendarMarkup}</div>
     </section>
     ${showWorks ? `<section class="usage-work-section" aria-labelledby="usage-work-title"><header><div><h3 id="usage-work-title">各作品用量</h3><p>按 Token 总消耗从高到低排列，包含尚未使用 AI 的作品。</p></div></header><div class="usage-work-table-scroll"><table class="usage-work-table"><thead><tr><th>作品</th><th>总消耗</th><th>输入</th><th>输出</th><th>缓存命中率</th><th>调用</th></tr></thead><tbody>${workRows || '<tr><td colspan="6">还没有作品用量记录。</td></tr>'}</tbody></table></div></section>` : ""}
   </section>`;
@@ -13577,16 +13646,14 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
 async function renderPlatformTokenUsage() {
   const host = $("#platform-usage-content");
   host.innerHTML = '<div class="empty-state">正在汇总 Token 用量……</div>';
-  const timezoneOffset = -new Date().getTimezoneOffset();
-  const usage = await api(`/api/platform/ai/usage?timezoneOffset=${timezoneOffset}`);
+  const usage = await api("/api/platform/ai/usage");
   host.innerHTML = tokenUsageOverviewMarkup(usage, {
     title: "项目累计用量",
     description: "汇总所有作品迄今产生的输入与输出 Token；缓存命中率仅基于供应商返回了缓存明细的调用。",
     showWorks: true
   });
   bindTokenUsageDetails(host, usage, "项目累计用量");
-  bindUsageCalendarInteractions(host);
-  scrollUsageCalendarsToLatest(host);
+  bindUsageCalendar(host, usage);
 }
 
 async function renderBookAiSettings() {
@@ -13606,7 +13673,7 @@ async function renderBookAiSettings() {
     moduleApi("ai-settings", `/api/works/${state.work.id}/task-defaults`),
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/relationship-search-index`),
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/semantic-search-index`),
-    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/usage`),
     moduleApi("ai-settings", "/api/platform/ai/protocols"),
     // 可写工具开关独立于 ai-settings 存储；加载失败时仍可展示其余配置。
     api(`/api/works/${state.work.id}/ai/tools`).catch(() => null),
@@ -13681,8 +13748,7 @@ async function renderBookAiSettings() {
     if (section.querySelector("h2")?.textContent === "Agent 工具调用上限") section.id = "agent-tool-call-limit-settings";
   });
   host.insertAdjacentHTML("beforeend", `<section class="config-section"><div class="config-section-header"><div><h2>AI 可写工具</h2><p>默认全部关闭：逐项开启后，侧边栏 AI 才能在对应模块提交修改计划。计划只包含操作描述与 AI 简述；确认前系统会按当前数据库生成字段级明细（含修改前后值），执行时整体原子完成并再次校验权限、开关与目标版本，全程可在「AI 操作审批中心」追溯。AI 不能删除任何条目，也不能改写正文。</p></div><div class="card-actions"><button id="open-ai-approval-center-from-settings" class="ghost-button" type="button">打开 AI 操作审批中心</button></div></div><div class="ai-agent-tools ai-write-tools">${AI_WRITE_TOOLS_META.map((tool) => `<label><input name="ai-write-tool" type="checkbox" value="${esc(tool.id)}" ${writeToolsState?.[tool.id] === true ? "checked" : ""}><span><strong>${esc(tool.label)}</strong><small>${esc(tool.description)}</small></span></label>`).join("")}</div><p class="usage-measurement-note">${writeTools ? `当前单次审批最多 ${writeToolsMaxOperations} 个操作，可通过环境变量 AI_WRITE_PLAN_MAX_OPERATIONS 调整。` : "工具开关状态暂时无法加载，显示的勾选可能不是最新值。"}</p><div class="card-actions"><button id="save-ai-write-tools" class="ghost-button config-save-button" type="button">保存开关设置</button></div></section>`);
-  bindUsageCalendarInteractions(host);
-  scrollUsageCalendarsToLatest(host);
+  bindUsageCalendar(host, usage);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "beforebegin",
     `<label><input name="agent-tool" type="checkbox" value="grep" ${agentTools.has("grep") ? "checked" : ""}><span><strong>查询正文关键字</strong><small>从段落索引查询关键字，默认返回前 20 条完整段落和章节信息。</small></span></label>`
@@ -13693,7 +13759,7 @@ async function renderBookAiSettings() {
   );
   host.querySelector('input[name="agent-tool"][value="read_character_sections"]').closest("label").insertAdjacentHTML(
     "afterend",
-    `<label><input name="agent-tool" type="checkbox" value="semantic_search_story" ${agentTools.has("semantic_search_story") ? "checked" : ""} ${settings.semanticSearchEnabled ? "" : "disabled"}><span><strong>语义检索作品原文</strong><small>允许 Agent 显式调用 semantic_search_story；只影响保存后新建的对话，普通消息不会自动检索。</small></span></label>`
+    `<label><input name="agent-tool" type="checkbox" value="semantic_search_story" ${agentTools.has("semantic_search_story") ? "checked" : ""} ${settings.semanticSearchEnabled ? "" : "disabled"}><span><strong>语义检索作品原文（RAG）</strong><small>允许 Agent 显式调用 semantic_search_story；只影响保存后新建的对话，普通消息不会自动检索。</small></span></label>`
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",
@@ -20333,7 +20399,9 @@ $("#module-create-button").addEventListener("click", () => ({ drafts: openDraftD
 $("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
   setAiContextMeter(null);
-  if (!findAiMention(aiPromptTextBeforeCursor())) return;
+  const textBeforeCursor = aiPromptTextBeforeCursor();
+  if ($("#ai-task").value !== "roleplay" && findAiSkillCommand(textBeforeCursor)) return;
+  if (!findAiMention(textBeforeCursor)) return;
   try {
     await ensureAiReferencesLoaded();
     updateAiMentionMenu();
@@ -20463,6 +20531,7 @@ $("#ai-task").addEventListener("change", async (event) => {
     }
   }
   setAiContextMeter(null);
+  updateAiMentionMenu();
 });
 $("#ai-scope").addEventListener("change", (event) => {
   if (state.aiPromptSent) {
@@ -20473,6 +20542,8 @@ $("#ai-scope").addEventListener("change", (event) => {
   setAiContextMeter(null);
 });
 $("#ai-mention-menu").addEventListener("click", (event) => {
+  const skillButton = event.target.closest("[data-ai-skill-name]");
+  if (skillButton) return selectAiSkill(skillButton);
   const button = event.target.closest("[data-ai-reference-id]");
   if (button) selectAiMention(button);
 });
@@ -21016,7 +21087,8 @@ $("#ai-prompt").addEventListener("keydown", (event) => {
       const activeOption = $("#ai-mention-menu").querySelector('[role="option"][aria-selected="true"]');
       if (activeOption) {
         event.preventDefault();
-        selectAiMention(activeOption);
+        if (activeOption.dataset.aiSkillName) selectAiSkill(activeOption);
+        else selectAiMention(activeOption);
         return;
       }
     }

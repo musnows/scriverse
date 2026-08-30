@@ -104,6 +104,9 @@ describe("AI Token 用量统计 API", () => {
     expect(platform.body.data.daily).toEqual([
       expect.objectContaining({ date: "2026-07-27", totalTokens: 410, requestCount: 3 })
     ]);
+    expect(platform.body.data.timezone).toBe("Asia/Shanghai");
+    expect(platform.body.data.serverDate).toMatch(/^\d{4}-\d{2}-\d{2}$/u);
+    expect(platform.body.data).not.toHaveProperty("timezoneOffset");
     expect(platform.body.data.models).toEqual([
       expect.objectContaining({
         modelId: "not-in-price-table",
@@ -182,6 +185,33 @@ describe("AI Token 用量统计 API", () => {
 
   it("拒绝越界时区偏移", async () => {
     await request(runtime.app).get("/api/platform/ai/usage?timezoneOffset=900").expect(400);
+  });
+
+  it("按服务器 TZ 划分跨年日用量并忽略旧客户端的有效偏移", async () => {
+    vi.stubEnv("TZ", "Asia/Shanghai");
+    const work = await createWork(runtime, "跨年用量作品");
+    const insertCall = (id: string, createdAt: string) => runtime.database.run(
+      `INSERT INTO ai_calls (
+         id, work_id, task_type, provider_id, model_id, context_scope_json, status,
+         input_tokens, output_tokens, token_usage_source, created_at, completed_at
+       ) VALUES (?, ?, 'chat', 'provider', 'model', '{}', 'completed', 10, 5, 'reported', ?, ?)`,
+      id,
+      String(work.id),
+      createdAt,
+      createdAt
+    );
+    insertCall("year-boundary-before", "2025-12-31T15:59:59.000Z");
+    insertCall("year-boundary-after", "2025-12-31T16:00:00.000Z");
+
+    const response = await request(runtime.app)
+      .get(`/api/works/${work.id}/ai-settings/usage?timezoneOffset=-480`)
+      .expect(200);
+
+    expect(response.body.data.timezone).toBe("Asia/Shanghai");
+    expect(response.body.data.daily).toEqual([
+      expect.objectContaining({ date: "2025-12-31", totalTokens: 15 }),
+      expect.objectContaining({ date: "2026-01-01", totalTokens: 15 })
+    ]);
   });
 
   it("没有成功价格缓存时不返回可展示的估价", async () => {
