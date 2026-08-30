@@ -3886,6 +3886,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-editor-section-fields > label:has(textarea), .character-editor-section-fields > .form-field:has(textarea), .character-editor-section-fields > .keyword-chip-field, .character-editor-section-fields > .structured-list-field, .character-editor-section-fields > .chip-field, .character-editor-section-fields > .markdown-editor-field, .character-editor-field-help { grid-column: 1 / -1; }
 .character-editor-section-fields input, .character-editor-section-fields textarea, .character-editor-section-fields select { width: 100%; padding: 10px 11px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); font-size: 13px; }
 .character-editor-section-fields textarea { min-height: 120px; resize: vertical; line-height: 1.65; }
+.character-editor-section-fields .key-value-list-value { min-height: 42px; max-height: 240px; overflow-y: auto; resize: none; field-sizing: content; overflow-wrap: anywhere; }
 .character-editor-section-fields .section-list-row textarea { min-height: 180px; }
 .character-editor-section-fields .member-chip { position: relative; display: inline-flex; width: auto; cursor: pointer; }
 .character-editor-section-fields .member-chip input[type="checkbox"] { position: absolute; width: 1px !important; min-width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; }
