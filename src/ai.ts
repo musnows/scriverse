@@ -3114,7 +3114,11 @@ export class AiManager {
   private readonly relationshipSelectionBuilds = new Map<string, Promise<RelationshipLocalSourceSelection>>();
   private readonly relationshipIndexSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly semanticIndexBuilds = new Map<string, Promise<Record<string, unknown>>>();
+  private readonly semanticIndexPendingBuilds = new Map<string, boolean>();
+  private readonly semanticIndexBuildEpochs = new Map<string, number>();
   private readonly semanticIndexSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly semanticQuotaReservationsByWork = new Map<string, number>();
+  private readonly semanticQuotaReservationsByProvider = new Map<string, number>();
   private relationshipIndexSerial: Promise<void> = Promise.resolve();
   private relationshipIndexTimer: ReturnType<typeof setTimeout> | null = null;
   private relationshipIndexDisposed = false;
@@ -4043,6 +4047,8 @@ export class AiManager {
     const semanticIndexTimer = this.semanticIndexSyncTimers.get(workId);
     if (semanticIndexTimer) clearTimeout(semanticIndexTimer);
     this.semanticIndexSyncTimers.delete(workId);
+    this.invalidateSemanticIndexBuild(workId);
+    this.semanticIndexPendingBuilds.delete(workId);
     for (const taskId of taskIds) {
       this.taskControllers.get(taskId)?.abort(new Error("作品已移入回收站"));
     }
@@ -4070,6 +4076,8 @@ export class AiManager {
     this.relationshipIndexSyncTimers.clear();
     for (const timer of this.semanticIndexSyncTimers.values()) clearTimeout(timer);
     this.semanticIndexSyncTimers.clear();
+    this.semanticIndexPendingBuilds.clear();
+    this.semanticIndexBuildEpochs.clear();
     if (this.relationshipIndexTimer) clearTimeout(this.relationshipIndexTimer);
     this.relationshipIndexTimer = null;
     this.store.setAnalysisTaskQueuedHandler(null);
@@ -9652,7 +9660,8 @@ export class AiManager {
     parameters: Record<string, unknown>,
     tools: Record<string, unknown>[] = [],
     additionalUsedTokens = 0,
-    includeProviderQuota = true
+    includeProviderQuota = true,
+    additionalProviderUsedTokens = additionalUsedTokens
   ): Record<string, unknown> {
     const workStatus = this.getWorkTokenQuotaStatus(workId);
     const providerStatus = includeProviderQuota ? this.getProviderTokenQuotaStatus(stringValue(provider, "id")) : null;
@@ -9662,6 +9671,7 @@ export class AiManager {
     const providerMonthlyTokenQuota = providerStatus?.monthlyTokenQuota === null || !providerStatus ? null : Number(providerStatus.monthlyTokenQuota);
     if (dailyTokenQuota === null && monthlyTokenQuota === null && providerDailyTokenQuota === null && providerMonthlyTokenQuota === null) return parameters;
     const additionalTokens = Math.max(0, additionalUsedTokens);
+    const additionalProviderTokens = Math.max(0, additionalProviderUsedTokens);
     const estimatedInputTokens = estimateCompletionMessageTokens(messages)
       + (tools.length > 0 ? estimateAiTokens(JSON.stringify(tools)) : 0);
     let remainingTokens = Number.POSITIVE_INFINITY;
@@ -9701,7 +9711,7 @@ export class AiManager {
           scope: "provider",
           period: "daily",
           quota: providerDailyTokenQuota,
-          usedTokens: Number(providerStatus.usedTokens) + additionalTokens,
+          usedTokens: Number(providerStatus.usedTokens) + additionalProviderTokens,
           resetsAt: String(providerStatus.resetsAt),
           startedAt: String(providerStatus.dayStartedAt),
           timezone: String(providerStatus.timezone),
@@ -9712,7 +9722,7 @@ export class AiManager {
           scope: "provider",
           period: "monthly",
           quota: providerMonthlyTokenQuota,
-          usedTokens: Number(providerStatus.monthlyUsedTokens) + additionalTokens,
+          usedTokens: Number(providerStatus.monthlyUsedTokens) + additionalProviderTokens,
           resetsAt: String(providerStatus.monthlyResetsAt),
           startedAt: String(providerStatus.monthStartedAt),
           timezone: String(providerStatus.timezone),
@@ -12487,6 +12497,7 @@ export class AiManager {
     }
     const updated = this.store.updateWorkSemanticSearchSettings(workId, input);
     if (!updated.semanticSearchEnabled) {
+      this.invalidateSemanticIndexBuild(workId);
       this.store.db.run(
         `INSERT INTO semantic_index_state(work_id, status, config_fingerprint, updated_at)
          VALUES (?, 'disabled', '', ?) ON CONFLICT(work_id) DO UPDATE SET status = 'disabled', updated_at = excluded.updated_at`,
@@ -12498,6 +12509,7 @@ export class AiManager {
     const next = this.resolveSemanticConfiguration(workId);
     const state = this.store.db.get("SELECT status, config_fingerprint FROM semantic_index_state WHERE work_id = ?", workId);
     const changed = previousFingerprint !== next.fingerprint || String(state?.config_fingerprint ?? "") !== next.fingerprint;
+    if (changed) this.invalidateSemanticIndexBuild(workId);
     this.store.db.run(
       `INSERT INTO semantic_index_state(work_id, status, config_fingerprint, total_sources, processed_sources, failed_sources,
          consecutive_failures, error, updated_at)
@@ -12597,16 +12609,19 @@ export class AiManager {
 
   private scheduleSemanticIndexSync(workId: string): void {
     if (this.relationshipIndexDisposed) return;
+    let building = false;
     try {
       const settings = this.store.getWorkAiSettings(workId);
       if (settings.semanticSearchEnabled !== true) return;
       const state = this.store.db.get("SELECT status, config_fingerprint FROM semantic_index_state WHERE work_id = ?", workId);
-      if (!state || !["ready", "failed"].includes(String(state.status))) return;
+      if (!state || !["ready", "failed", "building"].includes(String(state.status))) return;
       const configuration = this.resolveSemanticConfiguration(workId);
       if (String(state.config_fingerprint) !== configuration.fingerprint) return;
+      building = String(state.status) === "building";
     } catch {
       return;
     }
+    if (building) this.invalidateSemanticIndexBuild(workId);
     const existing = this.semanticIndexSyncTimers.get(workId);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
@@ -12703,6 +12718,37 @@ export class AiManager {
     return `${document.sourceType}:${document.sourceId}:${document.sectionId ?? ""}`;
   }
 
+  private reserveSemanticTokenQuota(workId: string, provider: ProviderRow, content: string): () => void {
+    const providerId = stringValue(provider, "id");
+    const messages: CompletionMessage[] = [{ role: "user", content }];
+    const estimatedInputTokens = estimateCompletionMessageTokens(messages);
+    const workReservation = this.semanticQuotaReservationsByWork.get(workId) ?? 0;
+    const providerReservation = this.semanticQuotaReservationsByProvider.get(providerId) ?? 0;
+    this.constrainParametersForTokenQuota(
+      workId,
+      provider,
+      messages,
+      { max_tokens: 1 },
+      [],
+      workReservation,
+      true,
+      providerReservation
+    );
+    this.semanticQuotaReservationsByWork.set(workId, workReservation + estimatedInputTokens);
+    this.semanticQuotaReservationsByProvider.set(providerId, providerReservation + estimatedInputTokens);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remainingWork = Math.max(0, (this.semanticQuotaReservationsByWork.get(workId) ?? 0) - estimatedInputTokens);
+      const remainingProvider = Math.max(0, (this.semanticQuotaReservationsByProvider.get(providerId) ?? 0) - estimatedInputTokens);
+      if (remainingWork > 0) this.semanticQuotaReservationsByWork.set(workId, remainingWork);
+      else this.semanticQuotaReservationsByWork.delete(workId);
+      if (remainingProvider > 0) this.semanticQuotaReservationsByProvider.set(providerId, remainingProvider);
+      else this.semanticQuotaReservationsByProvider.delete(providerId);
+    };
+  }
+
   private beginSemanticAiCall(
     workId: string,
     taskType: "embedding" | "rerank",
@@ -12766,15 +12812,17 @@ export class AiManager {
     inputs: string[]
   ): Promise<number[][]> {
     const inputCharacters = inputs.reduce((total, input) => total + input.length, 0);
-    const callId = this.beginSemanticAiCall(workId, "embedding", configuration.model, configuration.provider, inputCharacters, {
-      model: stringValue(configuration.model, "model_id"),
-      vectorDimension: configuration.vectorDimension,
-      requestCount: inputs.length
-    });
+    const releaseTokenQuota = this.reserveSemanticTokenQuota(workId, configuration.provider, inputs.join("\n"));
+    let callId: string | null = null;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(new Error("Embedding request timed out")), SEMANTIC_REQUEST_TIMEOUT_MS);
     let credential = "";
     try {
+      callId = this.beginSemanticAiCall(workId, "embedding", configuration.model, configuration.provider, inputCharacters, {
+        model: stringValue(configuration.model, "model_id"),
+        vectorDimension: configuration.vectorDimension,
+        requestCount: inputs.length
+      });
       credential = this.decryptKey(configuration.provider);
       const response = await this.scheduleProviderRequest(configuration.provider, controller.signal, () => this.outboundFetchWithRetry(
         providerEmbeddingEndpoint(stringValue(configuration.provider, "base_url")),
@@ -12797,7 +12845,7 @@ export class AiManager {
       this.completeSemanticAiCall(callId, parsed.usage, inputCharacters);
       return parsed.vectors;
     } catch (error) {
-      this.failSemanticAiCall(callId, error instanceof Error ? error.message : "Embedding request failed");
+      if (callId) this.failSemanticAiCall(callId, error instanceof Error ? error.message : "Embedding request failed");
       logger.warn("semantic.embedding.failed", {
         workId,
         modelId: stringValue(configuration.model, "id"),
@@ -12807,6 +12855,7 @@ export class AiManager {
     } finally {
       clearTimeout(timeout);
       credential = "";
+      releaseTokenQuota();
     }
   }
 
@@ -12831,14 +12880,16 @@ export class AiManager {
       ""
     ].join("\n");
     const inputCharacters = prompt.length;
-    const callId = this.beginSemanticAiCall(workId, "rerank", configuration.rerankModel, configuration.rerankProvider, inputCharacters, {
-      model: stringValue(configuration.rerankModel, "model_id"),
-      requestCount: 1
-    });
+    const releaseTokenQuota = this.reserveSemanticTokenQuota(workId, configuration.rerankProvider, prompt);
+    let callId: string | null = null;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(new Error("Rerank request timed out")), SEMANTIC_REQUEST_TIMEOUT_MS);
     let credential = "";
     try {
+      callId = this.beginSemanticAiCall(workId, "rerank", configuration.rerankModel, configuration.rerankProvider, inputCharacters, {
+        model: stringValue(configuration.rerankModel, "model_id"),
+        requestCount: 1
+      });
       credential = this.decryptKey(configuration.rerankProvider);
       const response = await this.scheduleProviderRequest(configuration.rerankProvider, controller.signal, () => this.outboundFetchWithRetry(
         providerLegacyCompletionEndpoint(stringValue(configuration.rerankProvider!, "base_url")),
@@ -12870,25 +12921,29 @@ export class AiManager {
       this.completeSemanticAiCall(callId, usage, inputCharacters, score > 0 ? 3 : 2);
       return score;
     } catch (error) {
-      this.failSemanticAiCall(callId, error instanceof Error ? error.message : "Rerank request failed");
+      if (callId) this.failSemanticAiCall(callId, error instanceof Error ? error.message : "Rerank request failed");
       throw error;
     } finally {
       clearTimeout(timeout);
       credential = "";
+      releaseTokenQuota();
     }
   }
 
   private async indexSemanticDocument(
     workId: string,
     configuration: ResolvedSemanticConfiguration,
-    document: SemanticSourceDocument
-  ): Promise<number> {
+    document: SemanticSourceDocument,
+    isCurrent: () => boolean
+  ): Promise<number | null> {
     const chunks = splitSemanticDocument(document);
     const vectors: number[][] = [];
     for (let offset = 0; offset < chunks.length; offset += SEMANTIC_EMBEDDING_BATCH_SIZE) {
+      if (!isCurrent()) return null;
       const batch = chunks.slice(offset, offset + SEMANTIC_EMBEDDING_BATCH_SIZE);
       vectors.push(...await this.requestSemanticEmbeddings(workId, configuration, batch.map((chunk) => chunk.content)));
     }
+    if (!isCurrent()) return null;
     this.store.db.transaction(() => {
       this.store.db.run(
         `DELETE FROM semantic_index_entries
@@ -12939,8 +12994,22 @@ export class AiManager {
     return status;
   }
 
+  private invalidateSemanticIndexBuild(workId: string): void {
+    this.semanticIndexBuildEpochs.set(workId, (this.semanticIndexBuildEpochs.get(workId) ?? 0) + 1);
+  }
+
+  private semanticIndexBuildIsCurrent(workId: string, epoch: number, fingerprint: string): boolean {
+    if (this.relationshipIndexDisposed || (this.semanticIndexBuildEpochs.get(workId) ?? 0) !== epoch) return false;
+    try {
+      return this.resolveSemanticConfiguration(workId).fingerprint === fingerprint;
+    } catch {
+      return false;
+    }
+  }
+
   rebuildSemanticSearchIndex(workId: string): Record<string, unknown> {
     const configuration = this.resolveSemanticConfiguration(workId);
+    this.invalidateSemanticIndexBuild(workId);
     this.store.db.run(
       `INSERT INTO semantic_index_state(work_id, status, config_fingerprint, total_sources, processed_sources, failed_sources,
        consecutive_failures, error, updated_at) VALUES (?, 'idle', ?, 0, 0, 0, 0, '', ?)
@@ -12956,8 +13025,13 @@ export class AiManager {
 
   private ensureSemanticSearchIndex(workId: string, force: boolean): Promise<Record<string, unknown>> {
     const existing = this.semanticIndexBuilds.get(workId);
-    if (existing) return existing;
-    const build = this.drainSemanticSearchIndex(workId, force);
+    if (existing) {
+      const pendingForce = this.semanticIndexPendingBuilds.get(workId) ?? false;
+      this.semanticIndexPendingBuilds.set(workId, pendingForce || force);
+      return existing;
+    }
+    this.semanticIndexPendingBuilds.set(workId, force);
+    const build = this.drainSemanticSearchIndexQueue(workId);
     this.semanticIndexBuilds.set(workId, build);
     void build.finally(() => {
       if (this.semanticIndexBuilds.get(workId) === build) this.semanticIndexBuilds.delete(workId);
@@ -12965,8 +13039,21 @@ export class AiManager {
     return build;
   }
 
-  private async drainSemanticSearchIndex(workId: string, force: boolean): Promise<Record<string, unknown>> {
+  private async drainSemanticSearchIndexQueue(workId: string): Promise<Record<string, unknown>> {
+    let status = this.getSemanticSearchIndexStatus(workId);
+    while (!this.relationshipIndexDisposed && this.semanticIndexPendingBuilds.has(workId)) {
+      const force = this.semanticIndexPendingBuilds.get(workId) ?? false;
+      this.semanticIndexPendingBuilds.delete(workId);
+      const epoch = this.semanticIndexBuildEpochs.get(workId) ?? 0;
+      status = await this.drainSemanticSearchIndex(workId, force, epoch);
+    }
+    return status;
+  }
+
+  private async drainSemanticSearchIndex(workId: string, force: boolean, epoch: number): Promise<Record<string, unknown>> {
     const configuration = this.resolveSemanticConfiguration(workId);
+    const isCurrent = (): boolean => this.semanticIndexBuildIsCurrent(workId, epoch, configuration.fingerprint);
+    if (!isCurrent()) return this.getSemanticSearchIndexStatus(workId);
     const documents = this.semanticSourceDocuments(workId);
     const existingRows = this.store.db.all(
       `SELECT id, source_type, source_id, section_id, source_version, chunk_order, content_hash
@@ -13012,7 +13099,8 @@ export class AiManager {
     for (const document of pending) {
       if (this.relationshipIndexDisposed) break;
       try {
-        await this.indexSemanticDocument(workId, configuration, document);
+        const indexedChunkCount = await this.indexSemanticDocument(workId, configuration, document, isCurrent);
+        if (indexedChunkCount === null) return this.getSemanticSearchIndexStatus(workId);
         processedSources += 1;
         consecutiveFailures = 0;
       } catch (error) {
@@ -13020,22 +13108,24 @@ export class AiManager {
         consecutiveFailures += 1;
         lastError = error instanceof AppError ? error.message : "语义分片构建失败";
       }
+      if (!isCurrent()) return this.getSemanticSearchIndexStatus(workId);
       const paused = consecutiveFailures >= SEMANTIC_FAILURE_PAUSE_THRESHOLD;
       this.store.db.run(
         `UPDATE semantic_index_state SET status = ?, processed_sources = ?, failed_sources = ?, consecutive_failures = ?,
-         error = ?, updated_at = ? WHERE work_id = ?`,
+         error = ?, updated_at = ? WHERE work_id = ? AND config_fingerprint = ?`,
         paused ? "paused" : "building",
         processedSources,
         failedSources,
         consecutiveFailures,
         lastError,
         now(),
-        workId
+        workId,
+        configuration.fingerprint
       );
       if (paused) break;
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
-    if (this.relationshipIndexDisposed) return this.getSemanticSearchIndexStatus(workId);
+    if (!isCurrent()) return this.getSemanticSearchIndexStatus(workId);
     const currentKeys = new Set(documents.map((document) => this.semanticDocumentKey(document)));
     const staleIds = existingRows
       .filter((row) => !currentKeys.has(this.semanticDocumentKey({
@@ -13052,18 +13142,19 @@ export class AiManager {
         configuration.fingerprint
       );
     });
-    const state = this.store.db.get("SELECT status FROM semantic_index_state WHERE work_id = ?", workId);
+    const state = this.store.db.get("SELECT status FROM semantic_index_state WHERE work_id = ? AND config_fingerprint = ?", workId, configuration.fingerprint);
     if (String(state?.status) !== "paused") {
       this.store.db.run(
         `UPDATE semantic_index_state SET status = ?, processed_sources = ?, failed_sources = ?, consecutive_failures = ?,
-         error = ?, updated_at = ? WHERE work_id = ?`,
+         error = ?, updated_at = ? WHERE work_id = ? AND config_fingerprint = ?`,
         failedSources > 0 ? "failed" : "ready",
         processedSources,
         failedSources,
         failedSources > 0 ? consecutiveFailures : 0,
         lastError,
         now(),
-        workId
+        workId,
+        configuration.fingerprint
       );
     }
     const status = this.getSemanticSearchIndexStatus(workId);

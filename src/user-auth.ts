@@ -1289,6 +1289,9 @@ export function workModuleRequirements(request: Request, write: boolean, annotat
     const replacesMembers = request.method === "DELETE" || /^\/api\/organizations\/[^/]+\/merge$/u.test(pathname);
     return direct("organizations", write && (createsMembers || updatesMembers || replacesMembers) ? ["characters"] : []);
   }
+  if (write && /^\/api\/works\/[^/]+\/ai-settings\/semantic-search-index\/(?:sync|rebuild)$/u.test(pathname)) {
+    return { read: [...contentPermissionModules], write: ["ai-settings"] };
+  }
   const rules: Array<[RegExp, WorkPermissionModule]> = [
     [/^\/api\/works\/[^/]+\/(?:file-versions|import|volumes|chapters|deleted-chapters)(?:\/|$)/u, "prose"],
     [/^\/api\/(?:volumes|chapters)\/[^/]+(?:\/|$)/u, "prose"],

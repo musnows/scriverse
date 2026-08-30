@@ -90,6 +90,8 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain("async function submitChapterBatch(");
     expect(application.text).toContain("批量删除需要再次确认");
     expect(application.text).toContain("重排标题需要再次确认");
+    expect(application.text).toContain("当前章节有未保存修改，批量处理将丢弃这些修改");
+    expect(application.text).toContain("await selectChapter(state.chapter.id, { editMode: !chapterEditorReadOnly });");
     expect(application.text).toContain('type: "renumberTitles"');
     expect(styles.text).toContain(".chapter-batch-controls");
     expect(styles.text).toContain(".chapter-batch-controls select {");
@@ -100,6 +102,7 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('id="chapter-batch-number-style"');
     expect(page.text).toContain('id="chapter-batch-start" type="number" value="1"');
     expect(page.text).toContain("feature=chapter-title-renumber-v1");
+    expect(page.text).toContain("feature=chapter-batch-editor-refresh-v1");
     expect(page.text).toContain('id="chapter-batch-search" type="search"');
     expect(page.text).toContain('id="chapter-batch-search-count"');
     expect(styles.text).toContain(".chapter-batch-search-field input");
