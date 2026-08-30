@@ -14378,9 +14378,10 @@ function field(name, label, type = "text", value = "", options = []) {
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
   }
   if (type === "keyword-chips") {
+    const chipLabel = String(label).includes("关键词") ? "关键词" : label;
     const values = uniqueRelationshipKeywords(Array.isArray(value) ? value : []);
-    const chips = values.map((keyword) => `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除关键词：${esc(keyword)}">×</button></span>`).join("");
-    return `<div class="form-field keyword-chip-field" data-keyword-chips data-name="${esc(name)}"><span>${esc(label)}</span><div class="keyword-chip-editor" role="group" aria-label="${esc(label)}">${chips}<input type="text" data-keyword-input aria-label="${esc(label)}" placeholder="输入后按回车添加，逗号可批量添加" autocomplete="off"></div><small>输入关键词后按回车添加；也可用逗号一次添加多个。</small></div>`;
+    const chips = values.map((keyword) => `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除${esc(chipLabel)}：${esc(keyword)}">×</button></span>`).join("");
+    return `<div class="form-field keyword-chip-field" data-keyword-chips data-name="${esc(name)}" data-remove-label="${esc(chipLabel)}"><span>${esc(label)}</span><div class="keyword-chip-editor" role="group" aria-label="${esc(label)}">${chips}<input type="text" data-keyword-input aria-label="${esc(label)}" placeholder="输入${esc(chipLabel)}后按回车添加，逗号可批量添加" autocomplete="off"></div><small>输入${esc(chipLabel)}后按回车添加；也可用逗号一次添加多个。</small></div>`;
   }
   if (type === "key-value-list") {
     const config = Array.isArray(options) ? {} : options;
@@ -14505,11 +14506,12 @@ function appendRelationshipKeywordChips(editor, values) {
   if (!input) return;
   const existing = new Set([...editor.querySelectorAll("[data-keyword-value]")].map((control) => String(control.value).toLocaleLowerCase("zh-CN")));
   const name = editor.dataset.name || "keywords";
+  const removeLabel = editor.dataset.removeLabel || "关键词";
   for (const keyword of uniqueRelationshipKeywords(values)) {
     const key = keyword.toLocaleLowerCase("zh-CN");
     if (existing.has(key)) continue;
     existing.add(key);
-    input.insertAdjacentHTML("beforebegin", `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除关键词：${esc(keyword)}">×</button></span>`);
+    input.insertAdjacentHTML("beforebegin", `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除${esc(removeLabel)}：${esc(keyword)}">×</button></span>`);
   }
 }
 
@@ -16153,17 +16155,17 @@ function renderCharacterEditorFields(item) {
   const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
   const chapterOptions = [["", "未指定"], ...(state.work?.volumes ?? []).flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]))];
   const stateEntries = characterStateEntries(item?.currentState ?? {});
+  const raceField = !canReadModule("races")
+    ? '<div class="character-editor-empty-field"><b>种族</b><span>当前账户没有种族模块读取权限，原有绑定不会被修改。</span></div>'
+    : state.races.length
+      ? field("raceId", "种族", "select", item?.raceId ?? "", raceOptions)
+      : '<div class="character-editor-empty-field"><b>种族</b><span>尚未创建种族，请先在“种族”模块建立档案。</span></div>';
   $("#character-editor-fields").innerHTML = [
     characterEditorSection("basic", "基础资料", "用于检索、去重和建立人物在作品中的基本归属。",
       `<div class="avatar-settings character-avatar-settings"><div id="character-avatar-preview" class="character-avatar character-avatar-editor-preview" role="img" aria-label="角色头像"></div><div class="avatar-settings-copy"><strong>角色头像</strong><small>支持 PNG、JPEG、WebP，文件不超过 2 MB。选择后可框选正方形选区再裁剪上传。</small></div><div class="avatar-settings-actions"><button id="character-avatar-upload-button" class="ghost-button" type="button">${item?.avatarUrl ? "更换头像" : "上传头像"}</button><button id="character-avatar-remove-button" class="ghost-button${item?.avatarUrl ? "" : " hidden"}" type="button">移除头像</button></div></div>` +
-      field("name", "标准名", "text", item?.name) +
+      raceField +
       field("gender", "性别", "select", item?.gender ?? "unknown", CHARACTER_GENDER_OPTIONS) +
-      field("aliases", "别名", "item-list", item?.aliases ?? []) +
-      (!canReadModule("races")
-        ? '<div class="character-editor-empty-field"><b>种族</b><span>当前账户没有种族模块读取权限，原有绑定不会被修改。</span></div>'
-        : state.races.length
-        ? field("raceId", "种族", "select", item?.raceId ?? "", raceOptions)
-        : '<div class="character-editor-empty-field"><b>种族</b><span>尚未创建种族，请先在“种族”模块建立档案。</span></div>') +
+      field("aliases", "别名", "keyword-chips", item?.aliases ?? []) +
       (!canReadModule("organizations")
         ? '<div class="character-editor-empty-field"><b>所属组织</b><span>当前账户没有组织模块读取权限，原有绑定不会被修改。</span></div>'
         : organizationOptions.length
@@ -16203,9 +16205,8 @@ function renderCharacterEditorFields(item) {
         : '<div class="character-editor-empty-field"><b>角色扮演记忆</b><span>保存角色卡后即可管理该角色的共享记忆库。</span></div>',
       item?.id ? roleplayMemoryToolbarMarkup() : "")
   ].join("");
-  const name = $("#character-editor-fields [name='name']");
-  if (name) name.required = true;
   bindDynamicListControls($("#character-editor-fields"));
+  bindRelationshipKeywordControls($("#character-editor-fields"));
   renderCharacterAvatar(item);
   renderCharacterEditorRelationships();
   renderCharacterMarkdownSections();
@@ -16285,7 +16286,7 @@ function renderCharacterHistory() {
       const restored = await api(`/api/characters/${characterEditorItem.id}/restore`, { method: "POST", body: { versionNo } });
       characterEditorItem = restored;
       renderCharacterEditorFields(restored);
-      $("#character-editor-title").textContent = restored.name;
+      $("#character-editor-name").value = restored.name;
       $("#character-editor-version").textContent = `v${restored.versionNo}`;
       $("#character-change-note").value = "";
       await Promise.all([renderCharacters(), loadAiReferences()]);
@@ -16324,7 +16325,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   characterEditorRelationshipsLoaded = false;
   characterEditorSections = [];
   $("#character-editor-eyebrow").textContent = item ? "人物主档案" : "建立人物档案";
-  $("#character-editor-title").textContent = item?.name || "新建角色";
+  $("#character-editor-name").value = item?.name ?? "";
   $("#character-editor-version").textContent = item ? `v${item.versionNo}` : "新档案";
   $("#character-change-note").value = "";
   $("#character-editor-submit").textContent = item ? "保存新版本" : "创建人物档案";
@@ -16373,6 +16374,9 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   setCharacterHistoryVisible(false);
   renderCharacterEditorFields(item);
   const viewOnly = readOnly || !canEditModule("characters");
+  $("#character-editor-form").classList.toggle("is-read-only", viewOnly);
+  $("#character-editor-name").readOnly = viewOnly;
+  $("#character-editor-name").setAttribute("aria-readonly", String(viewOnly));
   if (viewOnly) {
     $("#character-editor-eyebrow").textContent = readOnly ? "阅读人物档案" : "人物档案";
     $("#character-editor-fields").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = true; });
@@ -16420,10 +16424,11 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
       busyTarget: form,
       button: submit,
       prepare: async () => {
+        commitRelationshipKeywordInputs(form);
         const body = collectCharacterBody(new FormData(form));
         if (!body.name) {
           toast("请填写角色标准名", "error");
-          form.querySelector("[name='name']")?.focus();
+          $("#character-editor-name").focus();
           return null;
         }
         const currentItem = characterEditorItem;
@@ -16437,7 +16442,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
         state.characters = upsertEntityCollection(state.characters, saved);
         entityEditorDirty = false;
         renderCharacterAvatar(saved);
-        $("#character-editor-title").textContent = saved.name;
+        $("#character-editor-name").value = saved.name;
         $("#character-editor-version").textContent = `v${saved.versionNo}`;
         $("#character-change-note").value = "";
         $("#character-history-button").disabled = false;
@@ -16463,6 +16468,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   if (item) {
     void loadCharacterMarkdownSections(item.id);
   }
+  (viewOnly ? $("#character-editor-close") : $("#character-editor-name")).focus();
 }
 
 function knowledgeEditorSection(key, title, description, content) {
@@ -19976,7 +19982,7 @@ $("#character-editor-form").addEventListener("change", markEntityEditorDirty);
 $("#knowledge-editor-form").addEventListener("input", markEntityEditorDirty);
 $("#knowledge-editor-form").addEventListener("change", markEntityEditorDirty);
 $("#character-editor-fields").addEventListener("click", (event) => {
-  if (event.target.closest("[data-item-list-add], [data-structured-list-add], [data-item-list-remove], [data-structured-list-remove]")) markEntityEditorDirty();
+  if (event.target.closest("[data-item-list-add], [data-structured-list-add], [data-item-list-remove], [data-structured-list-remove], [data-keyword-chip-remove]")) markEntityEditorDirty();
   const uploadButton = event.target.closest("#character-avatar-upload-button");
   if (uploadButton) {
     if (!characterEditorItem?.id) {
