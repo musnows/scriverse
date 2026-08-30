@@ -536,7 +536,7 @@ export type DesktopLocalAiRuntimeModelInput = {
   id: string;
   providerId: string;
   providerName: string;
-  protocol: "openai-chat-completions";
+  protocol: AiProviderProtocol;
   maxTokensParameter: MaxTokensParameter;
   thinkingType: AiThinkingType;
   concurrencyLimit: number;

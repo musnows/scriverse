@@ -810,7 +810,7 @@ const desktopLocalAiRuntimeModelSchema = z.object({
   id: identifier,
   providerId: identifier,
   providerName: nonEmpty.max(200),
-  protocol: z.literal("openai-chat-completions"),
+  protocol: z.enum(AI_PROVIDER_PROTOCOLS),
   maxTokensParameter: z.enum(MAX_TOKENS_PARAMETERS),
   thinkingType: z.enum(["enabled", "adaptive"]),
   concurrencyLimit: z.number().int().min(1).max(100),
