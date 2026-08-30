@@ -51,6 +51,11 @@ describe("AI 对话发送与终止按钮", () => {
     expect(application).toContain('request.signal.reason.message === "用户已终止当前回复"');
     expect(application).toContain('const cancelledByClient = request.signal.reason?.code === "AI_REQUEST_CANCELLED";');
     expect(application).toContain('if (code === "AI_REQUEST_CANCELLED") return "已终止";');
+    expect(application).toContain("const hasRenderableProcessSteps = processSteps.some(shouldRenderAiProcessStep);");
+    expect(application).toContain("const interruption = streamedText || hasRenderableProcessSteps ? {");
+    expect(application).toContain("...(processSteps.length ? { processSteps } : {})");
+    expect(application).toContain("...(interruption?.metadata ?? {})");
     expect(page).toContain("&feature=ai-send-control-v3");
+    expect(page).toContain("&feature=ai-cancel-preserve-process-v2");
   });
 });

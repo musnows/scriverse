@@ -8,6 +8,7 @@ export function supportsMultimodalModelProtocol(protocol: string | null | undefi
 export type ModelFormValues = {
   displayName: string;
   modelId: string;
+  modelKind: "chat" | "embedding" | "rerank";
   purposes: string[];
   contextWindow: number;
   temperature: number;

@@ -267,6 +267,8 @@ function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null
   if (method !== "POST") return null;
   if (
     /^\/api\/works\/[^/]+\/(?:suggestions|chat\/stream|tasks)(?:\/|$)/u.test(path)
+    || /^\/api\/works\/[^/]+\/semantic-search$/u.test(path)
+    || /^\/api\/works\/[^/]+\/ai-settings\/semantic-search-index\/(?:sync|rebuild)$/u.test(path)
     || /^\/api\/suggestions\/[^/]+\/guard$/u.test(path)
     || /^\/api\/ai-conversations\/[^/]+\/(?:compact|context\/prepare)$/u.test(path)
     || /^\/api\/tasks\/[^/]+\/(?:run|rerun|cancel|relationship-changes\/apply|character-extraction\/apply)$/u.test(path)

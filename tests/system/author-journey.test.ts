@@ -206,7 +206,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("const workspaceOnboardingSteps = [");
     expect(application.text).toContain("function positionOnboardingElements()");
     expect(application.text).toContain('selector: "[data-new-chapter-volume]"');
-    expect(application.text).toContain('selector: ".quick-actions button[data-task=\\"continue\\"]"');
+    expect(application.text).toContain('selector: ".quick-actions button[data-prompt^=\\"续写\\"]"');
     expect(application.text).toContain("function scheduleFirstUseOnboarding()");
     expect(application.text).toContain('api("/api/auth/onboarding/complete", { method: "POST", body: {} })');
     expect(application.text).toContain('addEventListener("cancel"');
@@ -638,7 +638,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('class="prompt-composer"');
     expect(page.text).toContain('class="ai-send-button"');
     expect(page.text).toContain('id="ai-context-meter"');
-    expect(application.text).toContain('description.textContent = item.key === "skills"\n        ? "待加入"\n        : item.key === "input" ? "用户和 agent 的交互" : "当前调用实际输出";');
+    expect(application.text).toContain('description.textContent = item.key === "skills"\n        ? "按需加载"\n        : item.key === "input" ? "用户和 agent 的交互" : "当前调用实际输出";');
     expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
     expect(application.text).toContain("多人协作，自动保存已关闭");
     expect(application.text).toContain("if (automatic) {");

@@ -11,11 +11,12 @@ import {
 import { exportWorkDocx } from "./docx-export.js";
 import { createEpubArchive } from "./epub-export.js";
 import { AppError, notFound } from "./errors.js";
-import { documentParagraphLineRanges, normalizeWorkSearchQuery, type HybridSearchType } from "./hybrid-search.js";
+import { documentParagraphLineRanges, hybridSearchPermissionModule, normalizeWorkSearchQuery, type HybridSearchType } from "./hybrid-search.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
 import {
+  canReadWorkModule,
   canWriteWorkModule,
   classifyWorkModulePermissions,
   emptyWorkModulePermissions,
@@ -53,6 +54,7 @@ import {
   reconcileChapterLineIds,
   reanchorChapterAnnotations
 } from "./chapter-annotation-anchor.js";
+import { renumberChapterTitle, type ChapterNumberStyle } from "./chapter-title-numbering.js";
 import {
   normalizeRoleplayMemoryContent,
   roleplayMemoryCandidateIsSafe,
@@ -165,13 +167,14 @@ export const WORK_AGENT_TOOL_IDS = [
   "read_chapters",
   "grep",
   "search_story_entities",
+  "semantic_search_story",
   "read_character_sections",
   "search_drafts",
   "image",
   "calculate_time"
 ] as const;
 export type WorkAgentToolId = (typeof WORK_AGENT_TOOL_IDS)[number];
-const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_TOOL_IDS];
+const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = WORK_AGENT_TOOL_IDS.filter((toolId) => toolId !== "semantic_search_story");
 const LEGACY_DEFAULT_WORK_AGENT_TOOLS = [
   "story_index",
   "read_chapters",
@@ -715,8 +718,13 @@ export type BeginAiConversationStreamRequestResult = {
   assistantMessage: Record<string, unknown> | null;
 };
 
-export const aiConversationTaskTypes = ["chat", "roleplay", "continue", "polish"] as const;
+export const aiConversationTaskTypes = ["chat", "roleplay"] as const;
 export type AiConversationTaskType = typeof aiConversationTaskTypes[number];
+
+function normalizeAiConversationTaskType(value: unknown, roleplayCharacterId?: string | null): AiConversationTaskType {
+  if (roleplayCharacterId || value === "roleplay") return "roleplay";
+  return "chat";
+}
 
 export function defaultAiConversationTitle(prompt: string): string {
   const normalized = roleplayUserTurnTitleSource(prompt).replace(/\s+/gu, " ").trim();
@@ -1936,6 +1944,18 @@ export class Store {
       titleGenerationModelId: row?.title_generation_model_id === null || row?.title_generation_model_id === undefined
         ? null
         : String(row.title_generation_model_id),
+      semanticSearchEnabled: Number(row?.semantic_search_enabled ?? 0) === 1,
+      semanticEmbeddingModelId: row?.semantic_embedding_model_id === null || row?.semantic_embedding_model_id === undefined
+        ? null
+        : String(row.semantic_embedding_model_id),
+      semanticRerankModelId: row?.semantic_rerank_model_id === null || row?.semantic_rerank_model_id === undefined
+        ? null
+        : String(row.semantic_rerank_model_id),
+      semanticVectorDimension: Math.min(65_536, Math.max(1, Number(row?.semantic_vector_dimension ?? 1_024) || 1_024)),
+      semanticRecallLimit: Math.min(200, Math.max(1, Number(row?.semantic_recall_limit ?? 20) || 20)),
+      semanticResultLimit: Math.min(100, Math.max(1, Number(row?.semantic_result_limit ?? 12) || 12)),
+      semanticBudgetTokens: Math.min(100_000, Math.max(256, Number(row?.semantic_budget_tokens ?? 4_000) || 4_000)),
+      semanticChannelWeight: Math.min(5, Math.max(0.1, Number(row?.semantic_channel_weight ?? 1) || 1)),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
@@ -2063,6 +2083,119 @@ export class Store {
       titleGenerationModelId: nextTitleGenerationModelId
     });
     return this.getWorkAiSettings(workId);
+  }
+
+  updateWorkSemanticSearchSettings(workId: string, input: {
+    enabled?: boolean;
+    embeddingModelId?: string | null;
+    rerankModelId?: string | null;
+    vectorDimension?: number;
+    recallLimit?: number;
+    resultLimit?: number;
+    budgetTokens?: number;
+    channelWeight?: number;
+  }): Record<string, unknown> {
+    this.getWork(workId);
+    const current = this.getWorkAiSettings(workId);
+    const enabled = input.enabled ?? Boolean(current.semanticSearchEnabled);
+    const embeddingModelId = input.embeddingModelId === undefined
+      ? current.semanticEmbeddingModelId ? String(current.semanticEmbeddingModelId) : null
+      : input.embeddingModelId?.trim() || null;
+    const rerankModelId = input.rerankModelId === undefined
+      ? current.semanticRerankModelId ? String(current.semanticRerankModelId) : null
+      : input.rerankModelId?.trim() || null;
+    const vectorDimension = Math.min(65_536, Math.max(1, Math.trunc(input.vectorDimension ?? Number(current.semanticVectorDimension))));
+    const recallLimit = Math.min(200, Math.max(1, Math.trunc(input.recallLimit ?? Number(current.semanticRecallLimit))));
+    const resultLimit = Math.min(100, Math.max(1, Math.trunc(input.resultLimit ?? Number(current.semanticResultLimit))));
+    const budgetTokens = Math.min(100_000, Math.max(256, Math.trunc(input.budgetTokens ?? Number(current.semanticBudgetTokens))));
+    const channelWeight = Math.min(5, Math.max(0.1, Number(input.channelWeight ?? current.semanticChannelWeight)));
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO work_ai_settings (
+           work_id, semantic_search_enabled, semantic_embedding_model_id, semantic_rerank_model_id,
+           semantic_vector_dimension, semantic_recall_limit, semantic_result_limit,
+           semantic_budget_tokens, semantic_channel_weight, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(work_id) DO UPDATE SET
+           semantic_search_enabled = excluded.semantic_search_enabled,
+           semantic_embedding_model_id = excluded.semantic_embedding_model_id,
+           semantic_rerank_model_id = excluded.semantic_rerank_model_id,
+           semantic_vector_dimension = excluded.semantic_vector_dimension,
+           semantic_recall_limit = excluded.semantic_recall_limit,
+           semantic_result_limit = excluded.semantic_result_limit,
+           semantic_budget_tokens = excluded.semantic_budget_tokens,
+           semantic_channel_weight = excluded.semantic_channel_weight,
+           updated_at = excluded.updated_at`,
+        workId,
+        enabled ? 1 : 0,
+        embeddingModelId,
+        rerankModelId,
+        vectorDimension,
+        recallLimit,
+        resultLimit,
+        budgetTokens,
+        channelWeight,
+        timestamp
+      );
+      this.audit(workId, "semantic.settings.updated", "work-ai-settings", workId, {
+        enabled,
+        embeddingModelId,
+        rerankModelId,
+        vectorDimension,
+        recallLimit,
+        resultLimit,
+        budgetTokens,
+        channelWeight
+      });
+    });
+    return this.getWorkAiSettings(workId);
+  }
+
+  getSemanticContextSnapshot(snapshotId: string, workId: string): Record<string, unknown> {
+    const work = this.getWork(workId);
+    const row = this.db.get("SELECT * FROM semantic_context_snapshots WHERE id = ? AND work_id = ?", snapshotId, workId);
+    if (!row) throw notFound("语义上下文快照");
+    const actor = currentRequestActor();
+    const createdByUserId = row.created_by_user_id === null || row.created_by_user_id === undefined
+      ? null
+      : String(row.created_by_user_id);
+    if (actor?.userId && createdByUserId && actor.userId !== createdByUserId) {
+      throw new AppError(403, "SEMANTIC_SNAPSHOT_ACCESS_DENIED", "不能读取其他用户创建的语义上下文快照");
+    }
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    const items = this.db.all(
+      "SELECT * FROM semantic_context_snapshot_items WHERE snapshot_id = ? ORDER BY position",
+      snapshotId
+    ).flatMap((item) => {
+      const module = hybridSearchPermissionModule(String(item.source_type));
+      if (!module || !canReadWorkModule(permissions, module)) return [];
+      return [{
+        position: Number(item.position),
+        entryId: String(item.entry_id),
+        sourceType: String(item.source_type),
+        sourceId: String(item.source_id),
+        sectionId: String(item.section_id) || null,
+        sourceVersion: String(item.source_version),
+        sourceTitle: String(item.source_title),
+        startLine: Number(item.start_line),
+        endLine: Number(item.end_line),
+        content: String(item.content),
+        estimatedTokens: Number(item.estimated_tokens),
+        matchKinds: json<string[]>(String(item.match_kinds_json), ["semantic"])
+      }];
+    });
+    return {
+      id: String(row.id),
+      workId: String(row.work_id),
+      conversationId: row.conversation_id === null ? null : String(row.conversation_id),
+      query: String(row.query),
+      scope: json<Record<string, unknown>>(String(row.scope_json), {}),
+      configFingerprint: String(row.config_fingerprint),
+      createdByUserId,
+      createdAt: String(row.created_at),
+      items
+    };
   }
 
   clearAutoRunPause(workId: string): Record<string, unknown> {
@@ -4073,6 +4206,7 @@ export class Store {
       | { type: "move"; volumeId: string }
       | { type: "setType"; chapterType: ChapterType }
       | { type: "setAnalysisExclusion"; excludedFromAnalysis: boolean }
+      | { type: "renumberTitles"; template: string; numberStyle: ChapterNumberStyle; startAt: number }
       | { type: "delete" }
   ): Record<string, unknown> {
     this.getWork(workId);
@@ -4086,6 +4220,73 @@ export class Store {
         return chapter;
       });
       const timestamp = now();
+      if (action.type === "renumberTitles") {
+        if (action.startAt + currentChapters.length - 1 > 999_999) {
+          throw new AppError(400, "CHAPTER_NUMBER_RANGE", "起始序号与所选章节数量超出最大序号 999999");
+        }
+        const currentById = new Map(currentChapters.map((chapter) => [String(chapter.id), chapter]));
+        const placeholders = currentChapters.map(() => "?").join(", ");
+        const orderedChapters = this.db.all(
+          `SELECT chapter.id FROM chapters chapter
+           JOIN volumes volume ON volume.id = chapter.volume_id
+           WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL
+             AND volume.deleted_at IS NULL AND chapter.id IN (${placeholders})
+           ORDER BY volume.sort_order, volume.created_at, volume.id,
+             chapter.sort_order, chapter.created_at, chapter.id`,
+          workId,
+          ...currentChapters.map((chapter) => String(chapter.id))
+        ).map((row) => currentById.get(requiredString(row, "id"))).filter((chapter): chapter is Record<string, unknown> => Boolean(chapter));
+        const renumbered = orderedChapters.map((chapter, index) => ({
+          chapter,
+          title: renumberChapterTitle(String(chapter.title), action.startAt + index, action.template, action.numberStyle),
+          sequence: action.startAt + index
+        }));
+        const oversized = renumbered.find((item) => item.title.length > 300);
+        if (oversized) {
+          throw new AppError(400, "CHAPTER_TITLE_TOO_LONG", `章节“${String(oversized.chapter.title).slice(0, 40)}”重排后的标题超过 300 个字符`);
+        }
+        let updated = 0;
+        for (const item of renumbered) {
+          const chapter = item.chapter;
+          if (item.title === chapter.title) continue;
+          const chapterId = String(chapter.id);
+          const versionNo = Number(chapter.versionNo) + 1;
+          this.db.run(
+            "UPDATE chapters SET title = ?, version_no = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?",
+            item.title,
+            versionNo,
+            timestamp,
+            chapterId
+          );
+          this.syncChapterParagraphSearchVersion(chapterId, versionNo);
+          this.insertChapterVersionRow({
+            workId,
+            chapterId,
+            versionNo,
+            title: item.title,
+            content: String(chapter.content),
+            volumeId: String(chapter.volumeId),
+            sortOrder: Number(chapter.sortOrder),
+            chapterType: String(chapter.chapterType),
+            source: "manual",
+            sourceRef: null,
+            changeNote: "批量重排章节标题序号",
+            timestamp
+          });
+          this.invalidateChapter(workId, chapterId, versionNo);
+          this.audit(workId, "chapter.saved", "chapter", chapterId, {
+            previousTitle: chapter.title,
+            title: item.title,
+            sequence: item.sequence,
+            versionNo,
+            batch: true,
+            renumbered: true
+          });
+          updated += 1;
+        }
+        this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+        return { processed: currentChapters.length, updated, action: action.type };
+      }
       if (action.type === "move") {
         const targetVolume = this.getVolume(action.volumeId);
         if (targetVolume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
@@ -9701,7 +9902,7 @@ export class Store {
     const roleplayCharacterId = optionalString(conversation, "roleplay_character_id");
     return {
       workId,
-      taskType: (optionalString(conversation, "task_type") ?? (roleplayCharacterId ? "roleplay" : "chat")) as AiConversationTaskType,
+      taskType: normalizeAiConversationTaskType(optionalString(conversation, "task_type"), roleplayCharacterId),
       roleplayCharacterId,
       roleplayUserCharacterId: optionalString(conversation, "roleplay_user_character_id"),
       roleplayMemories: roleplayCharacterId ? this.getRoleplayMemoryPromptItems(workId, roleplayCharacterId) : [],
@@ -9989,7 +10190,7 @@ export class Store {
     if (!conversation) throw notFound("AI 对话");
     const workId = requiredString(conversation, "work_id");
     const previousCharacterId = optionalString(conversation, "roleplay_character_id");
-    const previousTaskType = optionalString(conversation, "task_type") ?? (previousCharacterId ? "roleplay" : "chat");
+    const previousTaskType = normalizeAiConversationTaskType(optionalString(conversation, "task_type"), previousCharacterId);
     if (previousTaskType === taskType) return this.getAiConversationSummary(conversationId);
     const messageCount = Number(this.db.get(
       "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?",
@@ -10419,7 +10620,7 @@ export class Store {
         workId,
         optionalString(conversation, "roleplay_character_id"),
         optionalString(conversation, "roleplay_user_character_id"),
-        optionalString(conversation, "task_type"),
+        normalizeAiConversationTaskType(optionalString(conversation, "task_type"), optionalString(conversation, "roleplay_character_id")),
         optionalString(conversation, "context_scope_json"),
         title.slice(0, 200),
         forkSummary,
@@ -10530,7 +10731,7 @@ export class Store {
       compactedMessageCount: numberValue(row, "compacted_message_count"),
       hasCompactedSummary: Boolean(requiredString(row, "compacted_summary")),
       contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
-      taskType: optionalString(row, "task_type") ?? (roleplayCharacterId ? "roleplay" : "chat"),
+      taskType: normalizeAiConversationTaskType(optionalString(row, "task_type"), roleplayCharacterId),
       ...(lockedModelId ? { modelId: lockedModelId } : {}),
       ...(hasImageAttachments ? { hasImageAttachments: true, modelLockedByImage: true } : {}),
       contextScope: json<ContextScope>(optionalString(row, "context_scope_json") ?? "", { type: "none" }),

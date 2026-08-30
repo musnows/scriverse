@@ -25,7 +25,7 @@ import {
   visibleForeshadowReminders
 } from "/foreshadow-reminder.js?v=20260812-editor-reminder-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
-import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260822-ai-model-thinking-label-v3&feature=ai-provider-responses-v1";
+import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260822-ai-model-thinking-label-v3&feature=ai-provider-responses-v1&feature=semantic-search-v6";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260822-private-ai-endpoint-hint-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
@@ -180,10 +180,14 @@ function normalizePageSizes(value) {
   ]));
 }
 
-function isSelectableModel(model) {
+function isAvailableConfiguredModel(model) {
   return Boolean(model?.enabled)
     && model?.providerStatus === "enabled"
     && model?.providerConnectionStatus === "success";
+}
+
+function isSelectableModel(model) {
+  return (model?.modelKind ?? "chat") === "chat" && isAvailableConfiguredModel(model);
 }
 
 const state = {
@@ -201,6 +205,7 @@ const state = {
   aiCitations: [],
   aiReferences: [],
   aiImageAttachments: [],
+  aiSemanticSnapshot: null,
   aiPromptSent: false,
   aiTaskType: "chat",
   aiContextScope: { type: "none" },
@@ -296,6 +301,9 @@ let taskProgressRefreshTimer = null;
 let taskAutoRunEditing = false;
 let taskAutoRunEditingWorkId = null;
 let relationshipSearchIndexRefreshTimer = null;
+let semanticSearchIndexRefreshTimer = null;
+let aiSemanticSearchResults = [];
+let aiSemanticSearchQuery = "";
 let backgroundTaskCenterTimer = null;
 let backgroundTaskCenterRequest = 0;
 let backgroundTaskCenterWorkId = null;
@@ -841,7 +849,7 @@ const workspaceOnboardingSteps = [
   { selector: "[data-module=\"outlines\"]", eyebrow: "创作规划", title: "跟踪大纲/伏笔", description: "记录剧情目标、冲突、转折和伏笔回收，避免长线遗漏。", placement: "right" },
   { selector: "[data-module=\"tasks\"]", eyebrow: "AI 分析中心", title: "从这里理解整部小说", description: "运行人物、关系、世界观、设定、事件和一致性分析，并查看每次分析的结果与进度。", placement: "right" },
   { selector: "#top-search-button", eyebrow: "全文检索", title: "搜索整部作品", description: "一次检索正文、角色、设定、种族与组织，快速定位创作依据。", placement: "bottom" },
-  { selector: ".quick-actions button[data-task=\"continue\"]", eyebrow: "AI 快捷指令", title: "让创作助手基于正文工作", description: "总结、续写、剧情方向和冲突检查都以已保存内容为依据。", placement: "left" },
+  { selector: ".quick-actions button[data-prompt^=\"续写\"]", eyebrow: "AI 快捷指令", title: "让创作助手基于正文工作", description: "总结、续写、剧情方向和冲突检查都以已保存内容为依据。", placement: "left" },
   { selector: "#ai-send", eyebrow: "AI 对话", title: "发送你的创作要求", description: "选择上下文范围与模型后发送任务。AI 结果默认只是建议，不会直接覆盖正文。", placement: "left" },
   { selector: "#settings-button", eyebrow: "工作台设置", title: "管理 AI、协作与导出", description: "供应商、显示偏好、作品成员和正文 ZIP 导出都集中在这里。", placement: "bottom" },
   { selector: "#account-button", eyebrow: "账户", title: "管理账户并重看导览", description: "账户菜单保存个人设置入口，也可以随时重新打开这套功能导览。", placement: "bottom" }
@@ -2096,6 +2104,148 @@ function renderAiCitations() {
   setAiContextMeter(null);
 }
 
+function setAiSemanticSearchVisible(visible) {
+  const panel = $("#ai-semantic-search-panel");
+  panel.classList.toggle("hidden", !visible);
+  $("#ai-semantic-search-toggle").setAttribute("aria-expanded", String(visible));
+  if (visible) $("#ai-semantic-query").focus();
+}
+
+function semanticSearchScopeTypes(value) {
+  return ({
+    chapter: ["chapter"],
+    setting: ["setting"],
+    character: ["character"],
+    race: ["race"],
+    organization: ["organization"],
+    timeline: ["timeline-track", "timeline-event"],
+    relationship: ["relationship"],
+    outlines: ["chapter-outline", "foreshadow"]
+  })[value] ?? undefined;
+}
+
+function syncAiSemanticSelectionSummary() {
+  const selected = [...$("#ai-semantic-search-results").querySelectorAll('input[data-semantic-entry-id]:checked')];
+  const tokenCount = selected.reduce((total, input) => total + Number(input.dataset.estimatedTokens || 0), 0);
+  $("#ai-semantic-selection-summary").textContent = selected.length
+    ? `已选择 ${selected.length} 项，预计 ${tokenCount.toLocaleString("zh-CN")} Token`
+    : "尚未选择结果";
+  $("#ai-semantic-inject").disabled = selected.length === 0 || !state.work || !canWritePermissionModule(state.work, "ai-chat");
+}
+
+function renderAiSemanticSearchResults(search) {
+  aiSemanticSearchResults = Array.isArray(search?.results) ? search.results : [];
+  const host = $("#ai-semantic-search-results");
+  const matchLabels = { metadata: "资料", exact: "精确", phonetic: "拼音", semantic: "语义" };
+  host.innerHTML = aiSemanticSearchResults.length
+    ? aiSemanticSearchResults.map((item, index) => {
+      const lineRange = Number.isInteger(item.startLine)
+        ? `<span>${item.startLine === item.endLine ? `第 ${item.startLine} 行` : `第 ${item.startLine}-${item.endLine} 行`}</span>`
+        : "";
+      const matchKinds = (Array.isArray(item.matchKinds) ? item.matchKinds : [])
+        .map((kind) => `<span class="search-result-chip search-result-chip-${esc(kind)}">${esc(matchLabels[kind] ?? kind)}</span>`).join("");
+      const relevance = typeof item.semanticScore === "number" ? `<span>相似度 ${Math.round(item.semanticScore * 1000) / 10}%</span>` : "";
+      const rerank = typeof item.rerankScore === "number" ? `<span>Rerank ${item.rerankScore > 0 ? "相关" : "不相关"}</span>` : "";
+      return `<article class="ai-semantic-result" data-semantic-result-index="${index}"><label>${item.entryId ? `<input type="checkbox" data-semantic-entry-id="${esc(item.entryId)}" data-estimated-tokens="${esc(String(item.estimatedTokens ?? 0))}">` : '<span class="ai-semantic-view-only">仅查看</span>'}<span class="ai-semantic-result-copy"><strong>${esc(searchResultTypeLabel(item.type))} · ${esc(item.title)}</strong><small>${lineRange}${matchKinds}${relevance}${rerank}<span>预计 ${esc(String(item.estimatedTokens ?? 0))} Token</span></small><span>${esc(item.snippet || "无原文片段")}</span></span></label><button type="button" data-semantic-locate="${index}">定位来源</button></article>`;
+    }).join("")
+    : '<p class="ai-semantic-empty">没有找到可展示的结果。</p>';
+  host.querySelectorAll('input[data-semantic-entry-id]').forEach((input) => input.addEventListener("change", syncAiSemanticSelectionSummary));
+  host.querySelectorAll("[data-semantic-locate]").forEach((button) => button.addEventListener("click", async () => {
+    const result = aiSemanticSearchResults[Number(button.dataset.semanticLocate)];
+    if (!result) return;
+    try {
+      setAiSemanticSearchVisible(false);
+      await openSearchResult(result);
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }));
+  syncAiSemanticSelectionSummary();
+}
+
+function renderAiSemanticInjection() {
+  const host = $("#ai-semantic-injection");
+  const snapshot = state.aiSemanticSnapshot;
+  host.classList.toggle("hidden", !snapshot);
+  if (!snapshot) {
+    host.replaceChildren();
+    setAiContextMeter(null);
+    return;
+  }
+  host.innerHTML = `<div><strong>本轮语义快照</strong><span>${esc(String(snapshot.itemCount ?? snapshot.items?.length ?? 0))} 项 · 预计 ${Number(snapshot.estimatedTokens ?? 0).toLocaleString("zh-CN")} Token</span><small>${esc(snapshot.query ?? "")}</small></div><button type="button" aria-label="移除本轮语义快照">×</button>`;
+  host.querySelector("button")?.addEventListener("click", () => {
+    state.aiSemanticSnapshot = null;
+    renderAiSemanticInjection();
+    persistActiveAiChatTab();
+  });
+  setAiContextMeter(null);
+}
+
+async function runAiSemanticSearch() {
+  if (!state.work) return toast("请先选择作品", "error");
+  const query = $("#ai-semantic-query").value.trim();
+  if (!query) return toast("请输入自然语言检索问题", "error");
+  const button = $("#ai-semantic-search-run");
+  button.disabled = true;
+  $("#ai-semantic-search-status").textContent = "正在执行主动语义检索……";
+  try {
+    const selection = state.chapter
+      ? $("#chapter-content").value.slice($("#chapter-content").selectionStart, $("#chapter-content").selectionEnd).slice(0, 4_000)
+      : "";
+    aiSemanticSearchQuery = query;
+    const search = await api(`/api/works/${encodeURIComponent(state.work.id)}/semantic-search`, {
+      method: "POST",
+      body: {
+        query,
+        types: semanticSearchScopeTypes($("#ai-semantic-scope").value),
+        currentChapterId: state.chapter?.id,
+        selection: selection || undefined,
+        includeKeyword: true
+      }
+    });
+    renderAiSemanticSearchResults(search);
+    $("#ai-semantic-search-status").textContent = search.semanticUsed
+      ? `${search.results.length} 项融合结果${search.degraded ? `；${search.reason}` : "；已标注 semantic 通道"}`
+      : `${search.results.length} 项关键词降级结果；${search.reason}`;
+  } catch (error) {
+    aiSemanticSearchResults = [];
+    renderAiSemanticSearchResults({ results: [] });
+    $("#ai-semantic-search-status").textContent = error.message;
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function injectAiSemanticSelection() {
+  if (!state.work) return;
+  const entryIds = [...$("#ai-semantic-search-results").querySelectorAll('input[data-semantic-entry-id]:checked')]
+    .map((input) => input.dataset.semanticEntryId)
+    .filter(Boolean);
+  if (!entryIds.length) return;
+  const button = $("#ai-semantic-inject");
+  button.disabled = true;
+  try {
+    const snapshot = await api(`/api/works/${encodeURIComponent(state.work.id)}/semantic-search/snapshots`, {
+      method: "POST",
+      body: {
+        query: aiSemanticSearchQuery,
+        entryIds,
+        scope: { types: semanticSearchScopeTypes($("#ai-semantic-scope").value) ?? [] },
+        conversationId: state.aiConversationId || undefined
+      }
+    });
+    state.aiSemanticSnapshot = snapshot;
+    renderAiSemanticInjection();
+    persistActiveAiChatTab();
+    setAiSemanticSearchVisible(false);
+    toast(`已将 ${snapshot.itemCount} 项语义原文加入本轮上下文`);
+  } catch (error) {
+    toast(error.message, "error");
+    button.disabled = false;
+  }
+}
+
 function aiReferenceKey(reference) {
   return `${reference.kind}:${reference.id}`;
 }
@@ -2177,7 +2327,7 @@ function createAiChatTabState(input = {}) {
     roleplayUserCharacter: input.roleplayUserCharacter ?? null,
     citations: input.citations ?? [],
     references: input.references ?? [],
-    composer: input.composer ?? { text: "", citations: [], references: [], images: [], sceneDirection: "", scenePin: emptyRoleplayScenePin() },
+    composer: input.composer ?? { text: "", citations: [], references: [], images: [], semanticSnapshot: null, sceneDirection: "", scenePin: emptyRoleplayScenePin() },
     contextUsage: input.contextUsage ?? null,
     contextWarning: input.contextWarning === true,
     lastMessageAt: input.lastMessageAt ?? null,
@@ -2220,6 +2370,7 @@ function setAiChatTabComposerSnapshot(tab, snapshot) {
     citations: tab.citations.map((citation) => ({ ...citation })),
     references: tab.references.map((reference) => ({ ...reference })),
     images: normalizeAiChatImageAttachments(snapshot.images),
+    semanticSnapshot: snapshot.semanticSnapshot ? structuredClone(snapshot.semanticSnapshot) : null,
     sceneDirection: String(snapshot.sceneDirection ?? ""),
     scenePin: normalizeRoleplayScenePin(snapshot.scenePin)
   };
@@ -2231,6 +2382,7 @@ function clearAiChatTabComposer(tab) {
     citations: [],
     references: [],
     images: [],
+    semanticSnapshot: null,
     sceneDirection: "",
     scenePin: normalizeRoleplayScenePin(tab.composer?.scenePin)
   });
@@ -2244,6 +2396,7 @@ function applyAiChatTabState(tab) {
   state.aiCitations = tab.citations.map((citation) => ({ ...citation }));
   state.aiReferences = tab.references.map((reference) => ({ ...reference }));
   state.aiImageAttachments = normalizeAiChatImageAttachments(tab.composer?.images);
+  state.aiSemanticSnapshot = tab.composer?.semanticSnapshot ? structuredClone(tab.composer.semanticSnapshot) : null;
   state.aiLastMessageAt = tab.lastMessageAt;
   $("#ai-conversation-title").textContent = tab.title || "新对话";
   applyAiConversationTaskType(tab.taskType);
@@ -2255,6 +2408,7 @@ function applyAiChatTabState(tab) {
   setAiPromptText(tab.composer.text);
   restoreAiSceneComposer(tab.composer);
   renderAiCitations();
+  renderAiSemanticInjection();
   renderAiReferences();
   renderAiImageAttachments();
   latestAiContextUsage = null;
@@ -2551,7 +2705,7 @@ function resetAiFeed(
   const roleplayUserName = roleplayUserCharacter?.name;
   feed.innerHTML = roleplayName
     ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我可以通过角色卡、人物关系、知情设定和故事正文回答。"}</p></div></div>`
-    : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
+    : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后即可开始问答；提到续写或润色时会自动加载对应 Skill。所有引用都基于已保存正文。</p></div></div>';
 }
 
 function aiAssistantLabel(suffix = "", roleplayCharacter = state.aiRoleplayCharacter) {
@@ -3601,9 +3755,7 @@ async function deleteAiConversation(conversation) {
 
 const aiConversationTaskTypeLabels = {
   chat: "问答",
-  roleplay: "角色扮演",
-  continue: "续写",
-  polish: "润色选中文本"
+  roleplay: "角色扮演"
 };
 
 function aiConversationTaskTypeLabel(taskType) {
@@ -4399,7 +4551,7 @@ function syncAiTaskOptions() {
 }
 
 function applyAiConversationTaskType(taskType) {
-  const normalizedTaskType = ["chat", "roleplay", "continue", "polish"].includes(taskType) ? taskType : "chat";
+  const normalizedTaskType = taskType === "roleplay" ? "roleplay" : "chat";
   state.aiTaskType = normalizedTaskType;
   const tab = activeAiChatTab();
   if (tab) tab.taskType = normalizedTaskType;
@@ -4566,7 +4718,7 @@ async function persistAiRequestInterruption(request, interruption = null) {
   const cancelledByClient = request.signal.reason?.code === "AI_REQUEST_CANCELLED";
   const metadata = cancelledByClient
     ? {
-        ...(partialContent ? interruption.metadata : {}),
+        ...(interruption?.metadata ?? {}),
         interrupted: true,
         interruptionCode: "AI_REQUEST_CANCELLED",
         interruptionMessage: cancellationMessage.slice(0, 500)
@@ -4739,10 +4891,12 @@ function clearAiPromptComposer() {
   state.aiCitations = [];
   state.aiReferences = [];
   state.aiImageAttachments = [];
+  state.aiSemanticSnapshot = null;
   setAiPromptText("");
   setAiSceneDirection("");
   renderAiCitations();
   renderAiImageAttachments();
+  renderAiSemanticInjection();
   hideAiMentionMenu();
   syncAiSceneComposer();
 }
@@ -4753,6 +4907,7 @@ function captureAiPromptComposer() {
     citations: state.aiCitations.map((citation) => ({ ...citation })),
     references: state.aiReferences.map((reference) => ({ ...reference })),
     images: normalizeAiChatImageAttachments(state.aiImageAttachments),
+    semanticSnapshot: state.aiSemanticSnapshot ? structuredClone(state.aiSemanticSnapshot) : null,
     sceneDirection: aiSceneDirectionText(),
     scenePin: captureAiScenePin()
   };
@@ -4762,10 +4917,12 @@ function restoreAiPromptComposer(snapshot) {
   state.aiCitations = snapshot.citations.map((citation) => ({ ...citation }));
   state.aiReferences = snapshot.references.map((reference) => ({ ...reference }));
   state.aiImageAttachments = normalizeAiChatImageAttachments(snapshot.images);
+  state.aiSemanticSnapshot = snapshot.semanticSnapshot ? structuredClone(snapshot.semanticSnapshot) : null;
   setAiPromptText(snapshot.text);
   restoreAiSceneComposer(snapshot);
   renderAiCitations();
   renderAiImageAttachments();
+  renderAiSemanticInjection();
   hideAiMentionMenu();
 }
 
@@ -8479,11 +8636,21 @@ function renderChapterBatchDialog() {
 function updateChapterBatchControls() {
   const count = chapterBatchSelectedIds.size;
   const action = $("#chapter-batch-action").value;
+  const renumbering = action === "renumberTitles";
+  const template = $("#chapter-batch-template").value.trim();
+  const templateValid = template.split("{n}").length === 2;
+  const startAt = Number($("#chapter-batch-start").value);
+  const sequenceEnd = startAt + count - 1;
   $("#chapter-batch-count").textContent = `已选择 ${count} 章`;
-  $("#chapter-batch-apply").disabled = count === 0;
+  $("#chapter-batch-apply").disabled = count === 0 || (renumbering && (!templateValid || !Number.isInteger(startAt) || startAt < 1 || sequenceEnd > 999999));
   $("#chapter-batch-volume-field").classList.toggle("hidden", action !== "move");
   $("#chapter-batch-type-field").classList.toggle("hidden", action !== "setType");
-  $("#chapter-batch-apply").textContent = action === "delete" ? "软删除所选章节" : "应用到所选章节";
+  for (const id of ["chapter-batch-template-field", "chapter-batch-number-style-field", "chapter-batch-start-field", "chapter-batch-renumber-note"]) {
+    $(`#${id}`).classList.toggle("hidden", !renumbering);
+  }
+  $("#chapter-batch-apply").textContent = action === "delete"
+    ? "软删除所选章节"
+    : renumbering ? "重排所选章节" : "应用到所选章节";
 }
 
 function openChapterBatchDialog() {
@@ -8503,16 +8670,33 @@ async function submitChapterBatch(event) {
     ? { type: "move", volumeId: $("#chapter-batch-volume").value }
     : actionValue === "setType"
       ? { type: "setType", chapterType: $("#chapter-batch-type").value }
-      : actionValue === "exclude" || actionValue === "include"
-        ? { type: "setAnalysisExclusion", excludedFromAnalysis: actionValue === "exclude" }
-        : { type: "delete" };
+      : actionValue === "renumberTitles"
+        ? {
+            type: "renumberTitles",
+            template: $("#chapter-batch-template").value.trim(),
+            numberStyle: $("#chapter-batch-number-style").value,
+            startAt: Number($("#chapter-batch-start").value)
+          }
+        : actionValue === "exclude" || actionValue === "include"
+          ? { type: "setAnalysisExclusion", excludedFromAnalysis: actionValue === "exclude" }
+          : { type: "delete" };
   const dialog = $("#chapter-batch-dialog");
-  if (action.type === "delete") {
+  if (action.type === "renumberTitles" && (action.template.split("{n}").length !== 2 || !Number.isInteger(action.startAt) || action.startAt < 1 || action.startAt + chapters.length - 1 > 999999)) {
+    toast("标题格式必须且只能包含一个 {n}，且所选章节的序号不能超过 999999", "error");
+    $("#chapter-batch-template").focus();
+    return;
+  }
+  if (action.type === "delete" || action.type === "renumberTitles") {
     dialog.close();
-    const confirmed = await confirmToast(`所选 ${chapters.length} 个章节的正文、版本和关联资料会保留，后续可以恢复。仍要删除吗？`, {
-      title: "批量删除需要再次确认",
-      confirmLabel: "确认软删除"
-    });
+    const confirmed = action.type === "delete"
+      ? await confirmToast(`所选 ${chapters.length} 个章节的正文、版本和关联资料会保留，后续可以恢复。仍要删除吗？`, {
+          title: "批量删除需要再次确认",
+          confirmLabel: "确认软删除"
+        })
+      : await confirmToast(`将按目录顺序，把所选 ${chapters.length} 个章节从第 ${action.startAt} 个序号开始重排为“${action.template}”格式。每个改名章节都会保留版本，确认继续吗？`, {
+          title: "重排标题需要再次确认",
+          confirmLabel: "确认重排"
+        });
     if (!confirmed) {
       dialog.showModal();
       return;
@@ -8520,7 +8704,7 @@ async function submitChapterBatch(event) {
   }
   $("#chapter-batch-apply").disabled = true;
   try {
-    await api(`/api/works/${encodeURIComponent(state.work.id)}/chapters/batch`, {
+    const result = await api(`/api/works/${encodeURIComponent(state.work.id)}/chapters/batch`, {
       method: "POST",
       body: { chapters: chapters.map((chapter) => ({ id: chapter.id, expectedVersionNo: chapter.versionNo })), action }
     });
@@ -8534,7 +8718,9 @@ async function submitChapterBatch(event) {
     } else renderTree();
     if (dialog.open) dialog.close();
     chapterBatchSelectedIds.clear();
-    toast(`已批量处理 ${chapters.length} 个章节`);
+    toast(action.type === "renumberTitles"
+      ? `已按目录顺序重排 ${Number(result.updated ?? chapters.length)} 个章节标题`
+      : `已批量处理 ${chapters.length} 个章节`);
   } catch (error) {
     if (!dialog.open) dialog.showModal();
     $("#chapter-batch-apply").disabled = false;
@@ -12567,16 +12753,17 @@ function renderProviderCards(providers, models, protocolOptions) {
     <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol, protocolOptions))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
     ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n思考类型：${esc(provider.thinkingType ?? "enabled")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}\n分析请求超时：${Number(provider.analysisTimeoutSeconds ?? DEFAULT_AI_ANALYSIS_TIMEOUT_SECONDS).toLocaleString("zh-CN")} 秒\n每日 Token 额度：${provider.dailyTokenQuota === null || provider.dailyTokenQuota === undefined ? "未限制" : Number(provider.dailyTokenQuota).toLocaleString("zh-CN")} · 每月 Token 额度：${provider.monthlyTokenQuota === null || provider.monthlyTokenQuota === undefined ? "未限制" : Number(provider.monthlyTokenQuota).toLocaleString("zh-CN")}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
     <div class="provider-models">${providerModels.map((model) => {
-      const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
+      const modelUnavailable = !isAvailableConfiguredModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
       const modelStatus = !model.enabled
         ? `<span class="model-status-badge is-disabled">模型已停用</span>`
         : provider.connectionStatus !== "success"
           ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
           : "";
+      const kindLabel = model.modelKind === "embedding" ? "Embedding" : model.modelKind === "rerank" ? "Rerank" : "Chat";
       const capability = model.multimodalEnabled ? " · 多模态" : "";
       const defaultBadge = model.imageToolDefault ? " · 默认读图模型" : "";
       const thinkingEffortLabel = MODEL_THINKING_EFFORT_OPTIONS.find(([value]) => value === model.thinkingEffort)?.[1] ?? "模型默认";
-      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"}${capability}${defaultBadge} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 思考强度 ${esc(thinkingEffortLabel)} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
+      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${esc(kindLabel)} · ${model.enabled ? "启用" : "停用"}${capability}${defaultBadge}${model.modelKind === "chat" ? ` · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 思考强度 ${esc(thinkingEffortLabel)} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}` : ""}</button>${modelStatus}</div>`;
     }).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button><button data-import-provider-models="${esc(provider.id)}">获取模型</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
   }).join("")}</div>`
@@ -12700,7 +12887,7 @@ function renderTaskDefaults(models, providers, taskDefaults, settings, protocolO
       <option value="" ${settings.titleGenerationModelId ? "" : "selected"}>使用提示词前 15 个字</option>
       ${models.map((model) => {
         const provider = providerById.get(model.providerId);
-        const available = model.enabled && provider?.status === "enabled" && provider?.connectionStatus === "success";
+        const available = isSelectableModel({ ...model, providerStatus: provider?.status, providerConnectionStatus: provider?.connectionStatus });
         return `<option value="${esc(model.id)}" ${model.id === settings.titleGenerationModelId ? "selected" : ""} ${available || model.id === settings.titleGenerationModelId ? "" : "disabled"}>${esc(modelOptionLabel({ ...model, providerName: model.providerName || provider?.name }))}</option>`;
       }).join("")}
     </select></td></tr>${taskTypeLabels.map(([taskType, label]) => {
@@ -12755,6 +12942,34 @@ function relationshipIndexStatusMarkup(status) {
     <dl class="relationship-index-metrics"><div><dt>待同步任务</dt><dd>${esc(String(status.queuedSourceCount ?? 0))}</dd></div><div><dt>已索引正文段落</dt><dd>${esc(String(status.indexedParagraphCount ?? 0))}</dd></div><div><dt>已索引设定来源</dt><dd>${esc(String(status.indexedSourceCount ?? 0))}</dd></div></dl>
     <div class="relationship-index-queue"><div class="relationship-index-queue-heading"><strong>增量任务队列</strong><span>仅包含新增、修改或删除后待同步的来源</span></div><div class="relationship-index-queue-list">${queueMarkup}</div></div>
     ${errorMarkup}
+  </div>`;
+}
+
+const semanticIndexStatusLabels = Object.freeze({
+  disabled: "未开启",
+  unconfigured: "配置不完整",
+  idle: "等待重建",
+  building: "正在构建",
+  ready: "可以检索",
+  failed: "部分失败",
+  paused: "已暂停"
+});
+
+function semanticIndexStatusMarkup(status = {}) {
+  const progress = Math.min(100, Math.max(0, Number(status.progress) || 0));
+  const statusName = semanticIndexStatusLabels[status.status] ?? "状态未知";
+  const model = status.embeddingModel
+    ? `${status.embeddingModel.providerName} · ${status.embeddingModel.displayName}`
+    : "尚未选择 embedding 模型";
+  const rerank = status.rerankModel
+    ? `${status.rerankModel.providerName} · ${status.rerankModel.displayName}`
+    : "未启用 rerank";
+  return `<div class="semantic-index-summary">
+    <div class="relationship-index-state-row"><span class="relationship-index-state is-${esc(String(status.status ?? "unknown"))}">${esc(statusName)}</span><span>Embedding <strong>${esc(model)}</strong></span><span>Rerank <strong>${esc(rerank)}</strong></span></div>
+    <progress class="semantic-index-progress" max="100" value="${esc(String(progress))}" aria-label="RAG 构建进度 ${esc(String(progress))}%"></progress>
+    <dl class="relationship-index-metrics"><div><dt>构建进度</dt><dd>${esc(String(progress))}%</dd></div><div><dt>已处理来源</dt><dd>${esc(String(status.processedSources ?? 0))} / ${esc(String(status.totalSources ?? 0))}</dd></div><div><dt>有效分片</dt><dd>${esc(String(status.indexedChunkCount ?? 0))}</dd></div><div><dt>失败来源</dt><dd>${esc(String(status.failedSources ?? 0))}</dd></div></dl>
+    ${status.error ? `<p class="relationship-index-error">${esc(status.error)}</p>` : ""}
+    ${status.status === "paused" ? `<p class="usage-measurement-note">已连续失败 ${esc(String(status.consecutiveFailures ?? 0))} 次。检查端点和模型后点击“完整重建 RAG”恢复。</p>` : ""}
   </div>`;
 }
 
@@ -13326,6 +13541,10 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
     <td>${esc(formatCacheHitRate(work.cacheHitRate))}</td>
     <td>${Number(work.requestCount || 0).toLocaleString("zh-CN")}</td>
   </tr>`).join("");
+  const callTypeLabels = { chat: "Chat / 分析", embedding: "Embedding", rerank: "Rerank" };
+  const callTypeUsage = (Array.isArray(usage?.callTypes) ? usage.callTypes : [])
+    .map((item) => `<span class="usage-call-type-chip"><strong>${esc(callTypeLabels[item.callType] ?? item.callType)}</strong><span>${esc(formatTokenCount(item.totalTokens))} Token · ${Number(item.requestCount || 0).toLocaleString("zh-CN")} 次</span></span>`)
+    .join("");
   return `<section class="usage-overview" aria-labelledby="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">
     <div class="config-section-header usage-overview-header"><div><h2 id="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">${esc(title || "Token 用量")}</h2><p>${esc(description || "统计该范围内的全部 AI 调用。")}</p></div><button class="ghost-button usage-details-button" type="button" data-token-usage-details aria-haspopup="dialog" aria-expanded="false" aria-controls="token-usage-details-toast">详细数据</button></div>
     <div class="usage-stat-grid">
@@ -13335,6 +13554,7 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
       <article class="usage-stat"><span>缓存命中率</span><strong>${esc(formatCacheHitRate(summary.cacheHitRate))}</strong><small>${esc(cacheDescription)}</small></article>
     </div>
     <p class="usage-measurement-note">${requestCount.toLocaleString("zh-CN")} 次有用量记录的调用。${esc(estimateNote)} 有 ${unpricedModelCount.toLocaleString("zh-CN")} 个模型在价格表中未找到对应价格</p>
+    ${callTypeUsage ? `<div class="usage-call-types" aria-label="按调用类型区分的 Token 用量">${callTypeUsage}</div>` : ""}
     <section class="usage-calendar-section" aria-labelledby="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">
       <header><div><h3 id="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">每日用量</h3><p>GitHub 风格网格展示过去 53 周；颜色越深，当天消耗越高。</p></div></header>
       ${tokenUsageCalendarMarkup(usage?.daily)}
@@ -13363,12 +13583,18 @@ async function renderBookAiSettings() {
     clearTimeout(relationshipSearchIndexRefreshTimer);
     relationshipSearchIndexRefreshTimer = null;
   }
-  const [settings, providers, models, taskDefaults, relationshipIndex, usage, protocolOptions, writeTools, remoteMcpSettings] = await Promise.all([
+  if (semanticSearchIndexRefreshTimer) {
+    clearTimeout(semanticSearchIndexRefreshTimer);
+    semanticSearchIndexRefreshTimer = null;
+  }
+  const [settings, providers, models, semanticModels, taskDefaults, relationshipIndex, semanticIndex, usage, protocolOptions, writeTools, remoteMcpSettings] = await Promise.all([
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings`),
     moduleApi("ai-settings", "/api/platform/ai/providers"),
     moduleApi("ai-settings", `/api/works/${state.work.id}/models`),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/semantic-models`),
     moduleApi("ai-settings", `/api/works/${state.work.id}/task-defaults`),
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/relationship-search-index`),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/semantic-search-index`),
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`),
     moduleApi("ai-settings", "/api/platform/ai/protocols"),
     // 可写工具开关独立于 ai-settings 存储；加载失败时仍可展示其余配置。
@@ -13411,6 +13637,15 @@ async function renderBookAiSettings() {
   })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度必须设置为大于 0 的整数；低于 10,000 时仅提示风险；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="1" max="2000000000" step="1" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>该阈值按对话历史的独立预算计算，用于显示可选择压缩或忽略的提醒；整次请求达到模型上下文窗口 95% 时仍会强制压缩较早消息，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>设定上下文注入</h2><p>开启后，本书的普通 AI 请求会自动注入锁定设定、组织、种族与相关约束；即使本轮同时使用“@注入上下文设定”，也只会注入一次。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="always-include-setting-info" type="checkbox" ${settings.alwaysIncludeSettingInfo ? "checked" : ""}>是否注入设定</label><button id="save-always-include-setting-info" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section ai-agent-tools-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
   const workSystemPromptSection = host.querySelector("#work-system-prompt")?.closest(".config-section");
   workSystemPromptSection?.insertAdjacentHTML("afterend", `<section class="config-section remote-mcp-settings"><div class="config-section-header"><div><h2>远程 MCP 工具</h2><p>填写标准的 <code>mcpServers</code> JSON 配置。保存前会逐个检查 JSON、远程传输、安全地址、MCP 握手与工具列表；任一 Server 失败时都不会覆盖当前配置。</p></div></div><label class="field-label remote-mcp-config-field"><span>mcpServers JSON</span><textarea id="remote-mcp-config" rows="12" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="remote-mcp-config-help remote-mcp-status" placeholder='{"mcpServers":{"example":{"url":"https://example.com/mcp"}}}'>${esc(remoteMcpConfigText)}</textarea></label><small id="remote-mcp-config-help" class="remote-mcp-config-help">仅支持远程 MCP 工具（SSE / Streamable HTTP），不支持会执行本地命令的 stdio 配置。敏感 Header 会加密保存，页面中的 ${esc("********")} 掩码再次保存时会保留原值。</small><p id="remote-mcp-status" class="remote-mcp-status" role="status" aria-live="polite">${esc(remoteMcpStatusText)}</p><div class="card-actions"><button id="save-remote-mcp-config" class="ghost-button config-save-button" type="button">测试并保存 MCP 配置</button></div></section>`);
+  const semanticModelOptions = (kind, selectedId) => semanticModels
+    .filter((model) => model.modelKind === kind)
+    .map((model) => {
+      const available = isAvailableConfiguredModel(model);
+      return `<option value="${esc(model.id)}" ${model.id === selectedId ? "selected" : ""} ${available || model.id === selectedId ? "" : "disabled"}>${esc(`${available ? "" : "不可用 · "}${modelOptionLabel(model)}`)}</option>`;
+    }).join("");
+  const semanticSection = `<section id="semantic-search-settings" class="config-section semantic-search-settings"><div class="config-section-header"><div><h2>主动语义检索（RAG）</h2><p>与拼音索引并列维护。Embedding 和 rerank 复用平台供应商的端点与凭证保险库；普通聊天、续写、润色和分析不会自动调用此通道。</p></div></div><div class="semantic-settings-grid"><label class="checkbox-field config-checkbox-field semantic-enabled-field"><input id="semantic-search-enabled" type="checkbox" ${settings.semanticSearchEnabled ? "checked" : ""}>启用主动语义检索</label><label>Embedding 模型<select id="semantic-embedding-model" aria-label="RAG Embedding 模型"><option value="">请选择 embedding 模型</option>${semanticModelOptions("embedding", settings.semanticEmbeddingModelId)}</select></label><label>Rerank 模型（可选）<select id="semantic-rerank-model" aria-label="RAG Rerank 模型"><option value="">不使用 rerank</option>${semanticModelOptions("rerank", settings.semanticRerankModelId)}</select></label><label>向量维度<input id="semantic-vector-dimension" type="number" min="1" max="65536" value="${esc(String(settings.semanticVectorDimension ?? 1024))}"></label><label>语义召回数量<input id="semantic-recall-limit" type="number" min="1" max="200" value="${esc(String(settings.semanticRecallLimit ?? 20))}"></label><label>展示结果数量<input id="semantic-result-limit" type="number" min="1" max="100" value="${esc(String(settings.semanticResultLimit ?? 12))}"></label><label>上下文预算（Token）<input id="semantic-budget-tokens" type="number" min="256" max="100000" value="${esc(String(settings.semanticBudgetTokens ?? 4000))}"></label><label>RRF 语义通道权重<input id="semantic-channel-weight" type="number" min="0.1" max="5" step="0.1" value="${esc(String(settings.semanticChannelWeight ?? 1))}"></label></div><p class="usage-measurement-note">API Key 由所选模型所属供应商的凭证保险库加密保存；此页面不会读取或返回明文密钥。更换端点、模型、维度或分片规则后必须完整重建，旧向量不会继续参与检索。</p><div id="semantic-search-index-status" role="status" aria-live="polite">${semanticIndexStatusMarkup(semanticIndex)}</div><div class="relationship-index-actions"><button id="save-semantic-search-settings" class="primary-button config-save-button" type="button">保存 RAG 配置</button><button id="sync-semantic-search-index" class="ghost-button config-save-button" type="button">同步增量</button><button id="refresh-semantic-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-semantic-search-index" class="ghost-button config-save-button" type="button">完整重建 RAG</button></div></section>`;
+  const relationshipSection = [...host.querySelectorAll(".config-section")].find((section) => section.querySelector("h2")?.textContent === "人物关系拼音索引");
+  relationshipSection?.insertAdjacentHTML("afterend", semanticSection);
   bindTokenUsageDetails(host, usage, "本书 Token 用量");
   const dailyQuotaSection = host.querySelector("#daily-token-quota-enabled")?.closest(".config-section");
   dailyQuotaSection?.insertAdjacentHTML("afterend", `<section class="config-section"><div class="config-section-header"><div><h2>每月 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然月（当月 1 日至月末）可使用的输入与输出 Token 总量。额度必须设置为大于 0 的整数；低于 1,000,000 时仅提示风险；达到额度后，新的 AI 请求会等到下月 1 日零点重置后再执行。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="monthly-token-quota-enabled" type="checkbox" ${monthlyTokenQuota === null ? "" : "checked"}>启用每月额度</label><label class="monthly-token-quota-field">每月额度<input id="monthly-token-quota" type="number" min="1" max="2000000000" step="1" value="${esc(String(monthlyTokenQuota ?? 10000))}" aria-label="本书每月 Token 额度" ${monthlyTokenQuota === null ? "disabled" : ""}></label><button id="save-monthly-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="monthly-token-quota-status" class="usage-measurement-note" role="status">${esc(monthlyQuotaStatusText)}</p></section>`);
@@ -13444,6 +13679,10 @@ async function renderBookAiSettings() {
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "afterend",
     `<label><input name="agent-tool" type="checkbox" value="read_character_sections" ${agentTools.has("read_character_sections") ? "checked" : ""}><span><strong>读取人物 Markdown 章节</strong><small>根据知识查询返回的章节 ID 精读人物背景、能力与经历原文。</small></span></label>`
+  );
+  host.querySelector('input[name="agent-tool"][value="read_character_sections"]').closest("label").insertAdjacentHTML(
+    "afterend",
+    `<label><input name="agent-tool" type="checkbox" value="semantic_search_story" ${agentTools.has("semantic_search_story") ? "checked" : ""} ${settings.semanticSearchEnabled ? "" : "disabled"}><span><strong>语义检索作品原文</strong><small>允许 Agent 显式调用 semantic_search_story；只影响保存后新建的对话，普通消息不会自动检索。</small></span></label>`
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",
@@ -13481,6 +13720,109 @@ async function renderBookAiSettings() {
     return status;
   };
   updateRelationshipIndexStatus(relationshipIndex);
+  const isCurrentSemanticIndexPanel = () => state.module === "ai-settings"
+    && String(state.work?.id ?? "") === workId
+    && Boolean($("#semantic-search-index-status"));
+  const updateSemanticIndexStatus = (status) => {
+    const statusHost = $("#semantic-search-index-status");
+    if (!statusHost) return;
+    statusHost.innerHTML = semanticIndexStatusMarkup(status);
+    if (semanticSearchIndexRefreshTimer) clearTimeout(semanticSearchIndexRefreshTimer);
+    semanticSearchIndexRefreshTimer = null;
+    if (!["idle", "building"].includes(String(status.status))) return;
+    semanticSearchIndexRefreshTimer = setTimeout(async () => {
+      semanticSearchIndexRefreshTimer = null;
+      if (!isCurrentSemanticIndexPanel()) return;
+      try {
+        const nextStatus = await api(`/api/works/${workId}/ai-settings/semantic-search-index`);
+        if (isCurrentSemanticIndexPanel()) updateSemanticIndexStatus(nextStatus);
+      } catch {
+        // 后台轮询失败时保留当前进度，用户仍可手动刷新。
+      }
+    }, 1_200);
+  };
+  const refreshSemanticIndexStatus = async () => {
+    const status = await api(`/api/works/${workId}/ai-settings/semantic-search-index`);
+    updateSemanticIndexStatus(status);
+    return status;
+  };
+  updateSemanticIndexStatus(semanticIndex);
+  $("#save-semantic-search-settings").addEventListener("click", async () => {
+    const button = $("#save-semantic-search-settings");
+    const enabled = $("#semantic-search-enabled").checked;
+    const embeddingModelId = $("#semantic-embedding-model").value || null;
+    const vectorDimension = Number($("#semantic-vector-dimension").value);
+    const recallLimit = Number($("#semantic-recall-limit").value);
+    const resultLimit = Number($("#semantic-result-limit").value);
+    const budgetTokens = Number($("#semantic-budget-tokens").value);
+    const channelWeight = Number($("#semantic-channel-weight").value);
+    if (enabled && !embeddingModelId) return toast("开启 RAG 前必须选择 embedding 模型", "error");
+    if (!Number.isInteger(vectorDimension) || vectorDimension < 1 || vectorDimension > 65_536) return toast("向量维度必须是 1 到 65536 的整数", "error");
+    if (!Number.isInteger(recallLimit) || recallLimit < 1 || recallLimit > 200) return toast("语义召回数量必须是 1 到 200 的整数", "error");
+    if (!Number.isInteger(resultLimit) || resultLimit < 1 || resultLimit > 100) return toast("展示结果数量必须是 1 到 100 的整数", "error");
+    if (!Number.isInteger(budgetTokens) || budgetTokens < 256 || budgetTokens > 100_000) return toast("语义上下文预算必须是 256 到 100000 Token", "error");
+    if (!Number.isFinite(channelWeight) || channelWeight < 0.1 || channelWeight > 5) return toast("语义通道权重必须在 0.1 到 5 之间", "error");
+    button.disabled = true;
+    try {
+      const updated = await api(`/api/works/${workId}/ai-settings/semantic-search`, {
+        method: "PATCH",
+        body: {
+          enabled,
+          embeddingModelId,
+          rerankModelId: $("#semantic-rerank-model").value || null,
+          vectorDimension,
+          recallLimit,
+          resultLimit,
+          budgetTokens,
+          channelWeight
+        }
+      });
+      updateSemanticIndexStatus(updated.semanticIndex);
+      toast(enabled ? "RAG 配置已保存；请执行完整重建" : "主动语义检索已关闭");
+      await renderBookAiSettings();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  });
+  $("#sync-semantic-search-index").addEventListener("click", async () => {
+    const button = $("#sync-semantic-search-index");
+    button.disabled = true;
+    try {
+      const status = await api(`/api/works/${workId}/ai-settings/semantic-search-index/sync`, { method: "POST" });
+      updateSemanticIndexStatus({ ...status, status: "building" });
+      toast("已开始同步 RAG 增量来源");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#refresh-semantic-search-index").addEventListener("click", async () => {
+    const button = $("#refresh-semantic-search-index");
+    button.disabled = true;
+    try {
+      await refreshSemanticIndexStatus();
+      toast("RAG 状态已刷新", "info");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#rebuild-semantic-search-index").addEventListener("click", async () => {
+    const button = $("#rebuild-semantic-search-index");
+    button.disabled = true;
+    try {
+      const status = await api(`/api/works/${workId}/ai-settings/semantic-search-index/rebuild`, { method: "POST" });
+      updateSemanticIndexStatus({ ...status, status: "building", progress: 0 });
+      toast("已开始完整重建 RAG");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
   const syncTokenQuotaWarnings = () => {
     for (const period of ["daily", "monthly"]) {
       const enabled = $(`#${period}-token-quota-enabled`).checked;
@@ -13833,28 +14175,33 @@ function currentAiRequestScope() {
   if (!state.work) return null;
   const selectedTaskType = $("#ai-task").value;
   const roleplaySelected = selectedTaskType === "roleplay";
-  const taskType = roleplaySelected ? "chat" : selectedTaskType;
-  if (state.aiPromptSent) {
-    const conversationScope = JSON.parse(JSON.stringify(state.aiContextScope ?? { type: "none" }));
-    conversationScope.includeSettingInfo = false;
-    const scope = mergeAiReferenceScope(conversationScope, state.aiReferences);
-    return { taskType, scope, conversationScope, selection: typeof conversationScope.selection === "string" ? conversationScope.selection : "" };
-  }
-  const scopeType = roleplaySelected ? "none" : $("#ai-scope").value;
-  const requiresChapter = taskType === "polish" || taskType === "continue" || (scopeType !== "none" && scopeType !== "settings-catalog");
-  if (requiresChapter && !state.chapter) return null;
-  const selection = state.chapter ? $("#chapter-content").value.slice($("#chapter-content").selectionStart, $("#chapter-content").selectionEnd) : "";
+  const taskType = "chat";
+  const scopeType = state.aiPromptSent
+    ? null
+    : roleplaySelected ? "none" : $("#ai-scope").value;
+  if (!state.aiPromptSent && scopeType !== "none" && scopeType !== "settings-catalog" && !state.chapter) return null;
   const volume = state.chapter ? state.work.volumes.find((item) => item.id === state.chapter.volumeId) : null;
-  const includeBookSummary = scopeType === "chapter-summary";
-  const conversationScope = taskType === "polish" ? { type: "chapter", chapterId: state.chapter?.id, selection }
-    : scopeType === "none" ? { type: "none", ...(taskType === "continue" && state.chapter ? { chapterId: state.chapter.id } : {}) }
+  const conversationScope = state.aiPromptSent
+    ? JSON.parse(JSON.stringify(state.aiContextScope ?? { type: "none" }))
+    : scopeType === "none" ? { type: "none" }
     : scopeType === "book" ? { type: "book" }
     : scopeType === "volume" ? { type: "volume", volumeId: volume?.id }
     : scopeType === "settings-catalog" ? { type: "settings-catalog" }
     : { type: "chapter", chapterId: state.chapter?.id };
-  if (includeBookSummary) conversationScope.includeBookSummary = true;
+  if (!state.aiPromptSent && scopeType === "chapter-summary") conversationScope.includeBookSummary = true;
   conversationScope.includeSettingInfo = false;
-  const scope = mergeAiReferenceScope(conversationScope, state.aiReferences);
+  const referencedScope = mergeAiReferenceScope(conversationScope, state.aiReferences);
+  const chapterInput = state.chapter && !roleplaySelected ? $("#chapter-content") : null;
+  const selectionStart = chapterInput?.selectionStart ?? 0;
+  const selectionEnd = chapterInput?.selectionEnd ?? 0;
+  const selection = chapterInput?.value.slice(selectionStart, selectionEnd) ?? "";
+  const writingTarget = state.chapter && !roleplaySelected ? {
+    chapterId: state.chapter.id,
+    writingChapterVersion: state.chapter.versionNo,
+    ...(selection ? { selection, selectionStart, selectionEnd } : {})
+  } : {};
+  const scope = { ...referencedScope, ...writingTarget };
+  if (state.aiSemanticSnapshot?.id) scope.semanticSnapshotId = state.aiSemanticSnapshot.id;
   return { taskType, scope, conversationScope, selection };
 }
 
@@ -13880,7 +14227,7 @@ function renderAiContextDistribution(usage) {
     if (item.key === "skills" || item.key === "input" || item.key === "output") {
       const description = document.createElement("small");
       description.textContent = item.key === "skills"
-        ? "待加入"
+        ? "按需加载"
         : item.key === "input" ? "用户和 agent 的交互" : "当前调用实际输出";
       title.append(" ", description);
     }
@@ -17269,11 +17616,16 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
 
 function openModelDialog(providerId, item = null, provider = null, protocolOptions = platformAiProtocolOptions) {
   const values = modelFormValues(item);
+  const modelKindFields = `<div class="form-field model-kind-fields" role="group" aria-labelledby="model-kind-heading"><span id="model-kind-heading">专用模型类型</span><label class="checkbox-field model-capability-option"><input id="model-kind-embedding" name="embeddingModel" type="checkbox" ${values.modelKind === "embedding" ? "checked" : ""}><span><strong>这是一个 embedding 模型</strong><small>只用于语义向量，不会出现在 chat 框或 AI 分析任务中。</small></span></label><label class="checkbox-field model-capability-option"><input id="model-kind-rerank" name="rerankModel" type="checkbox" ${values.modelKind === "rerank" ? "checked" : ""}><span><strong>这是一个 rerank 模型</strong><small>只用于语义候选重排，不会出现在 chat 框或 AI 分析任务中。</small></span></label><small>两项都不勾选时，该模型按普通 chat 模型使用。</small></div>`;
   const imageDefaultSupported = supportsMultimodalModelProtocol(provider?.protocol, protocolOptions);
   const multimodalFields = imageDefaultSupported ? `<div class="form-field model-multimodal-fields" role="group" aria-labelledby="model-multimodal-heading"><span id="model-multimodal-heading" class="model-multimodal-heading">模型能力</span><label class="checkbox-field model-capability-option"><input id="model-multimodal-enabled" name="multimodalEnabled" type="checkbox" ${values.multimodalEnabled ? "checked" : ""}><span><strong>支持多模态图片理解</strong><small>启用后可用于读取设定库中的图片附件。</small></span></label><label id="model-image-tool-default-field" class="checkbox-field model-capability-option ${values.multimodalEnabled ? "" : "hidden"}"><input id="model-image-tool-default" name="imageToolDefault" type="checkbox" ${values.imageToolDefault ? "checked" : ""}><span><strong>设为多模态读图工具默认模型</strong><small>支持多模态的接口协议都可以作为默认读图模型。</small></span></label><small class="model-multimodal-note">当前供应商支持多模态读图工具默认模型。</small></div>` : "";
   const contextWindowField = `<div class="form-field model-context-window-field"><label for="model-context-window">模型上下文令牌总量<input id="model-context-window" name="contextWindow" type="number" value="${esc(values.contextWindow)}" min="${MIN_MODEL_CONTEXT_WINDOW}" max="2000000" step="1" required aria-describedby="model-context-window-hint"></label><small id="model-context-window-hint" class="model-context-window-hint" hidden>低于 128K 的模型在小说创作场景不太适用，建议使用支持更长上下文的模型。</small></div>`;
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;
-  const connectionTestDescription = values.multimodalEnabled && imageDefaultSupported
+  const connectionTestDescription = values.modelKind === "embedding"
+    ? "使用当前供应商凭据调用 OpenAI-compatible embeddings 接口并校验向量。"
+    : values.modelKind === "rerank"
+      ? "使用 Qwen reranker 的 yes/no 模板发起最小相关性判定。"
+      : values.multimodalEnabled && imageDefaultSupported
     ? "使用当前已保存的模型标识符、思考设置和供应商凭据，并发送一张测试图片验证图片请求。"
     : "使用当前已保存的模型标识符、思考设置和供应商凭据发起最小请求。";
   const connectionTest = item && item.providerStatus === "enabled"
@@ -17282,8 +17634,9 @@ function openModelDialog(providerId, item = null, provider = null, protocolOptio
         <button class="ghost-button" type="button" data-test-model="${esc(item.id)}">测试连接</button>
       </section>`
     : "";
-  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("thinkingEffort", "思考强度（模型默认时不发送强度参数）", "select", values.thinkingEffort, MODEL_THINKING_EFFORT_OPTIONS) + multimodalFields + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
-    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", thinkingEffort: form.get("thinkingEffort") ?? thinkingEffortSelect.value, multimodalEnabled: form.get("multimodalEnabled") === "on", imageToolDefault: form.get("imageToolDefault") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + modelKindFields + `<div data-chat-model-fields>` + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("thinkingEffort", "思考强度（模型默认时不发送强度参数）", "select", values.thinkingEffort, MODEL_THINKING_EFFORT_OPTIONS) + multimodalFields + `</div>` + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
+    const modelKind = form.get("embeddingModel") === "on" ? "embedding" : form.get("rerankModel") === "on" ? "rerank" : "chat";
+    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), modelKind, purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", thinkingEffort: form.get("thinkingEffort") ?? thinkingEffortSelect.value, multimodalEnabled: form.get("multimodalEnabled") === "on", imageToolDefault: form.get("imageToolDefault") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();
@@ -17301,6 +17654,17 @@ function openModelDialog(providerId, item = null, provider = null, protocolOptio
   const multimodalInput = $("#model-multimodal-enabled");
   const imageDefaultField = $("#model-image-tool-default-field");
   const imageDefaultInput = $("#model-image-tool-default");
+  const embeddingModelInput = $("#model-kind-embedding");
+  const rerankModelInput = $("#model-kind-rerank");
+  const chatModelFields = $("#dialog-fields [data-chat-model-fields]");
+  const syncModelKindFields = (changedInput = null) => {
+    if (changedInput?.checked) {
+      const other = changedInput === embeddingModelInput ? rerankModelInput : embeddingModelInput;
+      if (other) other.checked = false;
+    }
+    const specialized = Boolean(embeddingModelInput?.checked || rerankModelInput?.checked);
+    chatModelFields?.classList.toggle("hidden", specialized);
+  };
   const syncMultimodalFields = () => {
     if (!multimodalInput || !imageDefaultField || !imageDefaultInput) return;
     const hideImageDefault = !multimodalInput.checked || !imageDefaultSupported;
@@ -17327,6 +17691,8 @@ function openModelDialog(providerId, item = null, provider = null, protocolOptio
   contextWindowInput.addEventListener("input", syncModelContextWindowGuidance);
   thinkingEnabledInput.addEventListener("change", syncThinkingEffort);
   multimodalInput?.addEventListener("change", syncMultimodalFields);
+  embeddingModelInput?.addEventListener("change", () => syncModelKindFields(embeddingModelInput));
+  rerankModelInput?.addEventListener("change", () => syncModelKindFields(rerankModelInput));
   $("#dialog-fields [data-test-model]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
@@ -17350,6 +17716,7 @@ function openModelDialog(providerId, item = null, provider = null, protocolOptio
   syncKimiTemperature();
   syncThinkingEffort();
   syncMultimodalFields();
+  syncModelKindFields();
 }
 
 async function sendAi() {
@@ -17386,8 +17753,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
   if ($("#ai-task").value === "roleplay" && !state.aiRoleplayCharacter) return toast("请先选择角色卡", "error");
   const requestScope = currentAiRequestScope();
   if (!requestScope) return toast("请先选择章节", "error");
-  const { taskType, scope, selection } = requestScope;
-  if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
+  const { scope } = requestScope;
   const citations = requestComposerSnapshot.citations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
   const selectedTaskType = $("#ai-task").value;
   persistActiveAiChatTab();
@@ -17421,9 +17787,6 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
     if (imageAttachmentIds.length > 0 && !state.models.find((model) => model.id === modelId)?.multimodalEnabled) {
       return toast("当前选择的模型不是多模态模型，无法发送图片附件", "error");
     }
-    if (imageAttachmentIds.length > 0 && taskType !== "chat") {
-      return toast("图片附件目前仅支持问答对话", "error");
-    }
     try {
       await prepareAiRequestConversation(requestHolder, selectedTaskType, requestScope.conversationScope);
     } catch (error) {
@@ -17432,86 +17795,31 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
     }
     setAiChatTabStatus(tab, "streaming");
     if (retry?.message?.isConnected) retry.message.remove();
-    if (taskType !== "chat") {
-      if (!retry) {
-        try {
-          const request = assertAiRequestCurrent(requestHolder.snapshot);
-          const persistedUserMessage = await persistAiConversationMessage(
-            request.conversationId,
-            "user",
-            instruction,
-            citations,
-            { modelId },
-            { signal: request.signal }
-          );
-          assertAiRequestCurrent(request);
-          updateAiConversationSummaryFromMessage(persistedUserMessage);
-          requestHolder.snapshot = aiRequestManager.bind(request, { userMessageId: persistedUserMessage.id });
-          tab.modelId = modelId;
-          tab.selectedModelId = modelId;
-          tab.promptSent = true;
-          clearAiChatTabComposer(tab);
-          appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id, { tab });
-          if (isActiveAiChatTab(tab)) {
-            state.aiConversationModelId = modelId;
-            state.aiPromptSent = true;
-            syncAiTaskOptions();
-            renderAiRoleplayCharacterSelect();
-            renderAiQuickActions();
-            clearAiPromptComposer();
-          }
-        } catch (error) {
-          if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
-          setAiChatTabStatus(tab, "error");
-          return toast(`对话记录创建失败：${error.message}`, "error");
-        }
-      } else {
-        prepareAiRetryState(tab, modelId);
-      }
-    } else if (retry) {
-      prepareAiRetryState(tab, modelId);
-    }
+    if (retry) prepareAiRetryState(tab, modelId);
     let assistantContent = "";
     let assistantMessage;
     let assistantMetadata = {};
     let persistedStreamMessage = null;
-    let suggestion = null;
-    if (taskType === "chat") {
-      const streamed = await streamChat(requestHolder, aiRetryStreamRequestBody({
-        instruction,
-        ...(sceneDirection ? { sceneDirection } : {}),
-        ...($("#ai-task").value === "roleplay" ? { scenePin } : {}),
-        scope,
-        modelId,
-        citations,
-        ...(imageAttachmentIds.length ? { imageAttachmentIds } : {}),
-        conversationId: requestHolder.snapshot.conversationId,
-        ...(ignoreContextWarning ? { ignoreContextWarning: true } : {})
-      }, retry), createAiIdempotencyKey());
-      const request = assertAiRequestCurrent(requestHolder.snapshot);
-      if (streamed.action === "warn") return;
-      assistantContent = streamed.content;
-      assistantMessage = streamed.message;
-      assistantMetadata = streamed.metadata;
-      persistedStreamMessage = streamed.messageId ? { id: streamed.messageId, createdAt: streamed.createdAt } : null;
-      applyAiConversationTitle(streamed.conversationTitle, request.conversationId);
-    } else {
-      const request = assertAiRequestCurrent(requestHolder.snapshot);
-      suggestion = await api(`/api/works/${encodeURIComponent(request.workId)}/suggestions`, {
-        method: "POST",
-        body: { taskType, instruction, scope, modelId, citations, conversationId: requestHolder.snapshot.conversationId },
-        signal: request.signal
-      });
-      assertAiRequestCurrent(request);
-      const suggestionFailed = suggestion.guard?.status === "failed"
-        || suggestion.toolCalls?.some((toolCall) => toolCall.status === "failed")
-        || suggestion.processSteps?.some((step) => step?.toolCall?.status === "failed");
-      if (suggestionFailed) setAiChatTabStatus(tab, "error");
-      tab.contextUsage = mergeAiContextUsage(tab.contextUsage, suggestion.contextUsage, false);
-      if (isActiveAiChatTab(tab)) setAiContextMeter(suggestion.contextUsage, false);
-      assistantContent = suggestion.content;
-      assistantMetadata = { modelId, modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent, processDurationMs: suggestion.processDurationMs };
-    }
+    let writingSuggestion = null;
+    const streamed = await streamChat(requestHolder, aiRetryStreamRequestBody({
+      instruction,
+      ...(sceneDirection ? { sceneDirection } : {}),
+      ...($("#ai-task").value === "roleplay" ? { scenePin } : {}),
+      scope,
+      modelId,
+      citations,
+      ...(imageAttachmentIds.length ? { imageAttachmentIds } : {}),
+      conversationId: requestHolder.snapshot.conversationId,
+      ...(ignoreContextWarning ? { ignoreContextWarning: true } : {})
+    }, retry), createAiIdempotencyKey());
+    const streamedRequest = assertAiRequestCurrent(requestHolder.snapshot);
+    if (streamed.action === "warn") return;
+    assistantContent = streamed.content;
+    assistantMessage = streamed.message;
+    assistantMetadata = streamed.metadata;
+    writingSuggestion = streamed.writingSuggestion;
+    persistedStreamMessage = streamed.messageId ? { id: streamed.messageId, createdAt: streamed.createdAt } : null;
+    applyAiConversationTitle(streamed.conversationTitle, streamedRequest.conversationId);
     try {
       const request = assertAiRequestCurrent(requestHolder.snapshot);
       if (persistedStreamMessage) {
@@ -17530,19 +17838,19 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
           assistantContent,
           [],
           assistantMetadata,
-          { signal: request.signal, requestId: retry && taskType !== "chat" ? null : aiAssistantRequestId(request) }
+          { signal: request.signal, requestId: aiAssistantRequestId(request) }
         );
         assertAiRequestCurrent(request);
         updateAiConversationSummaryFromMessage(persistedAssistantMessage);
         if (assistantMessage) {
           updateMessageCreatedAt(assistantMessage, persistedAssistantMessage.createdAt);
           attachMessageIdentity(assistantMessage, persistedAssistantMessage.id);
-        } else if (suggestion) appendSuggestion(suggestion, persistedAssistantMessage.createdAt, persistedAssistantMessage.id, { tab });
+        }
       }
+      if (writingSuggestion && assistantMessage) attachWritingSuggestion(assistantMessage, writingSuggestion, { tab });
     } catch (error) {
       if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
       setAiChatTabStatus(tab, "error");
-      if (suggestion) appendSuggestion(suggestion, null, null, { tab });
       toast(`AI 回复已生成，但历史记录保存失败：${error.message}`, "error");
     }
   } catch (error) {
@@ -17625,7 +17933,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
         failureMessage,
         [],
         {},
-        { requestId: retry && taskType !== "chat" ? null : aiAssistantRequestId(request) }
+        { requestId: aiAssistantRequestId(request) }
       );
       updateAiConversationSummaryFromMessage(persistedFailureMessage);
     } catch { /* 主请求错误已显示，历史记录保存失败不覆盖原始错误 */ }
@@ -17705,6 +18013,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   let persistedMessageId = null;
   let persistedMessageCreatedAt = null;
   let conversationTitle = null;
+  let writingSuggestion = null;
   let persistedUserMessage = null;
   let contextAction = "ready";
   let warningOnly = false;
@@ -17860,6 +18169,13 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
+        writingSuggestion = payload.writingSuggestion && typeof payload.writingSuggestion === "object"
+          ? payload.writingSuggestion
+          : null;
+        const writingSuggestionFailed = writingSuggestion?.guard?.status === "failed"
+          || writingSuggestion?.toolCalls?.some((toolCall) => toolCall.status === "failed")
+          || writingSuggestion?.processSteps?.some((step) => step?.toolCall?.status === "failed");
+        if (writingSuggestionFailed) setAiChatTabStatus(tab, "error");
         const announcedCompaction = contextAction === "compacted" || streamContextCompacted;
         setAiChatTabContextUsage(tab, payload.contextUsage, announcedCompaction);
         await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
@@ -17872,7 +18188,18 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         const processDurationMs = Number.isFinite(payload.processDurationMs) && payload.processDurationMs >= 0
           ? payload.processDurationMs
           : elapsedProcessTime();
-        generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, cacheHitPercent: payload.cacheHitPercent, toolCalls, processSteps, processDurationMs };
+        generatedMetadata = {
+          modelDisplayName: payload.model?.displayName,
+          outputTokens: payload.outputTokens,
+          cacheHitPercent: payload.cacheHitPercent,
+          toolCalls,
+          processSteps,
+          processDurationMs,
+          ...(writingSuggestion ? {
+            activeSkills: [writingSuggestion.taskType === "continue" ? "continue-writing" : "polish-writing"],
+            writingSuggestionId: writingSuggestion.id
+          } : {})
+        };
         renderAiProcessSteps(message, processSteps, true, processDurationMs);
         meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens, payload.cacheHitPercent, "", processDurationMs);
         attachAssistantCopyAction(message, streamedText);
@@ -17889,18 +18216,21 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     assertAiRequestCurrent(requestHolder.snapshot);
     if (streamError) throw streamError;
     assertAiStreamCompleted(streamCompleted);
-    return { action: warningOnly ? "warn" : contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
+    return { action: warningOnly ? "warn" : contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, writingSuggestion, userMessage: persistedUserMessage };
   } catch (error) {
     const streamFailure = error instanceof Error ? error : new Error(String(error ?? "AI 流式调用失败"));
     const interruptionCode = typeof streamFailure.code === "string" ? streamFailure.code.slice(0, 100) : "AI_STREAM_FAILED";
-    const interruption = streamedText ? {
+    const hasRenderableProcessSteps = processSteps.some(shouldRenderAiProcessStep);
+    const interruption = streamedText || hasRenderableProcessSteps ? {
       content: streamedText,
       message,
       metadata: {
         interrupted: true,
         interruptionCode,
         interruptionMessage: streamFailure.message.slice(0, 500),
-        processDurationMs: Math.min(86_400_000, elapsedProcessTime())
+        processDurationMs: Math.min(86_400_000, elapsedProcessTime()),
+        ...(toolCalls.length ? { toolCalls } : {}),
+        ...(processSteps.length ? { processSteps } : {})
       }
     } : null;
     if (interruption) streamFailure.streamInterruption = interruption;
@@ -18083,45 +18413,89 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   if (isFailure) renderMessageCardActions(message);
   attachMessageIdentity(message, messageId);
   feed.append(message);
+  const writingSuggestionId = role === "assistant" && typeof metadata?.writingSuggestionId === "string"
+    ? metadata.writingSuggestionId
+    : "";
+  if (writingSuggestionId && !isFailure && !isInterrupted) {
+    api(`/api/suggestions/${encodeURIComponent(writingSuggestionId)}`)
+      .then((suggestion) => attachWritingSuggestion(message, suggestion, { tab }))
+      .catch(() => undefined);
+  }
   scrollAiFeedToBottom(feed);
+  return message;
+}
+
+function continuationGuardMarkup(guard) {
+  if (!guard) return "";
+  const issues = Array.isArray(guard.issues) ? guard.issues : [];
+  return `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<p>${esc(guard.failure || "无法完成检查，请谨慎采纳")}</p>` : issues.map((issue) => `<p><b>${esc(levelLabel(issue.severity))} · ${esc(reviewItemTypeLabel(issue.type))}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>`;
+}
+
+async function applyAcceptedWritingSuggestion(message, suggestion) {
+  const result = await api(`/api/suggestions/${encodeURIComponent(suggestion.id)}/accept`, { method: "POST", body: {} });
+  state.chapter = result.chapter;
+  resetChapterDraftLineIds(state.chapter);
+  lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
+  $("#chapter-content").value = state.chapter.content;
+  scheduleChapterLineNumbers();
+  updateChapterStats();
+  state.work = await api(`/api/works/${state.work.id}`);
+  renderTree();
+  message.querySelector("[data-writing-suggestion-actions]").innerHTML = "<span>已采纳并生成新版本</span>";
+  toast("AI 建议已采纳，正文已生成新版本");
+}
+
+function attachWritingSuggestion(message, suggestion, options = {}) {
+  if (!suggestion || suggestion.action === "note" || !suggestion.id) return message;
+  const suggestionId = String(suggestion.id);
+  if (message.dataset.writingSuggestionId === suggestionId) return message;
+  message.dataset.writingSuggestionId = suggestionId;
+  message.querySelector("[data-writing-suggestion-ui]")?.remove();
+  const heading = message.querySelector(".message-heading > span");
+  if (heading) heading.textContent = "助手建议";
+  const host = document.createElement("div");
+  host.dataset.writingSuggestionUi = "";
+  host.className = "writing-suggestion-ui";
+  host.innerHTML = `${continuationGuardMarkup(suggestion.guard)}<div class="message-actions" data-writing-suggestion-actions></div>`;
+  const actions = host.querySelector("[data-writing-suggestion-actions]");
+  if (suggestion.status === "accepted") {
+    actions.innerHTML = "<span>已采纳并生成新版本</span>";
+  } else if (suggestion.status === "rejected") {
+    actions.innerHTML = "<span>已拒绝</span>";
+  } else {
+    actions.innerHTML = '<button type="button" data-action="accept">采纳到正文</button><button type="button" data-action="reject">拒绝</button>';
+    actions.querySelector('[data-action="accept"]').addEventListener("click", async () => {
+      try {
+        await applyAcceptedWritingSuggestion(message, suggestion);
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    });
+    actions.querySelector('[data-action="reject"]').addEventListener("click", async () => {
+      try {
+        await api(`/api/suggestions/${encodeURIComponent(suggestion.id)}/reject`, { method: "POST", body: {} });
+        actions.innerHTML = "<span>已拒绝</span>";
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    });
+  }
+  message.append(host);
+  const tab = options.tab ?? activeAiChatTab();
+  scrollAiFeedToBottom(options.feed ?? tab?.feed ?? $("#ai-feed"));
+  return message;
 }
 
 function appendSuggestion(suggestion, createdAt = null, messageId = null, options = {}) {
   const tab = options.tab ?? activeAiChatTab();
   const feed = options.feed ?? tab?.feed ?? $("#ai-feed");
-  const message = document.createElement("div");
-  message.className = "assistant-message";
-  const applicable = suggestion.action !== "note";
-  const guard = suggestion.guard;
-  const guardHtml = guard ? `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${guard.issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<p>${esc(guard.failure || "无法完成检查，请谨慎采纳")}</p>` : guard.issues.map((issue) => `<p><b>${esc(levelLabel(issue.severity))} · ${esc(reviewItemTypeLabel(issue.type))}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>` : "";
-  message.innerHTML = `<div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(formatAiMessageMeta(suggestion.model?.displayName, suggestion.outputTokens, suggestion.cacheHitPercent, `基于 v${suggestion.chapterVersion ?? "-"}`, suggestion.processDurationMs))}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
-  attachMessageHeading(message, "助手建议", createdAt ?? undefined, tab);
-  attachAssistantCopyAction(message, suggestion.content);
-  attachMessageIdentity(message, messageId);
-  if (applicable) {
-    message.querySelector('[data-action="accept"]').addEventListener("click", async () => {
-      try {
-        const result = await api(`/api/suggestions/${suggestion.id}/accept`, { method: "POST", body: {} });
-        state.chapter = result.chapter;
-        resetChapterDraftLineIds(state.chapter);
-        lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
-        $("#chapter-content").value = state.chapter.content;
-        scheduleChapterLineNumbers();
-        updateChapterStats();
-        state.work = await api(`/api/works/${state.work.id}`);
-        renderTree();
-        message.querySelector(".message-actions").innerHTML = "<span>已采纳并生成新版本</span>";
-        toast("AI 建议已采纳，正文已生成新版本");
-      } catch (error) { toast(error.message, "error"); }
-    });
-    message.querySelector('[data-action="reject"]').addEventListener("click", async () => {
-      await api(`/api/suggestions/${suggestion.id}/reject`, { method: "POST", body: {} });
-      message.querySelector(".message-actions").innerHTML = "<span>已拒绝</span>";
-    });
-  }
-  feed.append(message);
-  scrollAiFeedToBottom(feed);
-  return message;
+  const message = appendMessage("assistant", suggestion.content, [], createdAt, {
+    modelDisplayName: suggestion.model?.displayName,
+    outputTokens: suggestion.outputTokens,
+    cacheHitPercent: suggestion.cacheHitPercent,
+    processDurationMs: suggestion.processDurationMs
+  }, messageId, { tab, feed });
+  return attachWritingSuggestion(message, suggestion, { tab, feed });
 }
 
 function chapterVersionCompareOption(version) {
@@ -19562,6 +19936,8 @@ $("#chapter-batch-button").addEventListener("click", openChapterBatchDialog);
 $("#chapter-batch-close").addEventListener("click", () => $("#chapter-batch-dialog").close());
 $("#chapter-batch-cancel").addEventListener("click", () => $("#chapter-batch-dialog").close());
 $("#chapter-batch-action").addEventListener("change", updateChapterBatchControls);
+$("#chapter-batch-template").addEventListener("input", updateChapterBatchControls);
+$("#chapter-batch-start").addEventListener("input", updateChapterBatchControls);
 $("#chapter-batch-search").addEventListener("input", renderChapterBatchDialog);
 $("#chapter-batch-select-all").addEventListener("click", () => {
   const searchQuery = $("#chapter-batch-search").value.trim().toLocaleLowerCase("zh-CN");
@@ -19803,6 +20179,17 @@ $("#ai-panel-toggle").addEventListener("click", () => {
   panelLayout.aiCollapsed = !panelLayout.aiCollapsed;
   applyPanelLayout(true);
 });
+$("#ai-semantic-search-toggle").addEventListener("click", () => {
+  setAiSemanticSearchVisible($("#ai-semantic-search-panel").classList.contains("hidden"));
+});
+$("#ai-semantic-search-close").addEventListener("click", () => setAiSemanticSearchVisible(false));
+$("#ai-semantic-search-run").addEventListener("click", () => { void runAiSemanticSearch(); });
+$("#ai-semantic-query").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.shiftKey) return;
+  event.preventDefault();
+  void runAiSemanticSearch();
+});
+$("#ai-semantic-inject").addEventListener("click", () => { void injectAiSemanticSelection(); });
 setupPanelResize($("#left-panel-resize"), "left");
 setupPanelResize($("#ai-panel-resize"), "ai");
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLineNumbers).observe($("#chapter-content"));
@@ -20213,6 +20600,11 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Escape") {
+    if (!$("#ai-semantic-search-panel").classList.contains("hidden")) {
+      setAiSemanticSearchVisible(false);
+      $("#ai-semantic-search-toggle").focus();
+      return;
+    }
     if (!$("#ai-model-popover").classList.contains("hidden")) {
       setAiModelPickerVisible(false);
       return;
