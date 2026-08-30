@@ -137,7 +137,7 @@ import {
   type SemanticSourceType,
   type SemanticVectorEntry
 } from "./semantic-search.js";
-import { buildWritingCalendar, buildWritingMonthCalendar, formatServerLocalClock, resolveServerTimeZone } from "./writing-progress-time.js";
+import { buildWritingCalendar, buildWritingMonthCalendar, formatServerLocalClock, resolveServerTimeZone, writingDateKey } from "./writing-progress-time.js";
 import {
   RELATIONSHIP_SEARCH_POLICY_VERSION,
   RelationshipApproximateMatchLimitError,
@@ -3226,14 +3226,14 @@ export class AiManager {
     });
   }
 
-  getPlatformTokenUsage(timezoneOffset: number): Record<string, unknown> {
-    return this.getTokenUsage(null, timezoneOffset, true);
+  getPlatformTokenUsage(): Record<string, unknown> {
+    return this.getTokenUsage(null, true);
   }
 
-  getWorkTokenUsage(workId: string, timezoneOffset: number): Record<string, unknown> {
+  getWorkTokenUsage(workId: string): Record<string, unknown> {
     this.store.getWork(workId);
     return {
-      ...this.getTokenUsage(workId, timezoneOffset, false),
+      ...this.getTokenUsage(workId, false),
       quota: this.getWorkTokenQuotaStatus(workId)
     };
   }
@@ -3830,10 +3830,11 @@ export class AiManager {
     return details;
   }
 
-  private getTokenUsage(workId: string | null, timezoneOffset: number, includeWorks: boolean): Record<string, unknown> {
+  private getTokenUsage(workId: string | null, includeWorks: boolean): Record<string, unknown> {
     const scopeSql = workId === null ? "" : " AND call.work_id = ?";
     const scopeParams = workId === null ? [] : [workId];
     const usageFilter = "(call.input_tokens > 0 OR call.output_tokens > 0)";
+    const timezone = resolveServerTimeZone();
     const summary = this.store.db.get(
       `SELECT
          COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
@@ -3852,7 +3853,7 @@ export class AiManager {
     ) ?? {};
     const daily = this.store.db.all(
       `SELECT
-         date(call.created_at, printf('%+d minutes', ?)) AS usage_date,
+         date(call.created_at, 'localtime') AS usage_date,
          COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
          COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
          COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
@@ -3865,7 +3866,6 @@ export class AiManager {
        WHERE COALESCE(work.is_internal, 0) = 0 AND ${usageFilter}${scopeSql}
        GROUP BY usage_date
        ORDER BY usage_date`,
-      timezoneOffset,
       ...scopeParams
     ).map((row) => this.mapTokenUsageRow(row, { date: stringValue(row, "usage_date") }));
     const modelRows = this.store.db.all(
@@ -3955,7 +3955,8 @@ export class AiManager {
       callTypes,
       daily,
       ...(works ? { works } : {}),
-      timezoneOffset
+      timezone,
+      serverDate: writingDateKey(new Date(), timezone)
     };
   }
 

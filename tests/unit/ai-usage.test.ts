@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount } from "../../src/public/ai-usage.js";
+import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount, usageCalendarYears } from "../../src/public/ai-usage.js";
 
 describe("AI 用量日历", () => {
   it("生成按周排列的 GitHub 风格年度网格", () => {
@@ -7,15 +7,31 @@ describe("AI 用量日历", () => {
       { date: "2026-07-25", totalTokens: 25 },
       { date: "2026-07-26", totalTokens: 100 },
       { date: "2026-07-27", totalTokens: 400 }
-    ], new Date("2026-07-27T12:00:00"), 2);
-    expect(calendar.cells).toHaveLength(14);
-    expect(calendar.cells[0]).toMatchObject({ date: "2026-07-19", week: 0, weekday: 0 });
+    ], 2026, "2026-07-27");
+    expect(calendar.cells).toHaveLength(371);
+    expect(calendar.cells[0]).toMatchObject({ date: "2025-12-28", week: 0, weekday: 0, outsideYear: true });
+    expect(calendar.cells.find((cell) => cell.date === "2026-01-01")).toMatchObject({ week: 0, weekday: 4, outsideYear: false });
     expect(calendar.cells.find((cell) => cell.date === "2026-07-27")).toMatchObject({
       totalTokens: 400,
       level: 4,
+      outsideYear: false,
       future: false
     });
-    expect(calendar.cells.at(-1)).toMatchObject({ date: "2026-08-01", future: true, level: 0 });
+    expect(calendar.cells.find((cell) => cell.date === "2026-07-28")).toMatchObject({ future: true, level: 0 });
+    expect(calendar.cells.at(-1)).toMatchObject({ date: "2027-01-02", outsideYear: true, level: 0 });
+    expect(calendar.months).toHaveLength(12);
+    expect(calendar.months[0]).toEqual({ week: 0, label: "1月" });
+    expect(calendar.year).toBe(2026);
+  });
+
+  it("只列出存在实际用量的年份并按新到旧排序", () => {
+    expect(usageCalendarYears([
+      { date: "2024-12-31", totalTokens: 10 },
+      { date: "2025-01-01", totalTokens: 0 },
+      { date: "2026-01-01", totalTokens: 20 },
+      { date: "2026-08-30", totalTokens: 30 },
+      { date: "invalid", totalTokens: 40 }
+    ])).toEqual([2026, 2024]);
   });
 
   it("格式化总量与缓存命中率", () => {
