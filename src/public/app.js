@@ -13587,7 +13587,7 @@ async function renderBookAiSettings() {
     clearTimeout(semanticSearchIndexRefreshTimer);
     semanticSearchIndexRefreshTimer = null;
   }
-  const [settings, providers, models, semanticModels, taskDefaults, relationshipIndex, semanticIndex, usage, protocolOptions, writeTools] = await Promise.all([
+  const [settings, providers, models, semanticModels, taskDefaults, relationshipIndex, semanticIndex, usage, protocolOptions, writeTools, remoteMcpSettings] = await Promise.all([
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings`),
     moduleApi("ai-settings", "/api/platform/ai/providers"),
     moduleApi("ai-settings", `/api/works/${state.work.id}/models`),
@@ -13598,13 +13598,20 @@ async function renderBookAiSettings() {
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`),
     moduleApi("ai-settings", "/api/platform/ai/protocols"),
     // 可写工具开关独立于 ai-settings 存储；加载失败时仍可展示其余配置。
-    api(`/api/works/${state.work.id}/ai/tools`).catch(() => null)
+    api(`/api/works/${state.work.id}/ai/tools`).catch(() => null),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/mcp-servers`)
   ]);
   const writeToolsState = writeTools?.tools ?? null;
   const writeToolsMaxOperations = Number(writeTools?.maxOperations) > 0 ? Number(writeTools.maxOperations) : null;
   const host = $("#module-content");
   platformAiProtocolOptions = protocolOptions;
   const workId = String(state.work.id);
+  const remoteMcpConfigText = JSON.stringify(remoteMcpSettings?.config ?? { mcpServers: {} }, null, 2);
+  const remoteMcpServers = Array.isArray(remoteMcpSettings?.servers) ? remoteMcpSettings.servers : [];
+  const remoteMcpToolCount = Math.max(0, Number(remoteMcpSettings?.totalToolCount) || 0);
+  const remoteMcpStatusText = remoteMcpServers.length > 0
+    ? `已验证 ${remoteMcpServers.length} 个远程 MCP Server，共发现 ${remoteMcpToolCount} 个工具。`
+    : "尚未配置远程 MCP Server。";
   const maximumAgentToolCallLimit = Math.max(5, Number(settings.agentToolCallLimitMaximum) || 80);
   const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"]);
   const dailyTokenQuota = settings.dailyTokenQuota === null ? null : Number(settings.dailyTokenQuota);
@@ -13628,6 +13635,8 @@ async function renderBookAiSettings() {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
   })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度必须设置为大于 0 的整数；低于 10,000 时仅提示风险；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="1" max="2000000000" step="1" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>该阈值按对话历史的独立预算计算，用于显示可选择压缩或忽略的提醒；整次请求达到模型上下文窗口 95% 时仍会强制压缩较早消息，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>设定上下文注入</h2><p>开启后，本书的普通 AI 请求会自动注入锁定设定、组织、种族与相关约束；即使本轮同时使用“@注入上下文设定”，也只会注入一次。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="always-include-setting-info" type="checkbox" ${settings.alwaysIncludeSettingInfo ? "checked" : ""}>是否注入设定</label><button id="save-always-include-setting-info" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section ai-agent-tools-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
+  const workSystemPromptSection = host.querySelector("#work-system-prompt")?.closest(".config-section");
+  workSystemPromptSection?.insertAdjacentHTML("afterend", `<section class="config-section remote-mcp-settings"><div class="config-section-header"><div><h2>远程 MCP 工具</h2><p>填写标准的 <code>mcpServers</code> JSON 配置。保存前会逐个检查 JSON、远程传输、安全地址、MCP 握手与工具列表；任一 Server 失败时都不会覆盖当前配置。</p></div></div><label class="field-label remote-mcp-config-field"><span>mcpServers JSON</span><textarea id="remote-mcp-config" rows="12" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="remote-mcp-config-help remote-mcp-status" placeholder='{"mcpServers":{"example":{"url":"https://example.com/mcp"}}}'>${esc(remoteMcpConfigText)}</textarea></label><small id="remote-mcp-config-help" class="remote-mcp-config-help">仅支持远程 MCP 工具（SSE / Streamable HTTP），不支持会执行本地命令的 stdio 配置。敏感 Header 会加密保存，页面中的 ${esc("********")} 掩码再次保存时会保留原值。</small><p id="remote-mcp-status" class="remote-mcp-status" role="status" aria-live="polite">${esc(remoteMcpStatusText)}</p><div class="card-actions"><button id="save-remote-mcp-config" class="ghost-button config-save-button" type="button">测试并保存 MCP 配置</button></div></section>`);
   const semanticModelOptions = (kind, selectedId) => semanticModels
     .filter((model) => model.modelKind === kind)
     .map((model) => {
@@ -13904,6 +13913,39 @@ async function renderBookAiSettings() {
       toast(error.message, "error");
     } finally {
       button.disabled = false;
+    }
+  });
+  $("#save-remote-mcp-config").addEventListener("click", async () => {
+    const button = $("#save-remote-mcp-config");
+    const editor = $("#remote-mcp-config");
+    const status = $("#remote-mcp-status");
+    let configuration;
+    try {
+      configuration = JSON.parse(editor.value);
+    } catch {
+      toast("MCP 配置不是合法 JSON，请检查逗号、引号和括号", "error");
+      editor.focus();
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "正在测试连接…";
+    status.textContent = "正在逐个验证远程 MCP Server 的地址、协议握手与工具列表，请稍候。";
+    try {
+      const saved = await api(`/api/works/${state.work.id}/ai-settings/mcp-servers`, {
+        method: "PUT",
+        body: configuration
+      });
+      const serverCount = Array.isArray(saved.servers) ? saved.servers.length : 0;
+      const toolCount = Math.max(0, Number(saved.totalToolCount) || 0);
+      toast(serverCount > 0
+        ? `已验证并保存 ${serverCount} 个 MCP Server，共 ${toolCount} 个工具`
+        : "远程 MCP 配置已清空");
+      await renderBookAiSettings();
+    } catch (error) {
+      status.textContent = "验证失败，当前已保存配置保持不变。";
+      toast(error.message, "error");
+      button.disabled = false;
+      button.textContent = "测试并保存 MCP 配置";
     }
   });
   $("#sync-relationship-search-index").addEventListener("click", async () => {
@@ -14336,9 +14378,10 @@ function field(name, label, type = "text", value = "", options = []) {
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
   }
   if (type === "keyword-chips") {
+    const chipLabel = String(label).includes("关键词") ? "关键词" : label;
     const values = uniqueRelationshipKeywords(Array.isArray(value) ? value : []);
-    const chips = values.map((keyword) => `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除关键词：${esc(keyword)}">×</button></span>`).join("");
-    return `<div class="form-field keyword-chip-field" data-keyword-chips data-name="${esc(name)}"><span>${esc(label)}</span><div class="keyword-chip-editor" role="group" aria-label="${esc(label)}">${chips}<input type="text" data-keyword-input aria-label="${esc(label)}" placeholder="输入后按回车添加，逗号可批量添加" autocomplete="off"></div><small>输入关键词后按回车添加；也可用逗号一次添加多个。</small></div>`;
+    const chips = values.map((keyword) => `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除${esc(chipLabel)}：${esc(keyword)}">×</button></span>`).join("");
+    return `<div class="form-field keyword-chip-field" data-keyword-chips data-name="${esc(name)}" data-remove-label="${esc(chipLabel)}"><span>${esc(label)}</span><div class="keyword-chip-editor" role="group" aria-label="${esc(label)}">${chips}<input type="text" data-keyword-input aria-label="${esc(label)}" placeholder="输入${esc(chipLabel)}后按回车添加，逗号可批量添加" autocomplete="off"></div><small>输入${esc(chipLabel)}后按回车添加；也可用逗号一次添加多个。</small></div>`;
   }
   if (type === "key-value-list") {
     const config = Array.isArray(options) ? {} : options;
@@ -14463,11 +14506,12 @@ function appendRelationshipKeywordChips(editor, values) {
   if (!input) return;
   const existing = new Set([...editor.querySelectorAll("[data-keyword-value]")].map((control) => String(control.value).toLocaleLowerCase("zh-CN")));
   const name = editor.dataset.name || "keywords";
+  const removeLabel = editor.dataset.removeLabel || "关键词";
   for (const keyword of uniqueRelationshipKeywords(values)) {
     const key = keyword.toLocaleLowerCase("zh-CN");
     if (existing.has(key)) continue;
     existing.add(key);
-    input.insertAdjacentHTML("beforebegin", `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除关键词：${esc(keyword)}">×</button></span>`);
+    input.insertAdjacentHTML("beforebegin", `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除${esc(removeLabel)}：${esc(keyword)}">×</button></span>`);
   }
 }
 
@@ -16111,17 +16155,17 @@ function renderCharacterEditorFields(item) {
   const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
   const chapterOptions = [["", "未指定"], ...(state.work?.volumes ?? []).flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]))];
   const stateEntries = characterStateEntries(item?.currentState ?? {});
+  const raceField = !canReadModule("races")
+    ? '<div class="character-editor-empty-field"><b>种族</b><span>当前账户没有种族模块读取权限，原有绑定不会被修改。</span></div>'
+    : state.races.length
+      ? field("raceId", "种族", "select", item?.raceId ?? "", raceOptions)
+      : '<div class="character-editor-empty-field"><b>种族</b><span>尚未创建种族，请先在“种族”模块建立档案。</span></div>';
   $("#character-editor-fields").innerHTML = [
     characterEditorSection("basic", "基础资料", "用于检索、去重和建立人物在作品中的基本归属。",
       `<div class="avatar-settings character-avatar-settings"><div id="character-avatar-preview" class="character-avatar character-avatar-editor-preview" role="img" aria-label="角色头像"></div><div class="avatar-settings-copy"><strong>角色头像</strong><small>支持 PNG、JPEG、WebP，文件不超过 2 MB。选择后可框选正方形选区再裁剪上传。</small></div><div class="avatar-settings-actions"><button id="character-avatar-upload-button" class="ghost-button" type="button">${item?.avatarUrl ? "更换头像" : "上传头像"}</button><button id="character-avatar-remove-button" class="ghost-button${item?.avatarUrl ? "" : " hidden"}" type="button">移除头像</button></div></div>` +
-      field("name", "标准名", "text", item?.name) +
+      raceField +
       field("gender", "性别", "select", item?.gender ?? "unknown", CHARACTER_GENDER_OPTIONS) +
-      field("aliases", "别名", "item-list", item?.aliases ?? []) +
-      (!canReadModule("races")
-        ? '<div class="character-editor-empty-field"><b>种族</b><span>当前账户没有种族模块读取权限，原有绑定不会被修改。</span></div>'
-        : state.races.length
-        ? field("raceId", "种族", "select", item?.raceId ?? "", raceOptions)
-        : '<div class="character-editor-empty-field"><b>种族</b><span>尚未创建种族，请先在“种族”模块建立档案。</span></div>') +
+      field("aliases", "别名", "keyword-chips", item?.aliases ?? []) +
       (!canReadModule("organizations")
         ? '<div class="character-editor-empty-field"><b>所属组织</b><span>当前账户没有组织模块读取权限，原有绑定不会被修改。</span></div>'
         : organizationOptions.length
@@ -16161,9 +16205,8 @@ function renderCharacterEditorFields(item) {
         : '<div class="character-editor-empty-field"><b>角色扮演记忆</b><span>保存角色卡后即可管理该角色的共享记忆库。</span></div>',
       item?.id ? roleplayMemoryToolbarMarkup() : "")
   ].join("");
-  const name = $("#character-editor-fields [name='name']");
-  if (name) name.required = true;
   bindDynamicListControls($("#character-editor-fields"));
+  bindRelationshipKeywordControls($("#character-editor-fields"));
   renderCharacterAvatar(item);
   renderCharacterEditorRelationships();
   renderCharacterMarkdownSections();
@@ -16243,7 +16286,7 @@ function renderCharacterHistory() {
       const restored = await api(`/api/characters/${characterEditorItem.id}/restore`, { method: "POST", body: { versionNo } });
       characterEditorItem = restored;
       renderCharacterEditorFields(restored);
-      $("#character-editor-title").textContent = restored.name;
+      $("#character-editor-name").value = restored.name;
       $("#character-editor-version").textContent = `v${restored.versionNo}`;
       $("#character-change-note").value = "";
       await Promise.all([renderCharacters(), loadAiReferences()]);
@@ -16282,7 +16325,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   characterEditorRelationshipsLoaded = false;
   characterEditorSections = [];
   $("#character-editor-eyebrow").textContent = item ? "人物主档案" : "建立人物档案";
-  $("#character-editor-title").textContent = item?.name || "新建角色";
+  $("#character-editor-name").value = item?.name ?? "";
   $("#character-editor-version").textContent = item ? `v${item.versionNo}` : "新档案";
   $("#character-change-note").value = "";
   $("#character-editor-submit").textContent = item ? "保存新版本" : "创建人物档案";
@@ -16331,6 +16374,9 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   setCharacterHistoryVisible(false);
   renderCharacterEditorFields(item);
   const viewOnly = readOnly || !canEditModule("characters");
+  $("#character-editor-form").classList.toggle("is-read-only", viewOnly);
+  $("#character-editor-name").readOnly = viewOnly;
+  $("#character-editor-name").setAttribute("aria-readonly", String(viewOnly));
   if (viewOnly) {
     $("#character-editor-eyebrow").textContent = readOnly ? "阅读人物档案" : "人物档案";
     $("#character-editor-fields").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = true; });
@@ -16378,10 +16424,11 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
       busyTarget: form,
       button: submit,
       prepare: async () => {
+        commitRelationshipKeywordInputs(form);
         const body = collectCharacterBody(new FormData(form));
         if (!body.name) {
           toast("请填写角色标准名", "error");
-          form.querySelector("[name='name']")?.focus();
+          $("#character-editor-name").focus();
           return null;
         }
         const currentItem = characterEditorItem;
@@ -16395,7 +16442,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
         state.characters = upsertEntityCollection(state.characters, saved);
         entityEditorDirty = false;
         renderCharacterAvatar(saved);
-        $("#character-editor-title").textContent = saved.name;
+        $("#character-editor-name").value = saved.name;
         $("#character-editor-version").textContent = `v${saved.versionNo}`;
         $("#character-change-note").value = "";
         $("#character-history-button").disabled = false;
@@ -16421,6 +16468,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   if (item) {
     void loadCharacterMarkdownSections(item.id);
   }
+  (viewOnly ? $("#character-editor-close") : $("#character-editor-name")).focus();
 }
 
 function knowledgeEditorSection(key, title, description, content) {
@@ -19934,7 +19982,7 @@ $("#character-editor-form").addEventListener("change", markEntityEditorDirty);
 $("#knowledge-editor-form").addEventListener("input", markEntityEditorDirty);
 $("#knowledge-editor-form").addEventListener("change", markEntityEditorDirty);
 $("#character-editor-fields").addEventListener("click", (event) => {
-  if (event.target.closest("[data-item-list-add], [data-structured-list-add], [data-item-list-remove], [data-structured-list-remove]")) markEntityEditorDirty();
+  if (event.target.closest("[data-item-list-add], [data-structured-list-add], [data-item-list-remove], [data-structured-list-remove], [data-keyword-chip-remove]")) markEntityEditorDirty();
   const uploadButton = event.target.closest("#character-avatar-upload-button");
   if (uploadButton) {
     if (!characterEditorItem?.id) {
