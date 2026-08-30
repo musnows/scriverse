@@ -91,6 +91,56 @@ describe("AI 供应商、模型与建议 API", () => {
     runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", contextWindow, modelId);
   }
 
+  it.each([
+    ["openai-responses", "input"],
+    ["anthropic-messages", "messages"],
+    ["google-vertex", "messages"]
+  ] as const)("允许 Desktop 本地运行模型使用 %s 协议", async (protocol, expectedBodyField) => {
+    const started = await request(runtime.app).post(`/api/works/${workId}/desktop-local-ai/runs`).send({
+      taskType: "continue",
+      instruction: "继续这一章",
+      scope: { type: "chapter", chapterId },
+      runtimeModel: {
+        id: `desktop-${protocol}-model`,
+        providerId: `desktop-${protocol}-provider`,
+        providerName: `local/${protocol}`,
+        protocol,
+        maxTokensParameter: "max_tokens",
+        thinkingType: "enabled",
+        concurrencyLimit: 3,
+        rpmLimit: 30,
+        analysisTimeoutSeconds: 300,
+        displayName: protocol,
+        modelId: `model-${protocol}`,
+        purposes: ["chat", "continue", "polish"],
+        contextNote: "",
+        contextWindow: 128_000,
+        outputNote: "",
+        preset: { temperature: 0.4, max_tokens: 4_096 },
+        thinkingEnabled: false,
+        thinkingEffort: "default",
+        multimodalEnabled: false,
+        note: ""
+      }
+    }).expect(202);
+    const runId = String(started.body.data.id);
+    let pending: Record<string, unknown> | null = null;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const polled = await request(runtime.app).get(`/api/works/${workId}/desktop-local-ai/runs/${runId}`).expect(200);
+      if (polled.body.data.status === "awaiting-completion") {
+        pending = polled.body.data as Record<string, unknown>;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(pending).not.toBeNull();
+    const completion = pending?.completion as { body: Record<string, unknown> };
+    expect(completion.body).toHaveProperty(expectedBodyField);
+    if (protocol === "openai-responses") expect(completion.body).not.toHaveProperty("messages");
+    if (protocol === "anthropic-messages") expect(completion.body).toHaveProperty("system");
+    await request(runtime.app).delete(`/api/works/${workId}/desktop-local-ai/runs/${runId}`).expect(200);
+  });
+
   it("让 Desktop 本地模型复用 Server Agent 工具循环且不调用远端供应商", async () => {
     await request(runtime.app).patch("/api/platform/ai/settings").send({
       systemPrompt: "平台远端 Prompt"
