@@ -416,6 +416,11 @@ describe("作品、导入和章节版本 API", () => {
       expectedVersionNo: 1
     }).expect(200);
     expect(resolved.body.data).toMatchObject({ status: "resolved", versionNo: 2 });
+    expect((await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/annotation-counts`).expect(200)).body.data)
+      .toEqual([
+        { line: 1, count: 1 },
+        { line: 2, count: 1 }
+      ]);
 
     const conflict = await request(runtime.app).patch(`/api/chapter-annotations/${created.body.data.id}`).send({
       note: "冲突修改",
@@ -627,6 +632,81 @@ describe("作品、导入和章节版本 API", () => {
     expect(active.body.data).toEqual([expect.objectContaining({ chapterTitle: "第一章", status: "resolved" })]);
   });
 
+  it("按章节或关键词筛选评论并将已完成待办排在末尾", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "评论筛选作品" }).expect(201);
+    const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
+    const firstChapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "龙纹出现在门上"
+    }).expect(201);
+    const secondChapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第二章",
+      content: "战斗仍需补充"
+    }).expect(201);
+    const note = await request(runtime.app).post(`/api/chapters/${firstChapter.body.data.id}/annotations`).send({
+      kind: "note",
+      startLine: 1,
+      endLine: 1,
+      note: "核对龙纹伏笔"
+    }).expect(201);
+    const completedTodo = await request(runtime.app).post(`/api/chapters/${firstChapter.body.data.id}/annotations`).send({
+      kind: "todo",
+      startLine: 1,
+      endLine: 1,
+      note: "已处理的措辞"
+    }).expect(201);
+    await request(runtime.app).patch(`/api/chapter-annotations/${completedTodo.body.data.id}`).send({
+      status: "resolved",
+      expectedVersionNo: 1
+    }).expect(200);
+    const openTodo = await request(runtime.app).post(`/api/chapters/${secondChapter.body.data.id}/annotations`).send({
+      kind: "todo",
+      startLine: 1,
+      endLine: 1,
+      note: "补写战斗动作"
+    }).expect(201);
+
+    const all = await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=30`)
+      .expect(200);
+    expect(all.body.data.items.map((item: { id: string }) => item.id)).toEqual([
+      note.body.data.id,
+      openTodo.body.data.id,
+      completedTodo.body.data.id
+    ]);
+    expect(all.body.data.chapterOptions).toEqual([
+      { id: firstChapter.body.data.id, title: "第一章", volumeTitle: "第一卷" },
+      { id: secondChapter.body.data.id, title: "第二章", volumeTitle: "第一卷" }
+    ]);
+
+    const chapterFiltered = await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=30&chapterId=${firstChapter.body.data.id}`)
+      .expect(200);
+    expect(chapterFiltered.body.data).toMatchObject({ total: 2 });
+    expect(chapterFiltered.body.data.items.every((item: { chapterId: string }) => item.chapterId === firstChapter.body.data.id)).toBe(true);
+
+    const noteFiltered = await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=30&q=${encodeURIComponent("核对龙纹伏笔")}`)
+      .expect(200);
+    expect(noteFiltered.body.data.items.map((item: { id: string }) => item.id)).toEqual([note.body.data.id]);
+
+    const quoteFiltered = await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=30&q=${encodeURIComponent("战斗仍需补充")}`)
+      .expect(200);
+    expect(quoteFiltered.body.data.items.map((item: { id: string }) => item.id)).toEqual([openTodo.body.data.id]);
+
+    const literalWildcard = await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=30&q=${encodeURIComponent("%")}`)
+      .expect(200);
+    expect(literalWildcard.body.data).toMatchObject({ total: 0, items: [] });
+
+    await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=30&q=${"超".repeat(101)}`)
+      .expect(400);
+  });
+
   it("保存写作目标并从正文版本重建字数趋势", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "写作目标作品" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
@@ -713,6 +793,78 @@ describe("作品、导入和章节版本 API", () => {
       first.body.data.id,
       second.body.data.id
     )).toEqual({ count: 0 });
+  });
+
+  it("按目录顺序清洗并重排章节标题，异常时整批回滚", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "标题重排作品" }).expect(201);
+    const firstVolume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
+    const secondVolume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第二卷" }).expect(201);
+    const first = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: firstVolume.body.data.id,
+      title: "第九章：旧城",
+      content: "旧城正文"
+    }).expect(201);
+    const second = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: firstVolume.body.data.id,
+      title: "无序号标题"
+    }).expect(201);
+    const third = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: secondVolume.body.data.id,
+      title: "Chapter 77 - 归途"
+    }).expect(201);
+    const abnormal = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: secondVolume.body.data.id,
+      title: "第X章 异常编号"
+    }).expect(201);
+    const oversized = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: secondVolume.body.data.id,
+      title: "长".repeat(300)
+    }).expect(201);
+
+    const renumbered = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters/batch`).send({
+      chapters: [abnormal, second, third, first].map((chapter) => ({ id: chapter.body.data.id, expectedVersionNo: 1 })),
+      action: { type: "renumberTitles", template: "第{n}章", numberStyle: "chinese", startAt: 8 }
+    }).expect(200);
+    expect(renumbered.body.data).toEqual({ processed: 4, updated: 4, action: "renumberTitles" });
+
+    const tree = await request(runtime.app).get(`/api/works/${work.body.data.id}`).expect(200);
+    expect(tree.body.data.volumes.flatMap((volume: { chapters: Array<{ title: string; versionNo: number }> }) => volume.chapters)
+      .map((chapter: { title: string; versionNo: number }) => [chapter.title, chapter.versionNo])).toEqual([
+      ["第八章 旧城", 2],
+      ["第九章 无序号标题", 2],
+      ["第十章 归途", 2],
+      ["第十一章 第X章 异常编号", 2],
+      ["长".repeat(300), 1]
+    ]);
+    const versions = await request(runtime.app).get(`/api/chapters/${first.body.data.id}/versions`).expect(200);
+    expect(versions.body.data[0]).toMatchObject({
+      title: "第八章 旧城",
+      versionNo: 2,
+      source: "manual",
+      changeNote: "批量重排章节标题序号"
+    });
+
+    const failed = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters/batch`).send({
+      chapters: [
+        { id: first.body.data.id, expectedVersionNo: 2 },
+        { id: oversized.body.data.id, expectedVersionNo: 1 }
+      ],
+      action: { type: "renumberTitles", template: "第{n}章", numberStyle: "chinese", startAt: 1 }
+    }).expect(400);
+    expect(failed.body.error.code).toBe("CHAPTER_TITLE_TOO_LONG");
+    const unchangedFirst = await request(runtime.app).get(`/api/chapters/${first.body.data.id}`).expect(200);
+    const unchangedOversized = await request(runtime.app).get(`/api/chapters/${oversized.body.data.id}`).expect(200);
+    expect(unchangedFirst.body.data).toMatchObject({ title: "第八章 旧城", versionNo: 2 });
+    expect(unchangedOversized.body.data).toMatchObject({ title: "长".repeat(300), versionNo: 1 });
+
+    const rangeOverflow = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters/batch`).send({
+      chapters: [
+        { id: first.body.data.id, expectedVersionNo: 2 },
+        { id: second.body.data.id, expectedVersionNo: 2 }
+      ],
+      action: { type: "renumberTitles", template: "第{n}章", numberStyle: "arabic", startAt: 999_999 }
+    }).expect(400);
+    expect(rangeOverflow.body.error.code).toBe("CHAPTER_NUMBER_RANGE");
   });
 
   it("规范化同卷排序并支持章节跨卷移动", async () => {

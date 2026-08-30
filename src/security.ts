@@ -263,9 +263,12 @@ function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null
     || /^\/api\/ai-conversations\/[^/]+\/export$/u.test(path)
   )) return "export";
   if (method === "GET" && /^\/api\/works\/[^/]+\/search$/u.test(path)) return "search";
+  if (method === "PUT" && /^\/api\/works\/[^/]+\/ai-settings\/mcp-servers$/u.test(path)) return "ai";
   if (method !== "POST") return null;
   if (
     /^\/api\/works\/[^/]+\/(?:suggestions|chat\/stream|tasks)(?:\/|$)/u.test(path)
+    || /^\/api\/works\/[^/]+\/semantic-search$/u.test(path)
+    || /^\/api\/works\/[^/]+\/ai-settings\/semantic-search-index\/(?:sync|rebuild)$/u.test(path)
     || /^\/api\/suggestions\/[^/]+\/guard$/u.test(path)
     || /^\/api\/ai-conversations\/[^/]+\/(?:compact|context\/prepare)$/u.test(path)
     || /^\/api\/tasks\/[^/]+\/(?:run|rerun|cancel|relationship-changes\/apply|character-extraction\/apply)$/u.test(path)

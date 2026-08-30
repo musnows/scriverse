@@ -97,12 +97,20 @@ export type ContextScope = {
   /** 分析任务可以一次选择多个分卷；旧任务继续使用 volumeId。 */
   volumeIds?: string[];
   selection?: string;
+  /** 当前正文操作目标的选区起点；只在本轮 Skill 激活时使用，不作为会话固定上下文。 */
+  selectionStart?: number;
+  /** 当前正文操作目标的选区终点。 */
+  selectionEnd?: number;
+  /** 当前正文操作目标的章节版本。 */
+  writingChapterVersion?: number;
   characterIds?: string[];
   /** 指令关键词命中的角色（轻量卡，不含档案 Markdown 全文）。 */
   mentionCharacterIds?: string[];
   settingIds?: string[];
   raceIds?: string[];
   organizationIds?: string[];
+  /** 用户主动选择的语义检索结果快照；仅对携带该标识的当前请求生效。 */
+  semanticSnapshotId?: string;
   includeBookSummary?: boolean;
   /** 正文范围内是否注入锁定设定、组织/种族简表等；缺省为 true。设定库范围忽略此字段。 */
   includeSettingInfo?: boolean;

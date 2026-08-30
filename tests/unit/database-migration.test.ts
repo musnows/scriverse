@@ -79,6 +79,40 @@ function insertSystemOwnedWork(database: Database, workId: string, title: string
 }
 
 describe("数据库版本化迁移", () => {
+  it("迁移 126 创建按作品级联清理的加密远程 MCP 配置表", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-remote-mcp-"));
+    roots.push(root);
+    const filename = join(root, "remote-mcp.db");
+    const current = new Database(filename);
+    current.run("DROP TABLE work_mcp_settings");
+    current.run("DELETE FROM schema_migrations WHERE version = 126");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.all("PRAGMA table_info(work_mcp_settings)").map((column) => column.name)).toEqual([
+      "work_id",
+      "config_encrypted",
+      "config_iv",
+      "config_tag",
+      "tool_catalog_json",
+      "updated_at"
+    ]);
+    const store = new Store(migrated);
+    const work = store.createWork({ title: "MCP 迁移测试作品" });
+    migrated.run(
+      `INSERT INTO work_mcp_settings (
+         work_id, config_encrypted, config_iv, config_tag, tool_catalog_json, updated_at
+       ) VALUES (?, 'cipher', 'iv', 'tag', '[]', '2026-08-29T00:00:00.000Z')`,
+      String(work.id)
+    );
+    migrated.run("DELETE FROM works WHERE id = ?", String(work.id));
+    expect(migrated.get("SELECT COUNT(*) AS count FROM work_mcp_settings")).toEqual({ count: 0 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 126")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
   it("迁移 124 为重复正文和评论回填稳定且不同的行身份", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-stable-line-ids-"));
     roots.push(root);
@@ -2255,5 +2289,37 @@ describe("数据库版本化迁移", () => {
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
+  });
+
+  it("迁移 125 创建语义检索配置、索引和快照结构并默认关闭", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-semantic-search-"));
+    roots.push(root);
+    const filename = join(root, "semantic-search.db");
+    const database = new Database(filename);
+    const store = new Store(database);
+    const work = store.createWork({ title: "语义检索迁移作品" });
+
+    expect(database.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 125")).toEqual({ count: 1 });
+    expect(database.all("PRAGMA table_info(models)").some((column) => column.name === "model_kind")).toBe(true);
+    expect(database.all("PRAGMA table_info(work_ai_settings)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "semantic_search_enabled",
+      "semantic_embedding_model_id",
+      "semantic_rerank_model_id",
+      "semantic_vector_dimension",
+      "semantic_recall_limit",
+      "semantic_result_limit",
+      "semantic_budget_tokens",
+      "semantic_channel_weight"
+    ]));
+    expect(store.getWorkAiSettings(String(work.id))).toMatchObject({ workId: work.id });
+    expect(database.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'semantic_index_entries'")).toEqual({
+      name: "semantic_index_entries"
+    });
+    expect(database.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'semantic_context_snapshots'")).toEqual({
+      name: "semantic_context_snapshots"
+    });
+    expect(database.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(database.all("PRAGMA foreign_key_check")).toEqual([]);
+    database.close();
   });
 });

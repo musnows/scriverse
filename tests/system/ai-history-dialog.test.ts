@@ -35,6 +35,13 @@ describe("AI 对话历史弹窗", () => {
     expect(page.text).toContain('data-ai-history-action="export"');
     expect(page.text).toContain('data-ai-history-action="delete"');
     expect(page.text).toContain('id="ai-history-pagination" class="module-pagination ai-history-pagination hidden"');
+    expect(page.text).toContain('<option value="chat">问答</option>');
+    expect(page.text).toContain('<option value="roleplay">角色扮演</option>');
+    expect(page.text).not.toContain('<option value="continue">续写</option>');
+    expect(page.text).not.toContain('<option value="polish">润色选中文本</option>');
+    expect(page.text).toContain('提到续写或润色时会自动加载对应 Skill');
+    expect(page.text).toContain('/continue-writing 或 /polish-writing 强制加载');
+    expect(page.text).toContain('feature=ai-writing-skills-v3');
     expect(page.text).toContain('id="ai-history-previous"');
     expect(page.text).toContain('id="ai-history-next"');
     expect(page.text).not.toContain('id="ai-history-panel"');
@@ -49,6 +56,11 @@ describe("AI 对话历史弹窗", () => {
     expect(application.text).toContain("meta.textContent = aiConversationHistoryMeta(conversation);");
     expect(application.text).toContain('book: "全书"');
     expect(application.text).toContain('chat: "问答"');
+    expect(application.text).not.toContain('continue: "续写"');
+    expect(application.text).not.toContain('polish: "润色选中文本"');
+    expect(application.text).toContain('writingChapterVersion: state.chapter.versionNo');
+    expect(application.text).toContain('attachWritingSuggestion(assistantMessage, writingSuggestion');
+    expect(application.text).toContain('/continue-writing 或 /polish-writing 强制加载');
     expect(application.text).toContain("function syncAiHistoryActionMenu(conversation)");
     expect(application.text).toContain("async function copyAiConversationSessionId(conversation)");
     expect(application.text).toContain('if (action === "copy-session-id") {');

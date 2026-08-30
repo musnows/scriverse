@@ -20,6 +20,7 @@ export const MODEL_THINKING_EFFORT_OPTIONS = Object.freeze([
 ]);
 
 const modelThinkingEfforts = new Set(MODEL_THINKING_EFFORT_OPTIONS.map(([value]) => value));
+const modelKinds = new Set(["chat", "embedding", "rerank"]);
 
 export const MIN_MODEL_CONTEXT_WINDOW = 32_768;
 export const RECOMMENDED_MODEL_CONTEXT_WINDOW = 128_000;
@@ -58,11 +59,13 @@ export function modelContextWindowGuidance(value) {
 
 export function modelFormValues(model = null) {
   const modelId = String(model?.modelId ?? "");
+  const modelKind = modelKinds.has(model?.modelKind) ? model.modelKind : "chat";
   const configuredTemperature = model?.preset?.temperature;
   return {
     displayName: model?.displayName ?? "",
     modelId,
-    purposes: model ? normalizeModelPurposes(model.purposes) : ["chat", "continue"],
+    modelKind,
+    purposes: modelKind === "chat" ? (model ? normalizeModelPurposes(model.purposes) : ["chat", "continue"]) : [],
     contextWindow: model?.contextWindow ?? 128000,
     temperature: isKimiModelId(modelId) && !(typeof configuredTemperature === "number" && Number.isFinite(configuredTemperature))
       ? 1
@@ -78,10 +81,12 @@ export function modelFormValues(model = null) {
 
 export function modelPayload(values, existingPreset = {}) {
   const modelId = String(values.modelId);
+  const modelKind = modelKinds.has(values.modelKind) ? values.modelKind : "chat";
   return {
     displayName: String(values.displayName),
     modelId,
-    purposes: normalizeModelPurposes(values.purposes),
+    modelKind,
+    purposes: modelKind === "chat" ? normalizeModelPurposes(values.purposes) : [],
     contextWindow: Number(values.contextWindow),
     preset: {
       ...existingPreset,
@@ -90,8 +95,8 @@ export function modelPayload(values, existingPreset = {}) {
     },
     thinkingEnabled: Boolean(values.thinkingEnabled),
     thinkingEffort: modelThinkingEfforts.has(values.thinkingEffort) ? values.thinkingEffort : "default",
-    multimodalEnabled: Boolean(values.multimodalEnabled),
-    imageToolDefault: Boolean(values.imageToolDefault),
+    multimodalEnabled: modelKind === "chat" && Boolean(values.multimodalEnabled),
+    imageToolDefault: modelKind === "chat" && Boolean(values.imageToolDefault),
     enabled: Boolean(values.enabled)
   };
 }

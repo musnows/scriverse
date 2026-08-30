@@ -1,0 +1,428 @@
+import request from "supertest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ContextBuilder } from "../../src/ai.js";
+import type { Runtime } from "../../src/app.js";
+import { createTestRuntime, seedChapter } from "../helpers.js";
+
+async function configureSemanticQuotaRuntime(fetchImpl: typeof fetch): Promise<{
+  runtime: Runtime;
+  workId: string;
+  chapterId: string;
+  providerId: string;
+  configuration: unknown;
+  requestEmbeddings: (inputs: string[]) => Promise<number[][]>;
+  requestRerank: (query: string, document: string) => Promise<number>;
+  ensureIndex: (force: boolean) => Promise<Record<string, unknown>>;
+}> {
+  const runtime = createTestRuntime(fetchImpl);
+  const seeded = await seedChapter(runtime, "北港议会掌管所有远航审批。");
+  const workId = String(seeded.work.id);
+  const provider = runtime.ai.createProvider({
+    name: "语义额度供应商",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    apiKey: "lm-studio",
+    status: "enabled",
+    rpmLimit: 10_000
+  });
+  const providerId = String(provider.id);
+  runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = ?", providerId);
+  const model = runtime.ai.createModel(providerId, {
+    displayName: "Embedding Quota Model",
+    modelId: "embedding-quota-model",
+    modelKind: "embedding"
+  });
+  const rerankModel = runtime.ai.createModel(providerId, {
+    displayName: "Rerank Quota Model",
+    modelId: "rerank-quota-model",
+    modelKind: "rerank"
+  });
+  runtime.store.updateWorkSemanticSearchSettings(workId, {
+    enabled: true,
+    embeddingModelId: String(model.id),
+    rerankModelId: String(rerankModel.id),
+    vectorDimension: 3
+  });
+  const internals = runtime.ai as unknown as {
+    resolveSemanticConfiguration(workId: string): unknown;
+    requestSemanticEmbeddings(workId: string, configuration: unknown, inputs: string[]): Promise<number[][]>;
+    requestSemanticRerank(workId: string, configuration: unknown, query: string, document: string): Promise<number>;
+    ensureSemanticSearchIndex(workId: string, force: boolean): Promise<Record<string, unknown>>;
+  };
+  const configuration = internals.resolveSemanticConfiguration(workId);
+  return {
+    runtime,
+    workId,
+    chapterId: String(seeded.chapter.id),
+    providerId,
+    configuration,
+    requestEmbeddings: (inputs) => internals.requestSemanticEmbeddings(workId, configuration, inputs),
+    requestRerank: (query, document) => internals.requestSemanticRerank(workId, configuration, query, document),
+    ensureIndex: (force) => internals.ensureSemanticSearchIndex(workId, force)
+  };
+}
+
+describe("主动语义检索 API", () => {
+  let runtime: Runtime | null = null;
+
+  afterEach(async () => {
+    await runtime?.close();
+    runtime = null;
+  });
+
+  it.each([
+    ["本书每日", "work", "daily_token_quota", "DAILY_TOKEN_QUOTA_EXCEEDED"],
+    ["本书每月", "work", "monthly_token_quota", "MONTHLY_TOKEN_QUOTA_EXCEEDED"],
+    ["供应商每日", "provider", "daily_token_quota", "PROVIDER_DAILY_TOKEN_QUOTA_EXCEEDED"],
+    ["供应商每月", "provider", "monthly_token_quota", "PROVIDER_MONTHLY_TOKEN_QUOTA_EXCEEDED"]
+  ] as const)("%s Token 额度不足时不发送 embedding 请求", async (_label, scope, column, errorCode) => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const configured = await configureSemanticQuotaRuntime(fetchMock);
+    runtime = configured.runtime;
+    if (scope === "work") {
+      runtime.database.run(`UPDATE work_ai_settings SET ${column} = 1 WHERE work_id = ?`, configured.workId);
+    } else {
+      runtime.database.run(`UPDATE providers SET ${column} = 1 WHERE id = ?`, configured.providerId);
+    }
+
+    await expect(configured.requestEmbeddings(["北港议会掌管所有远航审批。"]))
+      .rejects.toMatchObject({ code: errorCode, status: 429 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ?", configured.workId)).toEqual({ count: 0 });
+  });
+
+  it("并发 embedding 请求预留输入 Token 并在额度不足时拒绝后续请求", async () => {
+    let releaseFetch: () => void = () => undefined;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      await fetchGate;
+      return new Response(JSON.stringify({
+        object: "list",
+        data: [{ object: "embedding", index: 0, embedding: [1, 0, 0] }],
+        usage: { prompt_tokens: 60, total_tokens: 60 }
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    const configured = await configureSemanticQuotaRuntime(fetchMock);
+    runtime = configured.runtime;
+    runtime.database.run("UPDATE work_ai_settings SET daily_token_quota = 300 WHERE work_id = ?", configured.workId);
+    const input = "北".repeat(180);
+
+    const first = configured.requestEmbeddings([input]);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await expect(configured.requestEmbeddings([input])).rejects.toMatchObject({
+      code: "DAILY_TOKEN_QUOTA_EXCEEDED",
+      status: 429
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    releaseFetch();
+    await expect(first).resolves.toEqual([[1, 0, 0]]);
+  });
+
+  it("供应商额度不足时不发送 rerank 请求", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const configured = await configureSemanticQuotaRuntime(fetchMock);
+    runtime = configured.runtime;
+    runtime.database.run("UPDATE providers SET monthly_token_quota = 1 WHERE id = ?", configured.providerId);
+
+    await expect(configured.requestRerank("谁负责远航审批？", "北港议会掌管所有远航审批。"))
+      .rejects.toMatchObject({ code: "PROVIDER_MONTHLY_TOKEN_QUOTA_EXCEEDED", status: 429 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ?", configured.workId)).toEqual({ count: 0 });
+  });
+
+  it("索引构建期间编辑正文会排队重建最新版本", async () => {
+    let releaseFirstFetch: () => void = () => undefined;
+    const firstFetchGate = new Promise<void>((resolve) => {
+      releaseFirstFetch = resolve;
+    });
+    let embeddingRequestCount = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      embeddingRequestCount += 1;
+      if (embeddingRequestCount === 1) await firstFetchGate;
+      const body = JSON.parse(String(init?.body ?? "{}")) as { input?: string[] };
+      const inputs = Array.isArray(body.input) ? body.input : [];
+      return new Response(JSON.stringify({
+        object: "list",
+        data: inputs.map((_value, index) => ({ object: "embedding", index, embedding: [1, 0, 0] })),
+        usage: { prompt_tokens: 10, total_tokens: 10 }
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    const configured = await configureSemanticQuotaRuntime(fetchMock);
+    runtime = configured.runtime;
+
+    const initialBuild = configured.ensureIndex(true);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    runtime.store.saveChapter(configured.chapterId, { content: "北港议会已将远航审批移交给潮汐委员会。" });
+    const queuedBuild = configured.ensureIndex(false);
+    releaseFirstFetch();
+    await expect(queuedBuild).resolves.toMatchObject({ status: "ready", ready: true });
+    await expect(initialBuild).resolves.toMatchObject({ status: "ready", ready: true });
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const indexedContents = runtime.database.all(
+      "SELECT content, source_version FROM semantic_index_entries WHERE work_id = ? AND source_type = 'chapter'",
+      configured.workId
+    );
+    expect(indexedContents).toEqual([
+      expect.objectContaining({ content: "北港议会已将远航审批移交给潮汐委员会。", source_version: "2" })
+    ]);
+    expect(JSON.stringify(indexedContents)).not.toContain("掌管所有远航审批");
+  });
+
+  it("构建期间切换 embedding 模型并重建时旧构建不能覆盖新配置", async () => {
+    let releaseFirstFetch: () => void = () => undefined;
+    const firstFetchGate = new Promise<void>((resolve) => {
+      releaseFirstFetch = resolve;
+    });
+    const requestedModels: string[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { input?: string[]; model?: string };
+      requestedModels.push(String(body.model ?? ""));
+      if (requestedModels.length === 1) await firstFetchGate;
+      const inputs = Array.isArray(body.input) ? body.input : [];
+      return new Response(JSON.stringify({
+        object: "list",
+        data: inputs.map((_value, index) => ({ object: "embedding", index, embedding: [0, 1, 0] })),
+        usage: { prompt_tokens: 10, total_tokens: 10 }
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    const configured = await configureSemanticQuotaRuntime(fetchMock);
+    runtime = configured.runtime;
+    const replacementModel = runtime.ai.createModel(configured.providerId, {
+      displayName: "Replacement Embedding Model",
+      modelId: "replacement-embedding-model",
+      modelKind: "embedding"
+    });
+
+    const initialBuild = configured.ensureIndex(true);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await runtime.ai.updateSemanticSearchSettings(configured.workId, {
+      embeddingModelId: String(replacementModel.id)
+    });
+    runtime.ai.rebuildSemanticSearchIndex(configured.workId);
+    releaseFirstFetch();
+    await expect(initialBuild).resolves.toMatchObject({ status: "ready", ready: true });
+
+    expect(requestedModels).toEqual(expect.arrayContaining(["embedding-quota-model", "replacement-embedding-model"]));
+    const finalStatus = runtime.ai.getSemanticSearchIndexStatus(configured.workId);
+    expect(finalStatus).toMatchObject({ status: "ready", ready: true });
+    const state = runtime.database.get(
+      "SELECT status, config_fingerprint FROM semantic_index_state WHERE work_id = ?",
+      configured.workId
+    );
+    expect(state).toMatchObject({ status: "ready", config_fingerprint: finalStatus.configFingerprint });
+    expect(runtime.database.all(
+      "SELECT DISTINCT embedding_model_id, config_fingerprint FROM semantic_index_entries WHERE work_id = ?",
+      configured.workId
+    )).toEqual([{
+      embedding_model_id: String(replacementModel.id),
+      config_fingerprint: finalStatus.configFingerprint
+    }]);
+  });
+
+  it("增量构建、融合、rerank、快照注入并拒绝返回失败后的旧版本", async () => {
+    let invalidEmbedding = false;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/embeddings")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { input?: string[] };
+        const values = Array.isArray(body.input) ? body.input : [];
+        return new Response(JSON.stringify({
+          object: "list",
+          data: values.map((value, index) => ({
+            object: "embedding",
+            index,
+            embedding: invalidEmbedding
+              ? [Number.NaN, 0, 0]
+              : value.includes("北港") || value.includes("议会") ? [1, 0, 0]
+                : value.includes("南城") ? [0, 1, 0]
+                  : [0, 0, 1]
+          })),
+          usage: { prompt_tokens: 0, total_tokens: 0 }
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/chat/completions")) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: "普通对话回复。" } }],
+          usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 }
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/completions")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { prompt?: string };
+        return new Response(JSON.stringify({
+          choices: [{ text: body.prompt?.includes("北港议会") ? "yes" : "no" }],
+          usage: { prompt_tokens: 20, completion_tokens: 1, total_tokens: 21 }
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    runtime = createTestRuntime(fetchMock);
+    const seeded = await seedChapter(runtime, "林舟抵达北港。\n\n北港议会掌管港口航道。\n\n南城位于群山之间。");
+    const workId = String(seeded.work.id);
+    const setting = runtime.store.createSetting(workId, {
+      title: "北港制度",
+      category: "规则",
+      content: "北港议会负责审批所有远航。"
+    });
+    const provider = runtime.ai.createProvider({
+      name: "本地语义模型",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "lm-studio",
+      status: "enabled",
+      rpmLimit: 10_000
+    });
+    runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = ?", String(provider.id));
+    const embeddingModel = runtime.ai.createModel(String(provider.id), {
+      displayName: "Qwen3 Embedding",
+      modelId: "text-embedding-qwen3-embedding-0.6b",
+      modelKind: "embedding"
+    });
+    const rerankModel = runtime.ai.createModel(String(provider.id), {
+      displayName: "Qwen3 Reranker",
+      modelId: "qwen3-reranker-0.6b",
+      modelKind: "rerank"
+    });
+    const chatModel = runtime.ai.createModel(String(provider.id), {
+      displayName: "Chat Model",
+      modelId: "chat-model",
+      modelKind: "chat"
+    });
+
+    const configured = await request(runtime.app)
+      .patch(`/api/works/${workId}/ai-settings/semantic-search`)
+      .send({
+        enabled: true,
+        embeddingModelId: embeddingModel.id,
+        rerankModelId: rerankModel.id,
+        vectorDimension: 3,
+        recallLimit: 10,
+        resultLimit: 6,
+        budgetTokens: 2_000,
+        channelWeight: 1.2
+      })
+      .expect(200);
+    expect(configured.body.data).toMatchObject({
+      semanticSearchEnabled: true,
+      semanticEmbeddingModelId: embeddingModel.id,
+      semanticRerankModelId: rerankModel.id,
+      semanticVectorDimension: 3,
+      semanticIndex: { status: "idle" }
+    });
+
+    const internals = runtime.ai as unknown as {
+      ensureSemanticSearchIndex(workId: string, force: boolean): Promise<Record<string, unknown>>;
+    };
+    const built = await internals.ensureSemanticSearchIndex(workId, true);
+    expect(built).toMatchObject({ status: "ready", ready: true, failedSources: 0 });
+    expect(Number(built.indexedChunkCount)).toBeGreaterThanOrEqual(2);
+
+    const searched = await request(runtime.app)
+      .post(`/api/works/${workId}/semantic-search`)
+      .send({
+        query: "谁控制北港的远航审批？",
+        types: ["chapter", "setting"],
+        currentChapterId: seeded.chapter.id,
+        selection: "北港航道",
+        includeKeyword: true
+      })
+      .expect(200);
+    expect(searched.body.data).toMatchObject({ status: "ready", semanticUsed: true, degraded: false });
+    expect(searched.body.data.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        entryId: expect.stringMatching(/^semanticChunk_/u),
+        matchKinds: expect.arrayContaining(["semantic"]),
+        sourceVersion: expect.any(String),
+        semanticScore: expect.any(Number),
+        rerankScore: expect.any(Number),
+        estimatedTokens: expect.any(Number)
+      })
+    ]));
+    const selected = searched.body.data.results.find((item: { entryId?: string }) => item.entryId);
+    expect(selected).toBeDefined();
+
+    const snapshot = await request(runtime.app)
+      .post(`/api/works/${workId}/semantic-search/snapshots`)
+      .send({ query: "谁控制北港的远航审批？", entryIds: [selected.entryId], scope: { types: ["chapter", "setting"] } })
+      .expect(201);
+    expect(snapshot.body.data).toMatchObject({ itemCount: 1, estimatedTokens: expect.any(Number) });
+    const context = new ContextBuilder(runtime.store).buildPlan(workId, {
+      type: "none",
+      semanticSnapshotId: snapshot.body.data.id
+    }, 10_000);
+    expect(context.context).toContain("用户主动语义检索快照");
+    expect(context.context).toContain(String(selected.snippet));
+    const tightContext = new ContextBuilder(runtime.store).buildPlan(workId, {
+      type: "none",
+      semanticSnapshotId: snapshot.body.data.id
+    }, 120);
+    expect(tightContext.degradedBlockIds).toEqual([]);
+    if (tightContext.context.includes("用户主动语义检索快照")) {
+      expect(tightContext.context).toContain(String(selected.snippet));
+    }
+
+    const embeddingCalls = runtime.database.get(
+      "SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ? AND task_type = 'embedding'",
+      workId
+    );
+    const rerankCalls = runtime.database.get(
+      "SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ? AND task_type = 'rerank'",
+      workId
+    );
+    expect(Number(embeddingCalls?.count)).toBeGreaterThan(1);
+    expect(Number(rerankCalls?.count)).toBeGreaterThan(0);
+    expect(Number(runtime.database.get(
+      "SELECT MIN(input_tokens) AS minimum FROM ai_calls WHERE work_id = ? AND task_type = 'embedding'",
+      workId
+    )?.minimum)).toBeGreaterThan(0);
+
+    runtime.store.updateWorkAiSettings(workId, {
+      agentTools: [...runtime.store.getWorkAiSettings(workId).agentTools as string[], "semantic_search_story"]
+    });
+    const toolRuntime = runtime.ai as unknown as {
+      executeAgentTool(workId: string, toolCall: Record<string, unknown>): Promise<Record<string, unknown>>;
+    };
+    const toolExecution = await toolRuntime.executeAgentTool(workId, {
+      id: "semantic-tool-call",
+      type: "function",
+      function: {
+        name: "semantic_search_story",
+        arguments: JSON.stringify({ query: "谁控制北港的远航审批？", modules: ["prose", "settings"], limit: 5 })
+      }
+    });
+    expect(toolExecution).toMatchObject({
+      name: "semantic_search_story",
+      status: "completed",
+      result: { ok: true, data: { semanticUsed: true, matches: expect.any(Array) } }
+    });
+
+    const embeddingsBeforeOrdinaryChat = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ? AND task_type = 'embedding'",
+      workId
+    )?.count ?? 0);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "普通聊天不应自动检索",
+      scope: { type: "none" },
+      modelId: chatModel.id
+    }).expect(201);
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ? AND task_type = 'embedding'",
+      workId
+    )?.count ?? 0)).toBe(embeddingsBeforeOrdinaryChat);
+
+    invalidEmbedding = true;
+    runtime.store.updateSetting(String(setting.id), { content: "当前版本只说明南城制度，不再包含旧的远航审批内容。" });
+    const failed = await internals.ensureSemanticSearchIndex(workId, false);
+    expect(failed).toMatchObject({ status: "failed", failedSources: 1 });
+    const degraded = await request(runtime.app)
+      .post(`/api/works/${workId}/semantic-search`)
+      .send({ query: "远航审批", types: ["setting"], includeKeyword: false })
+      .expect(200);
+    expect(degraded.body.data.results).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ snippet: expect.stringContaining("负责审批所有远航") })
+    ]));
+    expect(runtime.database.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});

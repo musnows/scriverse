@@ -23,9 +23,10 @@ import {
 } from "./ai-stream-timeout.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { attachmentDownloadFileName, inlineContentDisposition } from "./attachment-download.js";
-import { AiManager } from "./ai.js";
+import { AI_MODEL_KINDS, AiManager } from "./ai.js";
 import { LiteLlmPriceCache } from "./ai-model-pricing.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
+import { SEMANTIC_SOURCE_TYPES, type SemanticSourceType } from "./semantic-search.js";
 import {
   CHARACTER_EXTRACTION_MAX_ALIASES,
   CHARACTER_EXTRACTION_MAX_CANDIDATES,
@@ -54,6 +55,7 @@ import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./goog
 import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH, readableHybridSearchTypes } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { MAX_CHAPTER_LINE_IDS } from "./chapter-annotation-anchor.js";
+import { isChapterNumberTemplate } from "./chapter-title-numbering.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes, WORK_AGENT_TOOL_IDS } from "./store.js";
 import { composeRoleplayStoredUserContent } from "./roleplay-turn.js";
 import {
@@ -576,6 +578,7 @@ const providerUpdateSchema = providerBaseSchema.partial().superRefine((value, ct
 const modelSchema = z.object({
   displayName: nonEmpty.max(200),
   modelId: nonEmpty.max(300),
+  modelKind: z.enum(AI_MODEL_KINDS).optional(),
   purposes: optionalStrings,
   contextNote: z.string().max(10_000).optional(),
   contextWindow: z.number().int().min(32_768, "模型上下文不能低于 32768 Token").max(2_000_000).optional(),
@@ -756,11 +759,41 @@ const workAiSettingsSchema = z.object({
   imageToolModelId: identifier.nullable().optional()
 }).strict();
 
+const semanticSearchSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  embeddingModelId: identifier.nullable().optional(),
+  rerankModelId: identifier.nullable().optional(),
+  vectorDimension: z.number().int().min(1).max(65_536).optional(),
+  recallLimit: z.number().int().min(1).max(200).optional(),
+  resultLimit: z.number().int().min(1).max(100).optional(),
+  budgetTokens: z.number().int().min(256).max(100_000).optional(),
+  channelWeight: z.number().min(0.1).max(5).optional()
+}).strict();
+
+const semanticSearchRequestSchema = z.object({
+  query: z.string().trim().min(1).max(2_000),
+  types: z.array(z.enum(SEMANTIC_SOURCE_TYPES)).max(SEMANTIC_SOURCE_TYPES.length).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  includeKeyword: z.boolean().optional(),
+  currentChapterId: identifier.optional(),
+  selection: z.string().max(4_000).optional()
+}).strict();
+
+const semanticSnapshotSchema = z.object({
+  query: z.string().trim().min(1).max(2_000),
+  entryIds: z.array(identifier).min(1).max(30),
+  scope: jsonObject.optional(),
+  conversationId: identifier.optional()
+}).strict();
+
 const contextSchema = z.object({
   type: z.enum(["none", "selection", "chapter", "volume", "book", "settings-catalog", "entities"]),
   chapterId: identifier.optional(),
   volumeId: identifier.optional(),
   selection: z.string().max(200_000).optional(),
+  selectionStart: z.number().int().min(0).max(10_000_000).optional(),
+  selectionEnd: z.number().int().min(0).max(10_000_000).optional(),
+  writingChapterVersion: z.number().int().min(1).max(2_000_000_000).optional(),
   chapterIds: z.array(identifier).max(20).optional(),
   volumeIds: z.array(identifier).max(20).optional(),
   characterIds: optionalStrings,
@@ -768,6 +801,7 @@ const contextSchema = z.object({
   settingIds: optionalStrings,
   raceIds: optionalStrings,
   organizationIds: optionalStrings,
+  semanticSnapshotId: identifier.optional(),
   includeBookSummary: z.boolean().optional(),
   includeSettingInfo: z.boolean().optional()
 });
@@ -1207,7 +1241,7 @@ function redactAiCallContext(record: Record<string, unknown>, permissions: WorkM
   const redactedScope = { ...scope };
   let restricted = false;
   if (permissions.prose === "none") {
-    for (const field of ["selection", "chapterId", "volumeId", "chapterIds", "includeBookSummary"] as const) {
+    for (const field of ["selection", "selectionStart", "selectionEnd", "writingChapterVersion", "chapterId", "volumeId", "chapterIds", "includeBookSummary"] as const) {
       if (field in redactedScope) {
         delete redactedScope[field];
         restricted = true;
@@ -2204,10 +2238,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/works/:workId/chapter-annotations", (request, response) => {
     const pagination = parsePagination(request.query);
+    const chapterId = request.query.chapterId === undefined ? undefined : parse(identifier, request.query.chapterId);
+    const query = request.query.q === undefined ? undefined : parse(z.string().trim().max(100), request.query.q);
+    const filters = { chapterId, query };
     const permissions = requestPermissions(request, String(request.params.workId));
     data(response, pagination
-      ? store.listWorkChapterAnnotationsPage(request.params.workId, pagination, readableChapterAnnotationKinds(permissions))
-      : store.listWorkChapterAnnotations(request.params.workId, readableChapterAnnotationKinds(permissions)));
+      ? store.listWorkChapterAnnotationsPage(request.params.workId, pagination, readableChapterAnnotationKinds(permissions), filters)
+      : store.listWorkChapterAnnotations(request.params.workId, readableChapterAnnotationKinds(permissions), filters));
   });
   app.post("/api/chapters/:chapterId/annotations", (request, response) => {
     const input = parse(z.object({
@@ -2244,6 +2281,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       z.object({ type: z.literal("move"), volumeId: identifier }).strict(),
       z.object({ type: z.literal("setType"), chapterType: chapterTypeSchema }).strict(),
       z.object({ type: z.literal("setAnalysisExclusion"), excludedFromAnalysis: z.boolean() }).strict(),
+      z.object({
+        type: z.literal("renumberTitles"),
+        template: z.string().min(1).max(50).refine(isChapterNumberTemplate, "标题格式必须且只能包含一个 {n} 占位符，且不能包含换行或控制字符"),
+        numberStyle: z.enum(["arabic", "chinese"]),
+        startAt: z.number().int().min(1).max(999_999)
+      }).strict(),
       z.object({ type: z.literal("delete") }).strict()
     ]);
     const input = parse(z.object({ chapters: selectedChapters, action }).strict(), request.body);
@@ -3128,12 +3171,35 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
+  app.get("/api/works/:workId/ai-settings/mcp-servers", (request, response) => {
+    data(response, ai.getRemoteMcpSettings(request.params.workId));
+  });
+  app.put("/api/works/:workId/ai-settings/mcp-servers", async (request, response) => {
+    data(response, await ai.updateRemoteMcpSettings(request.params.workId, request.body));
+  });
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
     data(response, ai.getWorkTokenUsage(request.params.workId, query.timezoneOffset));
   });
   app.get("/api/works/:workId/ai-settings/relationship-search-index", (request, response) => {
     data(response, ai.getRelationshipSearchIndexStatus(request.params.workId));
+  });
+  app.get("/api/works/:workId/ai-settings/semantic-search-index", (request, response) => {
+    data(response, ai.getSemanticSearchIndexStatus(request.params.workId));
+  });
+  app.patch("/api/works/:workId/ai-settings/semantic-search", async (request, response) => {
+    data(response, await ai.updateSemanticSearchSettings(
+      request.params.workId,
+      parse(semanticSearchSettingsSchema, request.body)
+    ));
+  });
+  app.post("/api/works/:workId/ai-settings/semantic-search-index/sync", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, ai.syncSemanticSearchIndex(request.params.workId), 202);
+  });
+  app.post("/api/works/:workId/ai-settings/semantic-search-index/rebuild", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, ai.rebuildSemanticSearchIndex(request.params.workId), 202);
   });
   app.post("/api/works/:workId/ai-settings/relationship-search-index/sync", (request, response) => {
     const workId = request.params.workId;
@@ -3316,12 +3382,24 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       ignoreContextWarning: z.boolean().optional()
     }).strict(), request.body ?? {});
     const conversation = store.getAiConversation(request.params.conversationId);
+    const permissions = requestPermissions(request, String(conversation.workId));
+    const writingSkillRequest = conversation.roleplayCharacter
+      ? { skillName: null, instruction: input.instruction }
+      : ai.resolveWritingSkillInstruction(input.instruction);
+    if (writingSkillRequest.skillName && !canReadWorkModule(permissions, "prose")) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取当前章节正文以使用写作 Skill 的权限");
+    }
+    const citedInstruction = instructionWithCitations(writingSkillRequest.instruction, input.citations ?? []);
+    const preparedScope = conversation.roleplayCharacter
+      ? input.scope
+      : ai.resolveWritingSkillScope(String(conversation.workId), "chat", input.instruction, input.scope);
     data(response, await ai.prepareConversationContext({
       conversationId: request.params.conversationId,
       workId: String(conversation.workId),
       modelId: input.modelId,
-      scope: input.scope,
-      instruction: instructionWithCitations(input.instruction, input.citations ?? [])
+      scope: preparedScope,
+      instruction: citedInstruction,
+      skillInstruction: input.instruction
     }, { ignoreWarning: input.ignoreContextWarning === true }));
   });
   app.post("/api/ai-conversations/:conversationId/compact", async (request, response) => {
@@ -3518,6 +3596,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const pagination = parsePagination(request.query);
     data(response, pagination ? ai.listWorkModelsPage(request.params.workId, pagination) : ai.listWorkModels(request.params.workId));
   });
+  app.get("/api/works/:workId/semantic-models", (request, response) => {
+    data(response, ai.listWorkSemanticModels(request.params.workId));
+  });
   app.get("/api/works/:workId/task-defaults", (request, response) => {
     const pagination = parsePagination(request.query);
     data(response, pagination ? ai.listTaskDefaultsPage(request.params.workId, pagination) : ai.listTaskDefaults(request.params.workId));
@@ -3671,10 +3752,19 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const storedUserContent = isRoleplay
       ? composeRoleplayStoredUserContent(sceneDirection, instructionText)
       : instructionText;
-    const resolvedInstruction = instructionWithCitations(instructionText, citations);
+    const permissions = requestPermissions(request, request.params.workId);
+    const writingSkillRequest = isRoleplay
+      ? { skillName: null, instruction: instructionText }
+      : ai.resolveWritingSkillInstruction(instructionText);
+    const resolvedInstruction = instructionWithCitations(writingSkillRequest.instruction, citations);
+    if (writingSkillRequest.skillName && !canReadWorkModule(permissions, "prose")) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取当前章节正文以使用写作 Skill 的权限");
+    }
+    const requestScope = isRoleplay
+      ? input.scope as ContextScope
+      : ai.resolveWritingSkillScope(request.params.workId, "chat", instructionText, input.scope as ContextScope);
     const mentionSource = [sceneDirection, resolvedInstruction].filter(Boolean).join("\n");
     const modelId = resolveConversationModelId(request.params.workId, conversationId, input.modelId);
-    const permissions = requestPermissions(request, request.params.workId);
     const controller = new AbortController();
     let streamRequestId: string | null = null;
     let streamRequestFinished = false;
@@ -3729,8 +3819,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           conversationId,
           workId: request.params.workId,
           modelId,
-          scope: input.scope as ContextScope,
+          scope: requestScope,
           instruction: mentionSource,
+          skillInstruction: instructionText,
           excludeConversationMessageId: input.currentMessageId
         }, { ignoreWarning: input.ignoreContextWarning === true });
         preparedConversation = redactAiConversation(store.getAiConversationSummary(conversationId), permissions);
@@ -3751,12 +3842,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         }
       }
       const resolvedScope = input.currentMessageId
-        ? input.scope as ContextScope
+        ? requestScope
         : ai.resolveInstructionMentions({
           workId: request.params.workId,
           taskType: "chat",
           instruction: mentionSource,
-          scope: input.scope as ContextScope,
+          scope: requestScope,
           conversationId
         });
       const mentionCharacterIds = [...new Set([
@@ -3775,11 +3866,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           content: storedUserContent,
           citations,
           ...(input.currentMessageId ? { existingMessageId: input.currentMessageId } : {}),
-          ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length || input.imageAttachmentIds?.length) ? { metadata: {
+          ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length || input.imageAttachmentIds?.length || input.scope.semanticSnapshotId) ? { metadata: {
             ...(modelId ? { modelId } : {}),
             ...(mentionCharacterIds.length ? { mentionCharacterIds } : {}),
             ...(mentionRaceIds.length ? { mentionRaceIds } : {}),
             ...(mentionOrganizationIds.length ? { mentionOrganizationIds } : {}),
+            ...(input.scope.semanticSnapshotId ? { semanticSnapshotId: input.scope.semanticSnapshotId } : {}),
             ...(input.imageAttachmentIds?.length ? { chatImageAttachmentIds: [...new Set(input.imageAttachmentIds)] } : {})
           } } : {})
         }
@@ -3794,13 +3886,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         }
         if (begun.request.status === "completed" && begun.assistantMessage) {
           const content = String(begun.assistantMessage.content ?? "");
+          const assistantMetadata = begun.assistantMessage.metadata && typeof begun.assistantMessage.metadata === "object"
+            ? begun.assistantMessage.metadata as Record<string, unknown>
+            : {};
+          const writingSuggestionId = typeof assistantMetadata.writingSuggestionId === "string"
+            ? assistantMetadata.writingSuggestionId
+            : "";
+          const writingSuggestion = writingSuggestionId
+            ? redactSuggestion(ai.getSuggestion(writingSuggestionId), permissions)
+            : null;
           if (content) sendEvent("delta", { delta: content, replayed: true });
           sendEvent("complete", {
             replayed: true,
             conversationId,
             conversationTitle: store.getAiConversationSummary(conversationId).title,
             messageId: begun.assistantMessage.id,
-            messageCreatedAt: begun.assistantMessage.createdAt
+            messageCreatedAt: begun.assistantMessage.createdAt,
+            ...(writingSuggestion ? { writingSuggestion } : {})
           });
         } else {
           sendEvent("request_status", {
@@ -3830,9 +3932,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: resolvedInstruction,
+        skillInstruction: instructionText,
         ...(sceneDirection ? { sceneDirection } : {}),
         // 仍由生成路径基于原始范围持久化累计注入，保证预解析不会吞掉本轮自动命中。
-        scope: input.scope as ContextScope,
+        scope: requestScope,
         signal: controller.signal,
         onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),
         onProcessStep: (step) => sendEvent("process_step", step),
@@ -3865,6 +3968,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         contextUsage: suggestion.contextUsage,
         conversationId,
         conversationTitle: suggestion.conversationTitle,
+        ...(suggestion.action !== "note" ? { writingSuggestion: redactSuggestion(suggestion, permissions) } : {}),
         messageId: typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
           ? (suggestion.conversationMessage as Record<string, unknown>).id
           : undefined,
@@ -3922,6 +4026,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/suggestions/:suggestionId/accept", (request, response) => {
     const input = parse(z.object({ content: z.string().max(2_000_000).optional() }), request.body ?? {});
+    const suggestion = ai.getSuggestion(request.params.suggestionId);
+    const permissions = requestPermissions(request, String(suggestion.workId));
+    if (!canWriteWorkModule(permissions, "prose")) {
+      throw new AppError(403, "WORK_MODULE_WRITE_DENIED", "你没有将 AI 建议写入正文的权限");
+    }
     data(response, ai.acceptSuggestion(request.params.suggestionId, input.content));
   });
   app.post("/api/suggestions/:suggestionId/reject", (request, response) => {
@@ -3950,6 +4059,26 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       allowedTypes: readableHybridSearchTypes(permissions),
       conversationOwnerUserId: request.authUser?.userId
     }));
+  });
+  app.post("/api/works/:workId/semantic-search", async (request, response) => {
+    const input = parse(semanticSearchRequestSchema, request.body);
+    const permissions = requestPermissions(request, request.params.workId);
+    const allowedTypes = readableHybridSearchTypes(permissions)
+      .filter((type): type is SemanticSourceType => (SEMANTIC_SOURCE_TYPES as readonly string[]).includes(type));
+    data(response, await ai.semanticSearchStory(request.params.workId, input.query, {
+      allowedTypes,
+      types: input.types,
+      limit: input.limit,
+      includeKeyword: input.includeKeyword,
+      conversationOwnerUserId: request.authUser?.userId,
+      currentChapterId: input.currentChapterId,
+      selection: input.selection
+    }));
+  });
+  app.post("/api/works/:workId/semantic-search/snapshots", (request, response) => {
+    const input = parse(semanticSnapshotSchema, request.body);
+    if (input.conversationId) assertRequestAiConversationOwner(request, input.conversationId);
+    data(response, ai.createSemanticContextSnapshot(request.params.workId, input), 201);
   });
   app.head("/api/works/:workId/export", (request, response) => {
     parse(z.enum(["epub"]), request.query.format ?? "epub");

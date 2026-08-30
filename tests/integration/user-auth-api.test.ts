@@ -717,6 +717,95 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("远程 MCP 配置校验登录、CSRF 和作品 AI 设置权限", async () => {
+    const owner = await register(runtime, "remote_mcp_owner");
+    const viewer = await register(runtime, "remote_mcp_viewer");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "远程 MCP 权限测试" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: viewer.user.userId, role: "viewer" })
+      .expect(201);
+
+    await request(runtime.app).get(`/api/works/${workId}/ai-settings/mcp-servers`).expect(401);
+    await viewer.agent.get(`/api/works/${workId}/ai-settings/mcp-servers`).expect(200);
+    const viewerWrite = await viewer.agent
+      .put(`/api/works/${workId}/ai-settings/mcp-servers`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ mcpServers: {} })
+      .expect(403);
+    expect(viewerWrite.body.error.code).toBe("WORK_EDIT_DENIED");
+    const missingCsrf = await owner.agent
+      .put(`/api/works/${workId}/ai-settings/mcp-servers`)
+      .send({ mcpServers: {} })
+      .expect(403);
+    expect(missingCsrf.body.error.code).toBe("CSRF_TOKEN_INVALID");
+    await owner.agent
+      .put(`/api/works/${workId}/ai-settings/mcp-servers`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ mcpServers: {} })
+      .expect(200);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("主动语义检索校验登录、CSRF、AI 对话和内容模块权限", async () => {
+    const owner = await register(runtime, "semantic_search_owner");
+    const viewer = await register(runtime, "semantic_search_viewer");
+    const restricted = await register(runtime, "semantic_search_restricted");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "主动语义检索权限测试" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: viewer.user.userId, role: "viewer" })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: restricted.user.userId, role: "viewer" })
+      .expect(201);
+    const permissions = Object.fromEntries([
+      "prose", "comments", "todos", "drafts", "settings", "characters", "races", "organizations",
+      "timeline", "relationships", "outlines", "reviews", "ai-chat", "ai-analysis", "ai-settings"
+    ].map((module) => [module, module === "settings" ? "read" : module === "ai-settings" ? "write" : "none"]));
+    await owner.agent.patch(`/api/works/${workId}/members/${restricted.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions })
+      .expect(200);
+
+    await request(runtime.app).post(`/api/works/${workId}/semantic-search`).send({ query: "北港" }).expect(401);
+    await viewer.agent.post(`/api/works/${workId}/semantic-search`).send({ query: "北港" }).expect(403)
+      .expect(({ body }) => expect(body.error.code).toBe("CSRF_TOKEN_INVALID"));
+    await viewer.agent.post(`/api/works/${workId}/semantic-search`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ query: "北港" })
+      .expect(200)
+      .expect(({ body }) => expect(body.data).toMatchObject({ status: "disabled", semanticUsed: false }));
+    await restricted.agent.post(`/api/works/${workId}/semantic-search`)
+      .set("X-CSRF-Token", restricted.csrfToken)
+      .send({ query: "北港", types: ["setting"] })
+      .expect(403);
+    for (const action of ["sync", "rebuild"]) {
+      await restricted.agent.post(`/api/works/${workId}/ai-settings/semantic-search-index/${action}`)
+        .set("X-CSRF-Token", restricted.csrfToken)
+        .send({})
+        .expect(403)
+        .expect(({ body }) => expect(body.error.code).toBe("WORK_MODULE_READ_DENIED"));
+    }
+    await viewer.agent.post(`/api/works/${workId}/semantic-search/snapshots`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ query: "北港", entryIds: ["semanticChunk_missing"] })
+      .expect(403);
+    await owner.agent.post(`/api/works/${workId}/semantic-search/snapshots`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ query: "北港", entryIds: ["semanticChunk_missing"] })
+      .expect(409);
+  });
+
   it("角色收藏接口校验登录、CSRF 和角色写权限", async () => {
     const owner = await register(runtime, "character_favorite_owner");
     const viewer = await register(runtime, "character_favorite_viewer");
@@ -1163,6 +1252,16 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .send({ content: "越权修改。" })
       .expect(403);
     expect(chapterWrite.body.error.code).toBe("WORK_EDIT_DENIED");
+    const renumberBody = {
+      chapters: [{ id: chapter.body.data.id, expectedVersionNo: 1 }],
+      action: { type: "renumberTitles", template: "第{n}章", numberStyle: "chinese", startAt: 1 }
+    };
+    await owner.agent.post(`/api/works/${workId}/chapters/batch`).send(renumberBody).expect(403);
+    const renumberDenied = await viewer.agent.post(`/api/works/${workId}/chapters/batch`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send(renumberBody)
+      .expect(403);
+    expect(renumberDenied.body.error.code).toBe("WORK_EDIT_DENIED");
     await viewer.agent.post(`/api/works/${workId}/settings`)
       .set("X-CSRF-Token", viewer.csrfToken)
       .send({ title: "越权设定", category: "世界规则", content: "不应创建。" })
@@ -3400,6 +3499,24 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const guards = await collaborator.agent.get(`/api/suggestions/${suggestionId}/guards`).expect(200);
     expect(guards.body.data[0]).toMatchObject({ issues: [], contextRefs: {}, failure: null, restricted: true });
     expect(JSON.stringify(guards.body.data)).not.toContain("TOP_SECRET_");
+
+    const acceptDenied = await collaborator.agent.post(`/api/suggestions/${suggestionId}/accept`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({})
+      .expect(403);
+    expect(acceptDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+
+    const skillPrepareDenied = await collaborator.agent.post(`/api/ai-conversations/${conversationId}/context/prepare`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ instruction: "续写当前章节", scope: { type: "none", chapterId: "chapter_secret", writingChapterVersion: 1 } })
+      .expect(403);
+    expect(skillPrepareDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+
+    const skillStreamDenied = await collaborator.agent.post(`/api/works/${workId}/chat/stream`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ instruction: "润色这段文字", scope: { type: "none", chapterId: "chapter_secret", selection: "secret", selectionStart: 0, selectionEnd: 6, writingChapterVersion: 1 }, conversationId })
+      .expect(403);
+    expect(skillStreamDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
 
     const conversation = await collaborator.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(conversation.body.data.title).toBe("（正文读取权限受限）");
