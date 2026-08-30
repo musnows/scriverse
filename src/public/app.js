@@ -1,6 +1,6 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1";
 import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
-import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
+import { renderMarkdown } from "/markdown.js?v=20260830-adjacent-blockquotes-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { applyAiSkillCommand, findAiSkillCommand, listAiSkillOptions } from "/ai-skill-menu.js?v=20260830-ai-skill-slash-menu-v1";
 import {
@@ -4889,7 +4889,7 @@ async function addAiImageFiles(files) {
   persistActiveAiChatTab();
 }
 
-function clearAiPromptComposer() {
+function clearAiPromptComposer({ collapseScenePanel = false } = {}) {
   state.aiCitations = [];
   state.aiReferences = [];
   state.aiImageAttachments = [];
@@ -4901,6 +4901,7 @@ function clearAiPromptComposer() {
   renderAiSemanticInjection();
   hideAiMentionMenu();
   syncAiSceneComposer();
+  if (collapseScenePanel) setAiScenePanelExpanded(false);
 }
 
 function captureAiPromptComposer() {
@@ -4965,6 +4966,15 @@ function roleplaySceneComposerVisible() {
   return $("#ai-task").value === "roleplay" && Boolean(state.aiRoleplayCharacter);
 }
 
+function setAiScenePanelExpanded(expanded) {
+  const button = $("#ai-scene-button");
+  const panel = $("#ai-scene-panel");
+  if (!button || !panel) return;
+  const nextExpanded = Boolean(expanded && !button.classList.contains("hidden"));
+  panel.classList.toggle("hidden", !nextExpanded);
+  button.setAttribute("aria-expanded", String(nextExpanded));
+}
+
 function syncAiSceneComposer() {
   const button = $("#ai-scene-button");
   const panel = $("#ai-scene-panel");
@@ -4975,10 +4985,7 @@ function syncAiSceneComposer() {
   button.classList.toggle("hidden", !visible);
   button.disabled = !visible || busy || readOnly;
   button.setAttribute("aria-hidden", String(!visible));
-  if (!visible) {
-    panel.classList.add("hidden");
-    button.setAttribute("aria-expanded", "false");
-  }
+  if (!visible) setAiScenePanelExpanded(false);
   const hasContent = Boolean(aiSceneDirectionText().trim()) || roleplayScenePinHasContent(captureAiScenePin());
   button.classList.toggle("is-active", hasContent);
 }
@@ -4988,8 +4995,7 @@ function toggleAiScenePanel() {
   const panel = $("#ai-scene-panel");
   if (!button || !panel || button.classList.contains("hidden")) return;
   const willOpen = panel.classList.contains("hidden");
-  panel.classList.toggle("hidden", !willOpen);
-  button.setAttribute("aria-expanded", String(willOpen));
+  setAiScenePanelExpanded(willOpen);
   if (willOpen) $("#ai-scene-direction")?.focus();
 }
 
@@ -18242,7 +18248,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
             syncAiTaskOptions();
             renderAiRoleplayCharacterSelect();
             renderAiQuickActions();
-            clearAiPromptComposer();
+            clearAiPromptComposer({ collapseScenePanel: Boolean(String(body.sceneDirection ?? "").trim()) });
           }
           mountAssistantMessage();
         }
@@ -18470,7 +18476,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     sceneBody.className = "user-message-scene-body";
     sceneBody.textContent = parsedUserTurn.sceneDirection;
     scene.append(sceneLabel, sceneBody);
-    message.querySelector(".message-body")?.before(scene);
+    message.querySelector(".message-body")?.prepend(scene);
   }
   const mentionGroups = role === "user"
     ? [
