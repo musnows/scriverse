@@ -40,14 +40,15 @@ async function testProviderConnection(options: {
     developmentServer: options.developmentServer
   });
   runtimes.push(runtime);
+  const agent = request.agent(runtime.app);
 
-  const provider = await request(runtime.app).post("/api/platform/ai/providers").send({
+  const provider = await agent.post("/api/platform/ai/providers").send({
     name: "开发地址测试供应商",
     baseUrl: options.baseUrl,
     apiKey: "development-test-key",
     status: "enabled"
   }).expect(201);
-  const tested = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
+  const tested = await agent.post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
   return { result: tested.body.data as Record<string, unknown>, requestedUrls };
 }
 
