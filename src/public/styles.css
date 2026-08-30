@@ -697,7 +697,7 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .usage-stat > span { color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 .usage-stat-label > span:first-child { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .06em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
 .usage-cost-bubble { flex: 0 0 auto; max-width: 100%; padding: 6px 10px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 62%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 22%, var(--surface)); box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-dark); font: 700 10px/1.1 var(--font-latin), var(--font-cjk), monospace; letter-spacing: .02em; text-overflow: ellipsis; white-space: nowrap; }
-.usage-stat strong { margin: 10px 0 5px; overflow: hidden; color: var(--ink); font: 600 clamp(23px, 2.8vw, 34px)/1 var(--font-latin), ui-monospace, monospace; letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
+.usage-stat strong { margin: 10px 0 5px; overflow: hidden; color: var(--ink); font: 600 clamp(21px, 2.5vw, 30px)/1 var(--font-latin), ui-monospace, monospace; letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
 .usage-stat.is-primary strong { color: var(--accent-dark); }
 .usage-stat small { overflow-wrap: anywhere; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .usage-measurement-note { margin: 11px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }

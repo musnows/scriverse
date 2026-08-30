@@ -20,7 +20,10 @@ describe("AI 用量日历", () => {
 
   it("格式化总量与缓存命中率", () => {
     expect(formatTokenCount(9999)).toBe("9,999");
-    expect(formatTokenCount(12000)).toContain("1.2");
+    expect(formatTokenCount(12000)).toBe("1.2万");
+    expect(formatTokenCount(100_000_000)).toBe("1.00亿");
+    expect(formatTokenCount(104_915_676)).toBe("1.05亿");
+    expect(formatTokenCount(937_130_000)).toBe("9.37亿");
     expect(formatCacheHitRate(46.7)).toBe("46.7%");
     expect(formatCacheHitRate(null)).toBe("暂无数据");
     expect(formatEstimatedCost(0.000039)).toBe("$0.000039");

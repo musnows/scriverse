@@ -14,6 +14,7 @@ function startOfLocalDay(value) {
 export function formatTokenCount(value) {
   const count = Math.max(0, Math.round(Number(value) || 0));
   if (count < 10_000) return count.toLocaleString("zh-CN");
+  if (count >= 100_000_000) return `${(count / 100_000_000).toFixed(2)}亿`;
   return new Intl.NumberFormat("zh-CN", {
     notation: "compact",
     compactDisplay: "short",
