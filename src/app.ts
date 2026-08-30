@@ -3172,6 +3172,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
+  app.get("/api/works/:workId/ai-settings/mcp-servers", (request, response) => {
+    data(response, ai.getRemoteMcpSettings(request.params.workId));
+  });
+  app.put("/api/works/:workId/ai-settings/mcp-servers", async (request, response) => {
+    data(response, await ai.updateRemoteMcpSettings(request.params.workId, request.body));
+  });
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
     data(response, ai.getWorkTokenUsage(request.params.workId, query.timezoneOffset));

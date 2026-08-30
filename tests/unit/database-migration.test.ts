@@ -79,6 +79,40 @@ function insertSystemOwnedWork(database: Database, workId: string, title: string
 }
 
 describe("数据库版本化迁移", () => {
+  it("迁移 126 创建按作品级联清理的加密远程 MCP 配置表", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-remote-mcp-"));
+    roots.push(root);
+    const filename = join(root, "remote-mcp.db");
+    const current = new Database(filename);
+    current.run("DROP TABLE work_mcp_settings");
+    current.run("DELETE FROM schema_migrations WHERE version = 126");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.all("PRAGMA table_info(work_mcp_settings)").map((column) => column.name)).toEqual([
+      "work_id",
+      "config_encrypted",
+      "config_iv",
+      "config_tag",
+      "tool_catalog_json",
+      "updated_at"
+    ]);
+    const store = new Store(migrated);
+    const work = store.createWork({ title: "MCP 迁移测试作品" });
+    migrated.run(
+      `INSERT INTO work_mcp_settings (
+         work_id, config_encrypted, config_iv, config_tag, tool_catalog_json, updated_at
+       ) VALUES (?, 'cipher', 'iv', 'tag', '[]', '2026-08-29T00:00:00.000Z')`,
+      String(work.id)
+    );
+    migrated.run("DELETE FROM works WHERE id = ?", String(work.id));
+    expect(migrated.get("SELECT COUNT(*) AS count FROM work_mcp_settings")).toEqual({ count: 0 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 126")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
   it("迁移 124 为重复正文和评论回填稳定且不同的行身份", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-stable-line-ids-"));
     roots.push(root);
