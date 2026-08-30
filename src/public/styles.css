@@ -4519,6 +4519,7 @@ body { font-size: var(--ui-font-size); }
 .eyebrow, .field-label, .dialog-header-meta, .settings-hub-card small, .book-card small, .book-info > span { font-size: calc(10px * var(--ui-font-scale)); }
 .panel-heading, .dialog-fields label, .dialog-fields .form-field-note, .appearance-grid label,
 .config-section-header p, .config-section .config-save-button { font-size: calc(11px * var(--ui-font-scale)); }
+#work-system-prompt, #remote-mcp-config { font-size: calc(11px * var(--ui-font-scale)); }
 .settings-hub-card strong, .book-info strong { font-size: calc(16px * var(--ui-font-scale)); }
 .shelf-header p, .topbar { font-size: var(--ui-font-size); }
 .appearance-grid select, .dialog-fields input, .dialog-fields textarea, .dialog-fields select { font-size: calc(13px * var(--ui-font-scale)); }
