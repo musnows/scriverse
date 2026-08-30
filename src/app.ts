@@ -599,7 +599,7 @@ const aiPromptSchema = z.object({
 });
 
 const aiUsageQuerySchema = z.object({
-  timezoneOffset: z.coerce.number().int().min(-840).max(840).default(0)
+  timezoneOffset: z.coerce.number().int().min(-840).max(840).optional()
 }).strict();
 
 const adminAiConversationQuerySchema = z.object({
@@ -3105,8 +3105,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, settings);
   });
   app.get("/api/platform/ai/usage", (request, response) => {
-    const query = parse(aiUsageQuerySchema, request.query);
-    data(response, ai.getPlatformTokenUsage(query.timezoneOffset));
+    parse(aiUsageQuerySchema, request.query);
+    data(response, ai.getPlatformTokenUsage());
   });
   app.post("/api/platform/ai/usage/pricing/refresh", async (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
@@ -3178,8 +3178,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, await ai.updateRemoteMcpSettings(request.params.workId, request.body));
   });
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
-    const query = parse(aiUsageQuerySchema, request.query);
-    data(response, ai.getWorkTokenUsage(request.params.workId, query.timezoneOffset));
+    parse(aiUsageQuerySchema, request.query);
+    data(response, ai.getWorkTokenUsage(request.params.workId));
   });
   app.get("/api/works/:workId/ai-settings/relationship-search-index", (request, response) => {
     data(response, ai.getRelationshipSearchIndexStatus(request.params.workId));

@@ -697,14 +697,35 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .usage-stat > span { color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 .usage-stat-label > span:first-child { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .06em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
 .usage-cost-bubble { flex: 0 0 auto; max-width: 100%; padding: 6px 10px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 62%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 22%, var(--surface)); box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-dark); font: 700 10px/1.1 var(--font-latin), var(--font-cjk), monospace; letter-spacing: .02em; text-overflow: ellipsis; white-space: nowrap; }
-.usage-stat strong { margin: 10px 0 5px; overflow: hidden; color: var(--ink); font: 600 clamp(23px, 2.8vw, 34px)/1 var(--font-latin), ui-monospace, monospace; letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
+.usage-stat strong { margin: 10px 0 5px; overflow: hidden; color: var(--ink); font: 600 clamp(21px, 2.5vw, 30px)/1 var(--font-latin), ui-monospace, monospace; letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
 .usage-stat.is-primary strong { color: var(--accent-dark); }
 .usage-stat small { overflow-wrap: anywhere; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .usage-measurement-note { margin: 11px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .usage-calendar-section, .usage-work-section { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }
 .usage-calendar-section > header, .usage-work-section > header { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
+.usage-calendar-section > header { align-items: flex-start; }
 .usage-calendar-section h3, .usage-work-section h3 { margin: 0 0 4px; font-size: 15px; font-weight: 650; }
 .usage-calendar-section header p, .usage-work-section header p { margin: 0; color: var(--muted); font-size: 10px; }
+.usage-calendar-year-select {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  min-width: 78px;
+  min-height: 30px;
+  padding: 5px 27px 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background-color: var(--surface);
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: right 13px center, right 9px center;
+  background-repeat: no-repeat;
+  background-size: 4px 4px, 4px 4px;
+  color: var(--ink);
+  font: 10px/1.2 var(--font-latin), var(--font-cjk), monospace;
+  cursor: pointer;
+}
+.usage-calendar-year-select:focus-visible { border-color: var(--accent); outline: 2px solid color-mix(in srgb, var(--accent) 18%, transparent); outline-offset: 1px; }
+.usage-calendar-empty { margin: 0; padding: 24px 18px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); font-size: 10px; text-align: center; }
 .usage-calendar-widget { position: relative; }
 .usage-calendar-scroll { max-width: 100%; padding: 10px 12px 12px; overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .usage-calendar-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -738,8 +759,8 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .usage-calendar-cell[data-level="2"], .usage-calendar-legend i[data-level="2"] { border-color: color-mix(in srgb, var(--accent) 46%, var(--line)); background: color-mix(in srgb, var(--accent) 42%, var(--surface)); }
 .usage-calendar-cell[data-level="3"], .usage-calendar-legend i[data-level="3"] { border-color: color-mix(in srgb, var(--accent) 72%, var(--line)); background: color-mix(in srgb, var(--accent) 70%, var(--surface)); }
 .usage-calendar-cell[data-level="4"], .usage-calendar-legend i[data-level="4"] { border-color: var(--accent-dark); background: var(--accent-dark); }
-.usage-calendar-cell.is-future { border-color: transparent; background: transparent; cursor: default; }
-.usage-calendar-cell:hover, .usage-calendar-cell:focus-visible { position: relative; z-index: 1; border-color: var(--ink); outline: 2px solid color-mix(in srgb, var(--ink) 48%, transparent); outline-offset: 1px; }
+.usage-calendar-cell.is-future, .usage-calendar-cell.is-outside-year { border-color: transparent; background: transparent; cursor: default; }
+button.usage-calendar-cell:hover, button.usage-calendar-cell:focus-visible { position: relative; z-index: 1; border-color: var(--ink); outline: 2px solid color-mix(in srgb, var(--ink) 48%, transparent); outline-offset: 1px; }
 .usage-calendar-tooltip { position: absolute; z-index: 4; width: max-content; max-width: min(280px, calc(100% - 16px)); padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--ink) 24%, transparent); border-radius: 5px; background: color-mix(in srgb, var(--ink) 94%, transparent); box-shadow: 0 8px 22px rgba(0,0,0,.22); color: var(--panel); font: 10px/1.45 var(--font-latin), var(--font-cjk), monospace; overflow-wrap: anywhere; text-align: center; pointer-events: none; transform: translate(-50%, -100%); }
 .usage-calendar-tooltip[data-placement="bottom"] { transform: translateX(-50%); }
 .usage-calendar-tooltip[hidden] { display: none; }
@@ -4519,6 +4540,7 @@ body { font-size: var(--ui-font-size); }
 .eyebrow, .field-label, .dialog-header-meta, .settings-hub-card small, .book-card small, .book-info > span { font-size: calc(10px * var(--ui-font-scale)); }
 .panel-heading, .dialog-fields label, .dialog-fields .form-field-note, .appearance-grid label,
 .config-section-header p, .config-section .config-save-button { font-size: calc(11px * var(--ui-font-scale)); }
+#work-system-prompt, #remote-mcp-config { font-size: calc(11px * var(--ui-font-scale)); }
 .settings-hub-card strong, .book-info strong { font-size: calc(16px * var(--ui-font-scale)); }
 .shelf-header p, .topbar { font-size: var(--ui-font-size); }
 .appearance-grid select, .dialog-fields input, .dialog-fields textarea, .dialog-fields select { font-size: calc(13px * var(--ui-font-scale)); }

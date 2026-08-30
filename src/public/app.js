@@ -31,7 +31,7 @@ import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-s
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
 import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260818-ai-agent-turn-process-v1";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
-import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount } from "/ai-usage.js?v=20260821-ai-usage-pricing-v1";
+import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount, usageCalendarYears } from "/ai-usage.js?v=20260830-ai-usage-year-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260828-context-output-usage-v1";
 import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
@@ -13301,20 +13301,22 @@ async function renderPlatformAiConfig() {
 }
 
 function tokenUsageDateLabel(date) {
+  const [year, month, day] = String(date).split("-").map(Number);
   return new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
     month: "short",
     day: "numeric",
-    weekday: "short"
-  }).format(new Date(`${date}T00:00:00`));
+    weekday: "short",
+    timeZone: "UTC"
+  }).format(new Date(Date.UTC(year, month - 1, day)));
 }
 
-function tokenUsageCalendarMarkup(daily) {
-  const calendar = buildUsageCalendar(daily);
+function tokenUsageCalendarMarkup(daily, year, serverDate) {
+  const calendar = buildUsageCalendar(daily, year, serverDate);
   const cells = calendar.cells.map((cell) => {
     const label = `${tokenUsageDateLabel(cell.date)}：${Number(cell.totalTokens).toLocaleString("zh-CN")} Token`;
-    return cell.future
-      ? `<span class="usage-calendar-cell is-future" data-level="${cell.level}" role="gridcell" aria-disabled="true"></span>`
+    return cell.outsideYear || cell.future
+      ? `<span class="usage-calendar-cell ${cell.outsideYear ? "is-outside-year" : "is-future"}" data-level="${cell.level}" role="gridcell" aria-disabled="true"></span>`
       : `<button class="usage-calendar-cell" type="button" data-level="${cell.level}" data-usage-calendar-label="${esc(label)}" role="gridcell" aria-label="${esc(label)}"></button>`;
   }).join("");
   const months = calendar.months.map((month) => `<span style="grid-column:${month.week + 1}">${esc(month.label)}</span>`).join("");
@@ -13324,13 +13326,28 @@ function tokenUsageCalendarMarkup(daily) {
         <div class="usage-calendar-months" aria-hidden="true">${months}</div>
         <div class="usage-calendar-body">
           <div class="usage-calendar-weekdays" aria-hidden="true"><span>一</span><span>三</span><span>五</span></div>
-          <div class="usage-calendar-grid" role="grid" aria-label="过去 53 周每日 Token 用量">${cells}</div>
+          <div class="usage-calendar-grid" role="grid" aria-label="${calendar.year} 年每日 Token 用量">${cells}</div>
         </div>
       </div>
     </div>
     <output class="usage-calendar-tooltip" role="tooltip" hidden></output>
   </div>
   <div class="usage-calendar-legend"><span>少</span>${[0, 1, 2, 3, 4].map((level) => `<i data-level="${level}" aria-hidden="true"></i>`).join("")}<span>多</span></div>`;
+}
+
+function bindUsageCalendar(root, usage) {
+  root.querySelectorAll("[data-usage-calendar-year]").forEach((select) => {
+    select.addEventListener("change", () => {
+      const section = select.closest(".usage-calendar-section");
+      const calendarHost = section?.querySelector("[data-usage-calendar-host]");
+      if (!calendarHost) return;
+      calendarHost.innerHTML = tokenUsageCalendarMarkup(usage?.daily, Number(select.value), usage?.serverDate);
+      bindUsageCalendarInteractions(calendarHost);
+      scrollUsageCalendarsToLatest(calendarHost);
+    });
+  });
+  bindUsageCalendarInteractions(root);
+  scrollUsageCalendarsToLatest(root);
 }
 
 function bindUsageCalendarInteractions(root) {
@@ -13556,6 +13573,15 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
   const callTypeUsage = (Array.isArray(usage?.callTypes) ? usage.callTypes : [])
     .map((item) => `<span class="usage-call-type-chip"><strong>${esc(callTypeLabels[item.callType] ?? item.callType)}</strong><span>${esc(formatTokenCount(item.totalTokens))} Token · ${Number(item.requestCount || 0).toLocaleString("zh-CN")} 次</span></span>`)
     .join("");
+  const calendarYears = usageCalendarYears(usage?.daily);
+  const selectedCalendarYear = calendarYears[0] ?? null;
+  const usageTimezone = String(usage?.timezone || "服务器本地时区");
+  const calendarYearSelect = selectedCalendarYear === null
+    ? ""
+    : `<select class="usage-calendar-year-select" data-usage-calendar-year aria-label="每日用量年份">${calendarYears.map((year) => `<option value="${year}">${year} 年</option>`).join("")}</select>`;
+  const calendarMarkup = selectedCalendarYear === null
+    ? '<p class="usage-calendar-empty">尚无每日 Token 用量记录。</p>'
+    : tokenUsageCalendarMarkup(usage?.daily, selectedCalendarYear, usage?.serverDate);
   return `<section class="usage-overview" aria-labelledby="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">
     <div class="config-section-header usage-overview-header"><div><h2 id="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">${esc(title || "Token 用量")}</h2><p>${esc(description || "统计该范围内的全部 AI 调用。")}</p></div><button class="ghost-button usage-details-button" type="button" data-token-usage-details aria-haspopup="dialog" aria-expanded="false" aria-controls="token-usage-details-toast">详细数据</button></div>
     <div class="usage-stat-grid">
@@ -13567,8 +13593,8 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
     <p class="usage-measurement-note">${requestCount.toLocaleString("zh-CN")} 次有用量记录的调用。${esc(estimateNote)} 有 ${unpricedModelCount.toLocaleString("zh-CN")} 个模型在价格表中未找到对应价格</p>
     ${callTypeUsage ? `<div class="usage-call-types" aria-label="按调用类型区分的 Token 用量">${callTypeUsage}</div>` : ""}
     <section class="usage-calendar-section" aria-labelledby="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">
-      <header><div><h3 id="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">每日用量</h3><p>GitHub 风格网格展示过去 53 周；颜色越深，当天消耗越高。</p></div></header>
-      ${tokenUsageCalendarMarkup(usage?.daily)}
+      <header><div><h3 id="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">每日用量</h3><p>GitHub 风格网格按服务器时区（${esc(usageTimezone)}）分年展示；颜色越深，当天消耗越高。</p></div>${calendarYearSelect}</header>
+      <div data-usage-calendar-host>${calendarMarkup}</div>
     </section>
     ${showWorks ? `<section class="usage-work-section" aria-labelledby="usage-work-title"><header><div><h3 id="usage-work-title">各作品用量</h3><p>按 Token 总消耗从高到低排列，包含尚未使用 AI 的作品。</p></div></header><div class="usage-work-table-scroll"><table class="usage-work-table"><thead><tr><th>作品</th><th>总消耗</th><th>输入</th><th>输出</th><th>缓存命中率</th><th>调用</th></tr></thead><tbody>${workRows || '<tr><td colspan="6">还没有作品用量记录。</td></tr>'}</tbody></table></div></section>` : ""}
   </section>`;
@@ -13577,16 +13603,14 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
 async function renderPlatformTokenUsage() {
   const host = $("#platform-usage-content");
   host.innerHTML = '<div class="empty-state">正在汇总 Token 用量……</div>';
-  const timezoneOffset = -new Date().getTimezoneOffset();
-  const usage = await api(`/api/platform/ai/usage?timezoneOffset=${timezoneOffset}`);
+  const usage = await api("/api/platform/ai/usage");
   host.innerHTML = tokenUsageOverviewMarkup(usage, {
     title: "项目累计用量",
     description: "汇总所有作品迄今产生的输入与输出 Token；缓存命中率仅基于供应商返回了缓存明细的调用。",
     showWorks: true
   });
   bindTokenUsageDetails(host, usage, "项目累计用量");
-  bindUsageCalendarInteractions(host);
-  scrollUsageCalendarsToLatest(host);
+  bindUsageCalendar(host, usage);
 }
 
 async function renderBookAiSettings() {
@@ -13606,7 +13630,7 @@ async function renderBookAiSettings() {
     moduleApi("ai-settings", `/api/works/${state.work.id}/task-defaults`),
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/relationship-search-index`),
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/semantic-search-index`),
-    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/usage`),
     moduleApi("ai-settings", "/api/platform/ai/protocols"),
     // 可写工具开关独立于 ai-settings 存储；加载失败时仍可展示其余配置。
     api(`/api/works/${state.work.id}/ai/tools`).catch(() => null),
@@ -13681,8 +13705,7 @@ async function renderBookAiSettings() {
     if (section.querySelector("h2")?.textContent === "Agent 工具调用上限") section.id = "agent-tool-call-limit-settings";
   });
   host.insertAdjacentHTML("beforeend", `<section class="config-section"><div class="config-section-header"><div><h2>AI 可写工具</h2><p>默认全部关闭：逐项开启后，侧边栏 AI 才能在对应模块提交修改计划。计划只包含操作描述与 AI 简述；确认前系统会按当前数据库生成字段级明细（含修改前后值），执行时整体原子完成并再次校验权限、开关与目标版本，全程可在「AI 操作审批中心」追溯。AI 不能删除任何条目，也不能改写正文。</p></div><div class="card-actions"><button id="open-ai-approval-center-from-settings" class="ghost-button" type="button">打开 AI 操作审批中心</button></div></div><div class="ai-agent-tools ai-write-tools">${AI_WRITE_TOOLS_META.map((tool) => `<label><input name="ai-write-tool" type="checkbox" value="${esc(tool.id)}" ${writeToolsState?.[tool.id] === true ? "checked" : ""}><span><strong>${esc(tool.label)}</strong><small>${esc(tool.description)}</small></span></label>`).join("")}</div><p class="usage-measurement-note">${writeTools ? `当前单次审批最多 ${writeToolsMaxOperations} 个操作，可通过环境变量 AI_WRITE_PLAN_MAX_OPERATIONS 调整。` : "工具开关状态暂时无法加载，显示的勾选可能不是最新值。"}</p><div class="card-actions"><button id="save-ai-write-tools" class="ghost-button config-save-button" type="button">保存开关设置</button></div></section>`);
-  bindUsageCalendarInteractions(host);
-  scrollUsageCalendarsToLatest(host);
+  bindUsageCalendar(host, usage);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "beforebegin",
     `<label><input name="agent-tool" type="checkbox" value="grep" ${agentTools.has("grep") ? "checked" : ""}><span><strong>查询正文关键字</strong><small>从段落索引查询关键字，默认返回前 20 条完整段落和章节信息。</small></span></label>`
