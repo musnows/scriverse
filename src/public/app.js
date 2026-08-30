@@ -2,6 +2,7 @@ import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate,
 import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
+import { applyAiSkillCommand, findAiSkillCommand, listAiSkillOptions } from "/ai-skill-menu.js?v=20260830-ai-skill-slash-menu-v1";
 import {
   emptyRoleplayScenePin,
   normalizeRoleplayScenePin,
@@ -1526,6 +1527,7 @@ let moduleNavExpanded = false;
 const chapterAutoSaveDelay = 800;
 const chapterLineInputRenderDelay = 32;
 let aiMentionMatch = null;
+let aiSkillMatch = null;
 let aiMentionRange = null;
 let aiMentionActiveIndex = -1;
 let settingsReturnContext = null;
@@ -2705,7 +2707,7 @@ function resetAiFeed(
   const roleplayUserName = roleplayUserCharacter?.name;
   feed.innerHTML = roleplayName
     ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我可以通过角色卡、人物关系、知情设定和故事正文回答。"}</p></div></div>`
-    : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后即可开始问答；提到续写或润色时会自动加载对应 Skill，也可用 /continue-writing 或 /polish-writing 强制加载。所有引用都基于已保存正文。</p></div></div>';
+    : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后即可开始问答；所有引用都基于已保存正文。</p></div></div>';
 }
 
 function aiAssistantLabel(suffix = "", roleplayCharacter = state.aiRoleplayCharacter) {
@@ -5030,6 +5032,7 @@ function aiPromptTextBoundary(prompt, offset) {
 
 function hideAiMentionMenu() {
   aiMentionMatch = null;
+  aiSkillMatch = null;
   aiMentionRange = null;
   aiMentionActiveIndex = -1;
   const prompt = $("#ai-prompt");
@@ -5086,21 +5089,37 @@ function syncAiReferencesWithPrompt() {
 function updateAiMentionMenu() {
   syncAiReferencesWithPrompt();
   const prompt = $("#ai-prompt");
-  const match = findAiMention(aiPromptTextBeforeCursor());
-  if (!match) return hideAiMentionMenu();
+  const textBeforeCursor = aiPromptTextBeforeCursor();
+  const skillMatch = $("#ai-task").value === "roleplay" ? null : findAiSkillCommand(textBeforeCursor);
+  const mentionMatch = skillMatch ? null : findAiMention(textBeforeCursor);
+  if (!skillMatch && !mentionMatch) return hideAiMentionMenu();
   const selection = window.getSelection();
   if (!selection?.rangeCount || !prompt.contains(selection.anchorNode)) return hideAiMentionMenu();
-  aiMentionMatch = match;
+  aiSkillMatch = skillMatch;
+  aiMentionMatch = mentionMatch;
   aiMentionRange = selection.getRangeAt(0).cloneRange();
   const menu = $("#ai-mention-menu");
+  if (skillMatch) {
+    const options = listAiSkillOptions(skillMatch.query);
+    aiMentionActiveIndex = -1;
+    prompt.removeAttribute("aria-activedescendant");
+    menu.setAttribute("aria-label", "选择写作 Skill");
+    menu.innerHTML = options.length
+      ? options.map((item, index) => `<button id="ai-skill-option-${index}" class="ai-mention-option ai-skill-option" type="button" role="option" aria-selected="false" tabindex="-1" data-ai-skill-name="${esc(item.name)}"><small>Skill</small><span><strong>/${esc(item.name)}</strong><em>${esc(item.label)} · ${esc(item.description)}</em></span></button>`).join("")
+      : '<p class="ai-mention-empty">没有匹配的写作 Skill</p>';
+    menu.classList.remove("hidden");
+    prompt.setAttribute("aria-expanded", "true");
+    return;
+  }
   const chapters = state.work?.volumes.flatMap((volume) => volume.chapters.map((chapter) => ({
     ...chapter,
     volumeTitle: volume.title
   }))) ?? [];
-  const options = listAiMentionOptions(state.characters, state.settings, chapters, match.query)
+  const options = listAiMentionOptions(state.characters, state.settings, chapters, mentionMatch.query)
     .filter((item) => item.kind !== "context-settings" || $("#ai-task").value !== "roleplay");
   aiMentionActiveIndex = -1;
   prompt.removeAttribute("aria-activedescendant");
+  menu.setAttribute("aria-label", "引用角色、设定、章节或上下文能力");
   menu.innerHTML = options.length
     ? options.map((item, index) => `<button id="ai-mention-option-${index}" class="ai-mention-option" type="button" role="option" aria-selected="false" tabindex="-1" data-ai-reference-kind="${esc(item.kind)}" data-ai-reference-id="${esc(item.id)}" data-ai-reference-name="${esc(item.name)}"><small>${esc(item.kindLabel)}</small><strong>${esc(item.name)}</strong></button>`).join("")
     : '<p class="ai-mention-empty">没有匹配的角色、设定、章节或上下文能力</p>';
@@ -5138,6 +5157,30 @@ function selectAiMention(button) {
   selection?.addRange(range);
   prompt.focus();
   renderAiReferences();
+  hideAiMentionMenu();
+}
+
+function selectAiSkill(button) {
+  if (!aiSkillMatch || !aiMentionRange) return;
+  const prompt = $("#ai-prompt");
+  const cursorText = aiPromptTextFromRange(aiMentionRange, prompt);
+  const localSkill = findAiSkillCommand(cursorText);
+  if (!localSkill) return hideAiMentionMenu();
+  const applied = applyAiSkillCommand(cursorText, localSkill, button.dataset.aiSkillName);
+  const range = document.createRange();
+  const startBoundary = aiPromptTextBoundary(prompt, localSkill.start);
+  const endBoundary = aiPromptTextBoundary(prompt, cursorText.length);
+  range.setStart(startBoundary.node, startBoundary.offset);
+  range.setEnd(endBoundary.node, endBoundary.offset);
+  range.deleteContents();
+  const command = document.createTextNode(`${applied.command} `);
+  range.insertNode(command);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  range.setStartAfter(command);
+  range.collapse(true);
+  selection?.addRange(range);
+  prompt.focus();
   hideAiMentionMenu();
 }
 
@@ -20356,7 +20399,9 @@ $("#module-create-button").addEventListener("click", () => ({ drafts: openDraftD
 $("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
   setAiContextMeter(null);
-  if (!findAiMention(aiPromptTextBeforeCursor())) return;
+  const textBeforeCursor = aiPromptTextBeforeCursor();
+  if ($("#ai-task").value !== "roleplay" && findAiSkillCommand(textBeforeCursor)) return;
+  if (!findAiMention(textBeforeCursor)) return;
   try {
     await ensureAiReferencesLoaded();
     updateAiMentionMenu();
@@ -20486,6 +20531,7 @@ $("#ai-task").addEventListener("change", async (event) => {
     }
   }
   setAiContextMeter(null);
+  updateAiMentionMenu();
 });
 $("#ai-scope").addEventListener("change", (event) => {
   if (state.aiPromptSent) {
@@ -20496,6 +20542,8 @@ $("#ai-scope").addEventListener("change", (event) => {
   setAiContextMeter(null);
 });
 $("#ai-mention-menu").addEventListener("click", (event) => {
+  const skillButton = event.target.closest("[data-ai-skill-name]");
+  if (skillButton) return selectAiSkill(skillButton);
   const button = event.target.closest("[data-ai-reference-id]");
   if (button) selectAiMention(button);
 });
@@ -21039,7 +21087,8 @@ $("#ai-prompt").addEventListener("keydown", (event) => {
       const activeOption = $("#ai-mention-menu").querySelector('[role="option"][aria-selected="true"]');
       if (activeOption) {
         event.preventDefault();
-        selectAiMention(activeOption);
+        if (activeOption.dataset.aiSkillName) selectAiSkill(activeOption);
+        else selectAiMention(activeOption);
         return;
       }
     }
