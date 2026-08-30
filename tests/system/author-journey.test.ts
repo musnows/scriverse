@@ -658,7 +658,8 @@ describe("作者完整创作流程", () => {
     expect(markdown.text).toContain("renderMarkdownTable");
     expect(vditorCss.text).toContain("Vditor v3.11.2");
     expect(vditorScript.text).toContain("Vditor");
-    expect(application.text).toContain('/markdown.js?v=20260731-no-external-images-v1');
+    expect(application.text).toContain('/markdown.js?v=20260830-adjacent-blockquotes-v1');
+    expect(page.text).toContain("feature=markdown-adjacent-blockquotes-v1");
     expect(application.text).toContain('/upload-progress.js?v=20260812-upload-progress-v1');
     expect(application.text).toContain('new window.Vditor');
     expect(application.text).toContain('async function loadVditorResources()');
