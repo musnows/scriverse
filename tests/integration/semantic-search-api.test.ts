@@ -4,12 +4,126 @@ import { ContextBuilder } from "../../src/ai.js";
 import type { Runtime } from "../../src/app.js";
 import { createTestRuntime, seedChapter } from "../helpers.js";
 
+async function configureSemanticQuotaRuntime(fetchImpl: typeof fetch): Promise<{
+  runtime: Runtime;
+  workId: string;
+  providerId: string;
+  configuration: unknown;
+  requestEmbeddings: (inputs: string[]) => Promise<number[][]>;
+  requestRerank: (query: string, document: string) => Promise<number>;
+}> {
+  const runtime = createTestRuntime(fetchImpl);
+  const seeded = await seedChapter(runtime, "北港议会掌管所有远航审批。");
+  const workId = String(seeded.work.id);
+  const provider = runtime.ai.createProvider({
+    name: "语义额度供应商",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    apiKey: "lm-studio",
+    status: "enabled",
+    rpmLimit: 10_000
+  });
+  const providerId = String(provider.id);
+  runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = ?", providerId);
+  const model = runtime.ai.createModel(providerId, {
+    displayName: "Embedding Quota Model",
+    modelId: "embedding-quota-model",
+    modelKind: "embedding"
+  });
+  const rerankModel = runtime.ai.createModel(providerId, {
+    displayName: "Rerank Quota Model",
+    modelId: "rerank-quota-model",
+    modelKind: "rerank"
+  });
+  runtime.store.updateWorkSemanticSearchSettings(workId, {
+    enabled: true,
+    embeddingModelId: String(model.id),
+    rerankModelId: String(rerankModel.id),
+    vectorDimension: 3
+  });
+  const internals = runtime.ai as unknown as {
+    resolveSemanticConfiguration(workId: string): unknown;
+    requestSemanticEmbeddings(workId: string, configuration: unknown, inputs: string[]): Promise<number[][]>;
+    requestSemanticRerank(workId: string, configuration: unknown, query: string, document: string): Promise<number>;
+  };
+  const configuration = internals.resolveSemanticConfiguration(workId);
+  return {
+    runtime,
+    workId,
+    providerId,
+    configuration,
+    requestEmbeddings: (inputs) => internals.requestSemanticEmbeddings(workId, configuration, inputs),
+    requestRerank: (query, document) => internals.requestSemanticRerank(workId, configuration, query, document)
+  };
+}
+
 describe("主动语义检索 API", () => {
   let runtime: Runtime | null = null;
 
   afterEach(async () => {
     await runtime?.close();
     runtime = null;
+  });
+
+  it.each([
+    ["本书每日", "work", "daily_token_quota", "DAILY_TOKEN_QUOTA_EXCEEDED"],
+    ["本书每月", "work", "monthly_token_quota", "MONTHLY_TOKEN_QUOTA_EXCEEDED"],
+    ["供应商每日", "provider", "daily_token_quota", "PROVIDER_DAILY_TOKEN_QUOTA_EXCEEDED"],
+    ["供应商每月", "provider", "monthly_token_quota", "PROVIDER_MONTHLY_TOKEN_QUOTA_EXCEEDED"]
+  ] as const)("%s Token 额度不足时不发送 embedding 请求", async (_label, scope, column, errorCode) => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const configured = await configureSemanticQuotaRuntime(fetchMock);
+    runtime = configured.runtime;
+    if (scope === "work") {
+      runtime.database.run(`UPDATE work_ai_settings SET ${column} = 1 WHERE work_id = ?`, configured.workId);
+    } else {
+      runtime.database.run(`UPDATE providers SET ${column} = 1 WHERE id = ?`, configured.providerId);
+    }
+
+    await expect(configured.requestEmbeddings(["北港议会掌管所有远航审批。"]))
+      .rejects.toMatchObject({ code: errorCode, status: 429 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ?", configured.workId)).toEqual({ count: 0 });
+  });
+
+  it("并发 embedding 请求预留输入 Token 并在额度不足时拒绝后续请求", async () => {
+    let releaseFetch: () => void = () => undefined;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      await fetchGate;
+      return new Response(JSON.stringify({
+        object: "list",
+        data: [{ object: "embedding", index: 0, embedding: [1, 0, 0] }],
+        usage: { prompt_tokens: 60, total_tokens: 60 }
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    const configured = await configureSemanticQuotaRuntime(fetchMock);
+    runtime = configured.runtime;
+    runtime.database.run("UPDATE work_ai_settings SET daily_token_quota = 300 WHERE work_id = ?", configured.workId);
+    const input = "北".repeat(180);
+
+    const first = configured.requestEmbeddings([input]);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await expect(configured.requestEmbeddings([input])).rejects.toMatchObject({
+      code: "DAILY_TOKEN_QUOTA_EXCEEDED",
+      status: 429
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    releaseFetch();
+    await expect(first).resolves.toEqual([[1, 0, 0]]);
+  });
+
+  it("供应商额度不足时不发送 rerank 请求", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const configured = await configureSemanticQuotaRuntime(fetchMock);
+    runtime = configured.runtime;
+    runtime.database.run("UPDATE providers SET monthly_token_quota = 1 WHERE id = ?", configured.providerId);
+
+    await expect(configured.requestRerank("谁负责远航审批？", "北港议会掌管所有远航审批。"))
+      .rejects.toMatchObject({ code: "PROVIDER_MONTHLY_TOKEN_QUOTA_EXCEEDED", status: 429 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ?", configured.workId)).toEqual({ count: 0 });
   });
 
   it("增量构建、融合、rerank、快照注入并拒绝返回失败后的旧版本", async () => {

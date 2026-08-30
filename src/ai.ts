@@ -3115,6 +3115,8 @@ export class AiManager {
   private readonly relationshipIndexSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly semanticIndexBuilds = new Map<string, Promise<Record<string, unknown>>>();
   private readonly semanticIndexSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly semanticQuotaReservationsByWork = new Map<string, number>();
+  private readonly semanticQuotaReservationsByProvider = new Map<string, number>();
   private relationshipIndexSerial: Promise<void> = Promise.resolve();
   private relationshipIndexTimer: ReturnType<typeof setTimeout> | null = null;
   private relationshipIndexDisposed = false;
@@ -9652,7 +9654,8 @@ export class AiManager {
     parameters: Record<string, unknown>,
     tools: Record<string, unknown>[] = [],
     additionalUsedTokens = 0,
-    includeProviderQuota = true
+    includeProviderQuota = true,
+    additionalProviderUsedTokens = additionalUsedTokens
   ): Record<string, unknown> {
     const workStatus = this.getWorkTokenQuotaStatus(workId);
     const providerStatus = includeProviderQuota ? this.getProviderTokenQuotaStatus(stringValue(provider, "id")) : null;
@@ -9662,6 +9665,7 @@ export class AiManager {
     const providerMonthlyTokenQuota = providerStatus?.monthlyTokenQuota === null || !providerStatus ? null : Number(providerStatus.monthlyTokenQuota);
     if (dailyTokenQuota === null && monthlyTokenQuota === null && providerDailyTokenQuota === null && providerMonthlyTokenQuota === null) return parameters;
     const additionalTokens = Math.max(0, additionalUsedTokens);
+    const additionalProviderTokens = Math.max(0, additionalProviderUsedTokens);
     const estimatedInputTokens = estimateCompletionMessageTokens(messages)
       + (tools.length > 0 ? estimateAiTokens(JSON.stringify(tools)) : 0);
     let remainingTokens = Number.POSITIVE_INFINITY;
@@ -9701,7 +9705,7 @@ export class AiManager {
           scope: "provider",
           period: "daily",
           quota: providerDailyTokenQuota,
-          usedTokens: Number(providerStatus.usedTokens) + additionalTokens,
+          usedTokens: Number(providerStatus.usedTokens) + additionalProviderTokens,
           resetsAt: String(providerStatus.resetsAt),
           startedAt: String(providerStatus.dayStartedAt),
           timezone: String(providerStatus.timezone),
@@ -9712,7 +9716,7 @@ export class AiManager {
           scope: "provider",
           period: "monthly",
           quota: providerMonthlyTokenQuota,
-          usedTokens: Number(providerStatus.monthlyUsedTokens) + additionalTokens,
+          usedTokens: Number(providerStatus.monthlyUsedTokens) + additionalProviderTokens,
           resetsAt: String(providerStatus.monthlyResetsAt),
           startedAt: String(providerStatus.monthStartedAt),
           timezone: String(providerStatus.timezone),
@@ -12703,6 +12707,37 @@ export class AiManager {
     return `${document.sourceType}:${document.sourceId}:${document.sectionId ?? ""}`;
   }
 
+  private reserveSemanticTokenQuota(workId: string, provider: ProviderRow, content: string): () => void {
+    const providerId = stringValue(provider, "id");
+    const messages: CompletionMessage[] = [{ role: "user", content }];
+    const estimatedInputTokens = estimateCompletionMessageTokens(messages);
+    const workReservation = this.semanticQuotaReservationsByWork.get(workId) ?? 0;
+    const providerReservation = this.semanticQuotaReservationsByProvider.get(providerId) ?? 0;
+    this.constrainParametersForTokenQuota(
+      workId,
+      provider,
+      messages,
+      { max_tokens: 1 },
+      [],
+      workReservation,
+      true,
+      providerReservation
+    );
+    this.semanticQuotaReservationsByWork.set(workId, workReservation + estimatedInputTokens);
+    this.semanticQuotaReservationsByProvider.set(providerId, providerReservation + estimatedInputTokens);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remainingWork = Math.max(0, (this.semanticQuotaReservationsByWork.get(workId) ?? 0) - estimatedInputTokens);
+      const remainingProvider = Math.max(0, (this.semanticQuotaReservationsByProvider.get(providerId) ?? 0) - estimatedInputTokens);
+      if (remainingWork > 0) this.semanticQuotaReservationsByWork.set(workId, remainingWork);
+      else this.semanticQuotaReservationsByWork.delete(workId);
+      if (remainingProvider > 0) this.semanticQuotaReservationsByProvider.set(providerId, remainingProvider);
+      else this.semanticQuotaReservationsByProvider.delete(providerId);
+    };
+  }
+
   private beginSemanticAiCall(
     workId: string,
     taskType: "embedding" | "rerank",
@@ -12766,15 +12801,17 @@ export class AiManager {
     inputs: string[]
   ): Promise<number[][]> {
     const inputCharacters = inputs.reduce((total, input) => total + input.length, 0);
-    const callId = this.beginSemanticAiCall(workId, "embedding", configuration.model, configuration.provider, inputCharacters, {
-      model: stringValue(configuration.model, "model_id"),
-      vectorDimension: configuration.vectorDimension,
-      requestCount: inputs.length
-    });
+    const releaseTokenQuota = this.reserveSemanticTokenQuota(workId, configuration.provider, inputs.join("\n"));
+    let callId: string | null = null;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(new Error("Embedding request timed out")), SEMANTIC_REQUEST_TIMEOUT_MS);
     let credential = "";
     try {
+      callId = this.beginSemanticAiCall(workId, "embedding", configuration.model, configuration.provider, inputCharacters, {
+        model: stringValue(configuration.model, "model_id"),
+        vectorDimension: configuration.vectorDimension,
+        requestCount: inputs.length
+      });
       credential = this.decryptKey(configuration.provider);
       const response = await this.scheduleProviderRequest(configuration.provider, controller.signal, () => this.outboundFetchWithRetry(
         providerEmbeddingEndpoint(stringValue(configuration.provider, "base_url")),
@@ -12797,7 +12834,7 @@ export class AiManager {
       this.completeSemanticAiCall(callId, parsed.usage, inputCharacters);
       return parsed.vectors;
     } catch (error) {
-      this.failSemanticAiCall(callId, error instanceof Error ? error.message : "Embedding request failed");
+      if (callId) this.failSemanticAiCall(callId, error instanceof Error ? error.message : "Embedding request failed");
       logger.warn("semantic.embedding.failed", {
         workId,
         modelId: stringValue(configuration.model, "id"),
@@ -12807,6 +12844,7 @@ export class AiManager {
     } finally {
       clearTimeout(timeout);
       credential = "";
+      releaseTokenQuota();
     }
   }
 
@@ -12831,14 +12869,16 @@ export class AiManager {
       ""
     ].join("\n");
     const inputCharacters = prompt.length;
-    const callId = this.beginSemanticAiCall(workId, "rerank", configuration.rerankModel, configuration.rerankProvider, inputCharacters, {
-      model: stringValue(configuration.rerankModel, "model_id"),
-      requestCount: 1
-    });
+    const releaseTokenQuota = this.reserveSemanticTokenQuota(workId, configuration.rerankProvider, prompt);
+    let callId: string | null = null;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(new Error("Rerank request timed out")), SEMANTIC_REQUEST_TIMEOUT_MS);
     let credential = "";
     try {
+      callId = this.beginSemanticAiCall(workId, "rerank", configuration.rerankModel, configuration.rerankProvider, inputCharacters, {
+        model: stringValue(configuration.rerankModel, "model_id"),
+        requestCount: 1
+      });
       credential = this.decryptKey(configuration.rerankProvider);
       const response = await this.scheduleProviderRequest(configuration.rerankProvider, controller.signal, () => this.outboundFetchWithRetry(
         providerLegacyCompletionEndpoint(stringValue(configuration.rerankProvider!, "base_url")),
@@ -12870,11 +12910,12 @@ export class AiManager {
       this.completeSemanticAiCall(callId, usage, inputCharacters, score > 0 ? 3 : 2);
       return score;
     } catch (error) {
-      this.failSemanticAiCall(callId, error instanceof Error ? error.message : "Rerank request failed");
+      if (callId) this.failSemanticAiCall(callId, error instanceof Error ? error.message : "Rerank request failed");
       throw error;
     } finally {
       clearTimeout(timeout);
       credential = "";
+      releaseTokenQuota();
     }
   }
 
