@@ -771,7 +771,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const permissions = Object.fromEntries([
       "prose", "comments", "todos", "drafts", "settings", "characters", "races", "organizations",
       "timeline", "relationships", "outlines", "reviews", "ai-chat", "ai-analysis", "ai-settings"
-    ].map((module) => [module, module === "settings" ? "read" : "none"]));
+    ].map((module) => [module, module === "settings" ? "read" : module === "ai-settings" ? "write" : "none"]));
     await owner.agent.patch(`/api/works/${workId}/members/${restricted.user.userId}`)
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ permissions })
@@ -789,6 +789,13 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", restricted.csrfToken)
       .send({ query: "北港", types: ["setting"] })
       .expect(403);
+    for (const action of ["sync", "rebuild"]) {
+      await restricted.agent.post(`/api/works/${workId}/ai-settings/semantic-search-index/${action}`)
+        .set("X-CSRF-Token", restricted.csrfToken)
+        .send({})
+        .expect(403)
+        .expect(({ body }) => expect(body.error.code).toBe("WORK_MODULE_READ_DENIED"));
+    }
     await viewer.agent.post(`/api/works/${workId}/semantic-search/snapshots`)
       .set("X-CSRF-Token", viewer.csrfToken)
       .send({ query: "北港", entryIds: ["semanticChunk_missing"] })
