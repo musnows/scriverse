@@ -263,6 +263,7 @@ function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null
     || /^\/api\/ai-conversations\/[^/]+\/export$/u.test(path)
   )) return "export";
   if (method === "GET" && /^\/api\/works\/[^/]+\/search$/u.test(path)) return "search";
+  if (method === "PUT" && /^\/api\/works\/[^/]+\/ai-settings\/mcp-servers$/u.test(path)) return "ai";
   if (method !== "POST") return null;
   if (
     /^\/api\/works\/[^/]+\/(?:suggestions|chat\/stream|tasks)(?:\/|$)/u.test(path)

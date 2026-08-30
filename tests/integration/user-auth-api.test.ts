@@ -717,6 +717,40 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("远程 MCP 配置校验登录、CSRF 和作品 AI 设置权限", async () => {
+    const owner = await register(runtime, "remote_mcp_owner");
+    const viewer = await register(runtime, "remote_mcp_viewer");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "远程 MCP 权限测试" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: viewer.user.userId, role: "viewer" })
+      .expect(201);
+
+    await request(runtime.app).get(`/api/works/${workId}/ai-settings/mcp-servers`).expect(401);
+    await viewer.agent.get(`/api/works/${workId}/ai-settings/mcp-servers`).expect(200);
+    const viewerWrite = await viewer.agent
+      .put(`/api/works/${workId}/ai-settings/mcp-servers`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ mcpServers: {} })
+      .expect(403);
+    expect(viewerWrite.body.error.code).toBe("WORK_EDIT_DENIED");
+    const missingCsrf = await owner.agent
+      .put(`/api/works/${workId}/ai-settings/mcp-servers`)
+      .send({ mcpServers: {} })
+      .expect(403);
+    expect(missingCsrf.body.error.code).toBe("CSRF_TOKEN_INVALID");
+    await owner.agent
+      .put(`/api/works/${workId}/ai-settings/mcp-servers`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ mcpServers: {} })
+      .expect(200);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
   it("主动语义检索校验登录、CSRF、AI 对话和内容模块权限", async () => {
     const owner = await register(runtime, "semantic_search_owner");
     const viewer = await register(runtime, "semantic_search_viewer");

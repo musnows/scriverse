@@ -4,7 +4,8 @@ import {
   aiSkillPromptText,
   matchAiWritingSkill,
   parseAiSkillMarkdown,
-  renderAiSkillsPrompt
+  renderAiSkillsPrompt,
+  resolveAiWritingSkill
 } from "../../src/ai-skills.js";
 
 describe("AI writing skills", () => {
@@ -45,5 +46,35 @@ describe("AI writing skills", () => {
     expect(active).toContain("# 续写正文");
     expect(active).not.toContain("# 润色选中文本");
     expect(aiSkillPromptText(`<system_prompt>\n<skills>\n${active}\n</skills>\n</system_prompt>`)).toBe(active);
+  });
+
+  it("force-loads one referenced skill with a direct slash command without using @ mentions", () => {
+    const continuation = resolveAiWritingSkill("/continue-writing\n写一段夜航正文");
+    expect(continuation).toMatchObject({
+      skill: { name: "continue-writing" },
+      explicitSkillNames: ["continue-writing"],
+      cleanedInstruction: "写一段夜航正文"
+    });
+    const polish = resolveAiWritingSkill("请处理当前选区 /polish-writing。");
+    expect(polish).toMatchObject({
+      skill: { name: "polish-writing" },
+      explicitSkillNames: ["polish-writing"],
+      cleanedInstruction: "请处理当前选区。"
+    });
+    expect(renderAiSkillsPrompt("/polish-writing\n让表达更顺畅")).toContain("# 润色选中文本");
+    expect(renderAiSkillsPrompt("/polish-writing\n让表达更顺畅")).not.toContain("# 续写正文");
+    expect(resolveAiWritingSkill("第一轮：北港有什么约束？").cleanedInstruction).toBe("第一轮：北港有什么约束？");
+  });
+
+  it("ignores unrelated slash commands and reports conflicting writing skill references", () => {
+    expect(resolveAiWritingSkill("/missing-skill")).toMatchObject({
+      skill: null,
+      explicitSkillNames: [],
+      cleanedInstruction: "/missing-skill"
+    });
+    expect(resolveAiWritingSkill("/continue-writing\n/polish-writing")).toMatchObject({
+      skill: { name: "continue-writing" },
+      explicitSkillNames: ["continue-writing", "polish-writing"]
+    });
   });
 });
