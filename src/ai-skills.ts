@@ -11,6 +11,12 @@ export type AiSkill = {
   instructions: string;
 };
 
+export type AiWritingSkillResolution = {
+  skill: AiSkill | null;
+  explicitSkillNames: AiWritingSkillName[];
+  cleanedInstruction: string;
+};
+
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const CONTINUE_WRITING_INTENT_PATTERNS = [
   /(?:^|[，。！？；：\s])(?:请|帮我|给我|直接|开始|继续)?续写/u,
@@ -26,6 +32,7 @@ const DISCUSSION_ONLY_PATTERNS = [
   /(?:为什么|怎么用|有没有意义).*(?:续写|润色)|(?:续写|润色).*(?:为什么|怎么用|有没有意义)/u,
   /(?:评价|分析|比较|讨论|解释|说明)(?:这次|这个|一下)?(?:续写|润色)/u
 ];
+const AI_SKILL_REFERENCE_PATTERN = /(^|\s)\/(continue-writing|polish-writing)(?=$|[\s，。！？；：,.!?;:])/gimu;
 
 function parseFrontmatter(frontmatter: string): Record<string, string> {
   const result: Record<string, string> = {};
@@ -68,7 +75,7 @@ function loadAiSkills(directory: string): AiSkill[] {
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 export const AI_SKILLS = loadAiSkills(join(moduleDirectory, "skills"));
 
-export function matchAiWritingSkill(instruction: string): AiSkill | null {
+function semanticallyMatchedAiWritingSkill(instruction: string): AiSkill | null {
   const normalized = instruction.normalize("NFKC").trim();
   if (!normalized || DISCUSSION_ONLY_PATTERNS.some((pattern) => pattern.test(normalized))) return null;
   const matches: Array<{ name: AiWritingSkillName; index: number }> = [];
@@ -84,10 +91,37 @@ export function matchAiWritingSkill(instruction: string): AiSkill | null {
   return matchedName ? AI_SKILLS.find((skill) => skill.name === matchedName) ?? null : null;
 }
 
+export function resolveAiWritingSkill(instruction: string): AiWritingSkillResolution {
+  const explicitSkillNames: AiWritingSkillName[] = [];
+  const cleanedInstruction = instruction.replace(
+    AI_SKILL_REFERENCE_PATTERN,
+    (_matched, prefix: string, referencedName: string) => {
+      const skillName = referencedName.normalize("NFKC").trim().toLocaleLowerCase("zh-CN") as AiWritingSkillName;
+      if (!explicitSkillNames.includes(skillName)) explicitSkillNames.push(skillName);
+      return prefix;
+    }
+  ).replace(/[ \t]+\n/gu, "\n")
+    .replace(/\s+([，。！？；：,.!?;:])/gu, "$1")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+  const matchedName = explicitSkillNames[0];
+  return {
+    skill: matchedName
+      ? AI_SKILLS.find((skill) => skill.name === matchedName) ?? null
+      : semanticallyMatchedAiWritingSkill(cleanedInstruction),
+    explicitSkillNames,
+    cleanedInstruction
+  };
+}
+
+export function matchAiWritingSkill(instruction: string): AiSkill | null {
+  return resolveAiWritingSkill(instruction).skill;
+}
+
 export function renderAiSkillsPrompt(instruction: string, forcedSkillName?: AiWritingSkillName): string {
   const activeSkill = forcedSkillName
     ? AI_SKILLS.find((skill) => skill.name === forcedSkillName) ?? null
-    : matchAiWritingSkill(instruction);
+    : resolveAiWritingSkill(instruction).skill;
   const available = AI_SKILLS.map((skill) => [
     "<skill>",
     `<name>${skill.name}</name>`,

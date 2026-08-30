@@ -2705,7 +2705,7 @@ function resetAiFeed(
   const roleplayUserName = roleplayUserCharacter?.name;
   feed.innerHTML = roleplayName
     ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我可以通过角色卡、人物关系、知情设定和故事正文回答。"}</p></div></div>`
-    : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后即可开始问答；提到续写或润色时会自动加载对应 Skill。所有引用都基于已保存正文。</p></div></div>';
+    : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后即可开始问答；提到续写或润色时会自动加载对应 Skill，也可用 /continue-writing 或 /polish-writing 强制加载。所有引用都基于已保存正文。</p></div></div>';
 }
 
 function aiAssistantLabel(suffix = "", roleplayCharacter = state.aiRoleplayCharacter) {
@@ -14227,7 +14227,7 @@ function renderAiContextDistribution(usage) {
     if (item.key === "skills" || item.key === "input" || item.key === "output") {
       const description = document.createElement("small");
       description.textContent = item.key === "skills"
-        ? "按需加载"
+        ? item.tokens > 0 ? "按需加载" : "未加载"
         : item.key === "input" ? "用户和 agent 的交互" : "当前调用实际输出";
       title.append(" ", description);
     }
