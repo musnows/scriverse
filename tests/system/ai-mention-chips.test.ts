@@ -49,7 +49,7 @@ describe("AI 输入框引用气泡", () => {
     expect(application.text).toContain('selectAiMention(activeOption);');
     expect(application.text).toContain("conversationScope.includeSettingInfo = false");
     expect(application.text).toContain("range.insertNode(createAiReferenceChip(reference));");
-    expect(application.text).toContain("function clearAiPromptComposer()");
+    expect(application.text).toContain("function clearAiPromptComposer({ collapseScenePanel = false } = {})");
     const sendAiSource = application.text.slice(
       application.text.indexOf("async function sendAi()"),
       application.text.indexOf("async function streamChat(requestHolder, body, idempotencyKey)")
@@ -59,8 +59,11 @@ describe("AI 输入框引用气泡", () => {
       application.text.indexOf("function appendAiMessageImageAttachments")
     );
     expect(sendAiSource).toContain("const streamed = await streamChat");
-    expect(streamChatSource).toMatch(/appendMessage\("user"[\s\S]+?clearAiPromptComposer\(\);/u);
-    expect(streamChatSource.match(/clearAiPromptComposer\(\);/gu)).toHaveLength(1);
+    const appendUserMessageIndex = streamChatSource.indexOf('appendMessage("user"');
+    const clearComposerIndex = streamChatSource.indexOf("clearAiPromptComposer({ collapseScenePanel:");
+    expect(appendUserMessageIndex).toBeGreaterThanOrEqual(0);
+    expect(clearComposerIndex).toBeGreaterThan(appendUserMessageIndex);
+    expect(streamChatSource.match(/clearAiPromptComposer\(/gu)).toHaveLength(1);
     expect(styles.text).toContain(".ai-prompt-reference");
     expect(styles.text).toContain(".ai-mention-option.is-active");
     expect(styles.text).toContain(".ai-skill-option > span");
