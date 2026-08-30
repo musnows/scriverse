@@ -8681,6 +8681,14 @@ async function submitChapterBatch(event) {
           ? { type: "setAnalysisExclusion", excludedFromAnalysis: actionValue === "exclude" }
           : { type: "delete" };
   const dialog = $("#chapter-batch-dialog");
+  if (state.module === "editor" && state.chapter && state.dirty) {
+    dialog.close();
+    const confirmedDiscard = await confirmDiscardChanges("当前章节有未保存修改，批量处理将丢弃这些修改。是否继续？");
+    if (!confirmedDiscard) {
+      dialog.showModal();
+      return;
+    }
+  }
   if (action.type === "renumberTitles" && (action.template.split("{n}").length !== 2 || !Number.isInteger(action.startAt) || action.startAt < 1 || action.startAt + chapters.length - 1 > 999999)) {
     toast("标题格式必须且只能包含一个 {n}，且所选章节的序号不能超过 999999", "error");
     $("#chapter-batch-template").focus();
@@ -8710,11 +8718,14 @@ async function submitChapterBatch(event) {
     });
     const workId = state.work.id;
     state.work = await api(`/api/works/${encodeURIComponent(workId)}`);
+    const currentEditorVisible = state.module === "editor";
     const currentStillExists = state.chapter && state.work.volumes.some((volume) => volume.chapters.some((chapter) => chapter.id === state.chapter.id));
     if (state.chapter && currentStillExists) state.chapter = await api(`/api/chapters/${encodeURIComponent(state.chapter.id)}`);
     if (state.chapter && !currentStillExists) {
       state.chapter = null;
       showWelcome(true);
+    } else if (state.chapter && currentEditorVisible) {
+      await selectChapter(state.chapter.id, { editMode: !chapterEditorReadOnly });
     } else renderTree();
     if (dialog.open) dialog.close();
     chapterBatchSelectedIds.clear();
