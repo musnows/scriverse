@@ -18470,7 +18470,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     sceneBody.className = "user-message-scene-body";
     sceneBody.textContent = parsedUserTurn.sceneDirection;
     scene.append(sceneLabel, sceneBody);
-    message.querySelector(".message-body")?.before(scene);
+    message.querySelector(".message-body")?.prepend(scene);
   }
   const mentionGroups = role === "user"
     ? [

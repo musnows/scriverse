@@ -74,11 +74,13 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("function toggleAiScenePanel()");
     expect(application).toContain("sceneDirection");
     expect(application).toContain("user-message-scene");
+    expect(application).toContain('message.querySelector(".message-body")?.prepend(scene);');
     expect(styles).toContain(".prompt-composer-leading { position: absolute; bottom: 8px; left: 8px;");
     expect(styles).toContain(".ai-scene-panel { display: grid;");
     expect(styles).toContain(".ai-scene-pin-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));");
     expect(styles).toContain(".ai-scene-pin-fields { grid-template-columns: minmax(0, 1fr); }");
     expect(styles).toContain(".user-message-scene { margin: 0 0 8px;");
+    expect(page).toContain("feature=ai-roleplay-scene-bubble-v1");
     expect(page).not.toContain('id="ai-roleplay-memory-button"');
     expect(page).not.toContain('id="ai-roleplay-memory-manage"');
     expect(page).toContain('data-character-editor-tab="roleplay-memory"');
