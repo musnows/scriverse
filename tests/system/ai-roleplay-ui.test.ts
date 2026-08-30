@@ -72,6 +72,8 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("roleplayUserTurnDisplayText");
     expect(application).toContain("function syncAiSceneComposer()");
     expect(application).toContain("function toggleAiScenePanel()");
+    expect(application).toContain("function setAiScenePanelExpanded(expanded)");
+    expect(application).toContain('clearAiPromptComposer({ collapseScenePanel: Boolean(String(body.sceneDirection ?? "").trim()) });');
     expect(application).toContain("sceneDirection");
     expect(application).toContain("user-message-scene");
     expect(application).toContain('message.querySelector(".message-body")?.prepend(scene);');
@@ -81,6 +83,7 @@ describe("AI 角色扮演界面", () => {
     expect(styles).toContain(".ai-scene-pin-fields { grid-template-columns: minmax(0, 1fr); }");
     expect(styles).toContain(".user-message-scene { margin: 0 0 8px;");
     expect(page).toContain("feature=ai-roleplay-scene-bubble-v1");
+    expect(page).toContain("feature=ai-roleplay-scene-collapse-v1");
     expect(page).not.toContain('id="ai-roleplay-memory-button"');
     expect(page).not.toContain('id="ai-roleplay-memory-manage"');
     expect(page).toContain('data-character-editor-tab="roleplay-memory"');
