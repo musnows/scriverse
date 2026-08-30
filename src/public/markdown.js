@@ -201,6 +201,10 @@ export function renderMarkdown(value) {
       quote.push(quoteLine[1]);
       continue;
     }
+    if (!line.trim() && quote && /^>\s?/u.test(lines[lineIndex + 1] ?? "")) {
+      quote.push("");
+      continue;
+    }
     flushQuote();
     if (!line.trim()) {
       // CommonMark 松散列表：同类型列表项之间的空行不结束列表，

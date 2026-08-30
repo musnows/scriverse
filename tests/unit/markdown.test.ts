@@ -36,6 +36,16 @@ describe("侧边栏 Markdown 渲染", () => {
     expect(html).not.toContain("<blockquote></blockquote>");
   });
 
+  it("单个空行继续合并引用块，两个空行才切分", () => {
+    const merged = renderMarkdown("> 第一段\n\n> 第二段\n\n> 第三段");
+    expect(merged).toBe("<blockquote>第一段<br><br>第二段<br><br>第三段</blockquote>");
+    expect(merged.match(/<blockquote>/gu)).toHaveLength(1);
+
+    const separated = renderMarkdown("> 第一块\n\n\n> 第二块");
+    expect(separated).toBe("<blockquote>第一块</blockquote><blockquote>第二块</blockquote>");
+    expect(separated.match(/<blockquote>/gu)).toHaveLength(2);
+  });
+
   it("跨空行的有序与无序列表合并为单个列表", () => {
     const ordered = renderMarkdown("1. **相遇**：初见。\n\n2. **承诺**：约定。\n\n3. **幻灭**：失望。");
     expect(ordered.match(/<ol>/gu)).toHaveLength(1);
