@@ -944,4 +944,104 @@ export class ImService {
     this.assertActiveMembership(conversationId, userId);
     this.db.transaction(() => this.cancelActiveChain(conversationId, "stopped_by_user"));
   }
+
+  retryChain(user: AuthUser, conversationId: string, sourceChainId: string): Record<string, unknown> {
+    const conversation = this.assertActiveMembership(conversationId, user.userId);
+    const source = this.db.get("SELECT * FROM im_chains WHERE id = ? AND conversation_id = ?", sourceChainId, conversationId);
+    if (!source) throw notFound("IM 交流链");
+    const triggerMessageId = requiredString(source.trigger_message_id);
+    const trigger = this.db.get(
+      `SELECT message.id FROM im_messages message
+       WHERE message.id = ? AND message.conversation_id = ?
+         AND EXISTS (
+           SELECT 1 FROM im_human_memberships membership
+           WHERE membership.conversation_id = message.conversation_id AND membership.user_id = ?
+             AND membership.left_at IS NULL AND message.sequence > membership.joined_sequence
+         )`,
+      triggerMessageId,
+      conversationId,
+      user.userId
+    );
+    if (!trigger) throw new AppError(403, "IM_MESSAGE_ACCESS_DENIED", "不能重试加入群聊前的消息");
+    const settings = this.getSettings(user.userId);
+    const chainId = id("imChain");
+    const timestamp = now();
+    const mode = requiredString(conversation.kind) === "direct"
+      ? "direct"
+      : requiredString(conversation.reply_mode) === "proactive" ? "proactive" : "mention";
+    return this.db.transaction(() => {
+      this.cancelActiveChain(conversationId, "manual_retry");
+      const configured = Boolean(settings.primaryModelId && settings.fallbackModelId);
+      this.db.run(
+        `INSERT INTO im_chains (
+           id, conversation_id, initiator_user_id, authorization_user_id, trigger_message_id,
+           mode, threshold, max_ai_messages, retry_count, primary_model_id, fallback_model_id,
+           status, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        chainId,
+        conversationId,
+        user.userId,
+        requiredString(conversation.owner_user_id),
+        triggerMessageId,
+        mode,
+        Number(conversation.response_threshold),
+        Number(conversation.max_ai_messages),
+        Number(settings.retryCount),
+        optionalString(settings.primaryModelId),
+        optionalString(settings.fallbackModelId),
+        configured ? "queued" : "waiting_config",
+        timestamp,
+        timestamp
+      );
+      this.db.run("UPDATE im_messages SET chain_id = ? WHERE id = ?", chainId, triggerMessageId);
+      this.store.audit(null, "im.chain-retried", "im-chain", chainId, { sourceChainId, conversationId, triggerMessageId });
+      return this.db.get("SELECT * FROM im_chains WHERE id = ?", chainId) ?? {};
+    });
+  }
+
+  getDiagnostics(owner: AuthUser, conversationId: string): Record<string, unknown> {
+    this.assertOwner(conversationId, owner.userId);
+    const chain = this.db.get(
+      "SELECT * FROM im_chains WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
+      conversationId
+    );
+    if (!chain) return { chain: null, turns: [] };
+    const turns = this.db.all(
+      `SELECT turn.*, membership.character_id, membership.snapshot_json
+       FROM im_chain_turns turn JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
+       WHERE turn.chain_id = ? ORDER BY turn.created_at, turn.id`,
+      requiredString(chain.id)
+    ).map((turn) => {
+      const snapshot = json<Record<string, unknown>>(requiredString(turn.snapshot_json), {});
+      return {
+        id: requiredString(turn.id),
+        characterId: optionalString(turn.character_id) ?? snapshot.id ?? null,
+        characterName: snapshot.name ?? "已删除角色",
+        kind: requiredString(turn.kind),
+        score: turn.score === null || turn.score === undefined ? null : Number(turn.score),
+        selected: booleanValue(turn.selected),
+        status: requiredString(turn.status),
+        modelId: optionalString(turn.model_id),
+        modelStage: optionalString(turn.model_stage),
+        attemptCount: Number(turn.attempt_count),
+        durationMs: turn.duration_ms === null || turn.duration_ms === undefined ? null : Number(turn.duration_ms),
+        failure: optionalString(turn.failure),
+        createdAt: requiredString(turn.created_at),
+        completedAt: optionalString(turn.completed_at)
+      };
+    });
+    return {
+      chain: {
+        id: requiredString(chain.id),
+        status: requiredString(chain.status),
+        modelStage: requiredString(chain.model_stage),
+        threshold: Number(chain.threshold),
+        generatedCount: Number(chain.generated_count),
+        maxAiMessages: Number(chain.max_ai_messages),
+        createdAt: requiredString(chain.created_at),
+        completedAt: optionalString(chain.completed_at)
+      },
+      turns
+    };
+  }
 }

@@ -69,6 +69,7 @@ import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { ImService } from "./im.js";
+import { ImOrchestrator } from "./im-orchestrator.js";
 import { OfflineSyncService } from "./offline-sync.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -1062,6 +1063,7 @@ export type Runtime = {
   backups: S3BackupManager;
   auth: UserAuthService;
   im: ImService;
+  imOrchestrator: ImOrchestrator;
   offlineSync: OfflineSyncService;
   attachmentStorage: AttachmentStorage;
   characterAvatarStorage: AttachmentStorage;
@@ -1630,6 +1632,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       allowPrivateAiEndpoints: options.security?.allowPrivateAiEndpoints === true
     }
   );
+  const imOrchestrator = new ImOrchestrator(store, auth, im, ai);
   // AI 可写工具与审批工作流：计划创建只能由侧边栏 AI 发起，确认入口只接收审批 ID。
   const aiWritePlanManager = new AiWritePlanManager({
     database,
@@ -1946,6 +1949,24 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const user = requireImUser(request);
     data(response, im.listConversations(user.userId));
   });
+  app.get("/api/im/events", (request, response) => {
+    const user = requireImUser(request);
+    response.status(200);
+    response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    response.setHeader("Cache-Control", "no-cache, no-transform");
+    response.setHeader("Connection", "keep-alive");
+    response.flushHeaders();
+    response.write(`event: ready\ndata: ${JSON.stringify({ connected: true })}\n\n`);
+    const unsubscribe = imOrchestrator.subscribe(user.userId, (event) => {
+      response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    });
+    const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 15_000);
+    heartbeat.unref();
+    request.on("close", () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+  });
   app.post("/api/im/conversations/direct", (request, response) => {
     const user = requireImUser(request);
     const input = parse(z.object({ characterId: identifier }).strict(), request.body);
@@ -1962,43 +1983,63 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.patch("/api/im/conversations/:conversationId", (request, response) => {
     const user = requireImUser(request);
-    data(response, im.updateGroup(user, request.params.conversationId, parse(imGroupUpdateSchema, request.body)));
+    const updated = im.updateGroup(user, request.params.conversationId, parse(imGroupUpdateSchema, request.body));
+    imOrchestrator.cancelConversation(request.params.conversationId, "group_settings_changed");
+    imOrchestrator.publishConversation(request.params.conversationId);
+    data(response, updated);
   });
   app.post("/api/im/conversations/:conversationId/humans", (request, response) => {
     const user = requireImUser(request);
     const input = parse(z.object({ userId: identifier }).strict(), request.body);
-    data(response, im.addHuman(user, request.params.conversationId, input.userId), 201);
+    const updated = im.addHuman(user, request.params.conversationId, input.userId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "human_member_joined");
+    imOrchestrator.publishConversation(request.params.conversationId);
+    data(response, updated, 201);
   });
   app.delete("/api/im/conversations/:conversationId/humans/:userId", (request, response) => {
     const user = requireImUser(request);
     im.removeHuman(user, request.params.conversationId, request.params.userId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "human_member_removed");
+    imOrchestrator.publishConversation(request.params.conversationId);
     noContent(response);
   });
   app.post("/api/im/conversations/:conversationId/leave", (request, response) => {
     const user = requireImUser(request);
     parse(z.object({}).strict(), request.body ?? {});
     im.leaveGroup(user, request.params.conversationId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "human_member_left");
+    imOrchestrator.publishConversation(request.params.conversationId);
     noContent(response);
   });
   app.post("/api/im/conversations/:conversationId/characters", (request, response) => {
     const user = requireImUser(request);
     const input = parse(z.object({ characterId: identifier }).strict(), request.body);
-    data(response, im.addCharacter(user, request.params.conversationId, input.characterId), 201);
+    const updated = im.addCharacter(user, request.params.conversationId, input.characterId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "character_member_joined");
+    imOrchestrator.publishConversation(request.params.conversationId);
+    data(response, updated, 201);
   });
   app.delete("/api/im/conversations/:conversationId/characters/:characterId", (request, response) => {
     const user = requireImUser(request);
     im.removeCharacter(user, request.params.conversationId, request.params.characterId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "character_member_removed");
+    imOrchestrator.publishConversation(request.params.conversationId);
     noContent(response);
   });
   app.post("/api/im/conversations/:conversationId/transfer", (request, response) => {
     const user = requireImUser(request);
     const input = parse(z.object({ userId: identifier }).strict(), request.body);
-    data(response, im.transferGroup(user, request.params.conversationId, input.userId));
+    const updated = im.transferGroup(user, request.params.conversationId, input.userId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "group_owner_transferred");
+    imOrchestrator.publishConversation(request.params.conversationId);
+    data(response, updated);
   });
   app.post("/api/im/conversations/:conversationId/disband", (request, response) => {
     const user = requireImUser(request);
     parse(z.object({}).strict(), request.body ?? {});
     im.disbandGroup(user, request.params.conversationId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "group_disbanded");
+    imOrchestrator.publishConversation(request.params.conversationId);
     noContent(response);
   });
   app.post("/api/im/conversations/:conversationId/messages", (request, response) => {
@@ -2007,7 +2048,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       content: z.string().trim().min(1).max(20_000),
       requestId: idempotencyKeySchema
     }).strict(), request.body);
-    data(response, im.sendMessage(user, request.params.conversationId, input), 201);
+    const current = im.getConversation(request.params.conversationId, user.userId);
+    if (current.active !== true) throw new AppError(403, "IM_MEMBERSHIP_INACTIVE", "你已经退出这个 IM 会话");
+    imOrchestrator.cancelConversation(request.params.conversationId, "human_message_received");
+    const result = im.sendMessage(user, request.params.conversationId, input);
+    imOrchestrator.publishMessageResult(result);
+    data(response, result, 201);
   });
   app.post("/api/im/conversations/:conversationId/read", (request, response) => {
     const user = requireImUser(request);
@@ -2017,8 +2063,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/im/conversations/:conversationId/stop", (request, response) => {
     const user = requireImUser(request);
     parse(z.object({}).strict(), request.body ?? {});
-    im.stopChain(user.userId, request.params.conversationId);
+    const current = im.getConversation(request.params.conversationId, user.userId);
+    if (current.active !== true) throw new AppError(403, "IM_MEMBERSHIP_INACTIVE", "你已经退出这个 IM 会话");
+    imOrchestrator.cancelConversation(request.params.conversationId, "stopped_by_user");
     noContent(response);
+  });
+  app.post("/api/im/conversations/:conversationId/chains/:chainId/retry", (request, response) => {
+    const user = requireImUser(request);
+    parse(z.object({}).strict(), request.body ?? {});
+    imOrchestrator.cancelConversation(request.params.conversationId, "manual_retry");
+    const chain = im.retryChain(user, request.params.conversationId, request.params.chainId);
+    if (String(chain.status) === "queued") imOrchestrator.enqueue(String(chain.id));
+    imOrchestrator.publishConversation(request.params.conversationId);
+    data(response, chain, 201);
+  });
+  app.get("/api/im/conversations/:conversationId/diagnostics", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.getDiagnostics(user, request.params.conversationId));
   });
 
   app.get("/api/works", (request, response) => {
@@ -4392,6 +4453,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       logger.info("runtime.closing");
       backups.dispose();
       liteLlmPriceCache.dispose();
+      imOrchestrator.dispose();
       ai.dispose();
       offlineSync.dispose();
       const cancelledStreamRequests = store.cancelActiveAiConversationStreamRequests();
@@ -4414,5 +4476,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     })();
     return closePromise;
   };
-  return { app, database, store, ai, liteLlmPriceCache, backups, auth, im, offlineSync, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
+  return { app, database, store, ai, liteLlmPriceCache, backups, auth, im, imOrchestrator, offlineSync, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
 }
