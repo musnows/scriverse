@@ -33,6 +33,10 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain('id="im-announcement-button"');
     expect(page.text).toContain('id="im-announcement-dialog"');
     expect(page.text).toContain('id="im-announcement-form"');
+    expect(page.text).toContain('id="im-member-add-dialog"');
+    expect(page.text).toContain('id="im-member-add-work"');
+    expect(page.text).toContain('id="im-member-add-character-search"');
+    expect(page.text).toContain('id="im-member-add-human-search"');
     expect(page.text).toContain("公告将作为一次性旁白进入所有当前 AI 角色的后续上下文，不会触发 AI 回复");
     expect(page.text).toContain('id="im-new-conversation"');
     expect(page.text).toContain('id="im-create-work"');
@@ -42,9 +46,9 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v17");
+    expect(page.text).toContain("feature=global-im-v18");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
-    expect(application.text).toContain('/im.js?v=20260901-global-im-v17');
+    expect(application.text).toContain('/im.js?v=20260901-global-im-v18');
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');
     expect(im.text).toContain("mention://${item.kind}/${item.id}");
@@ -65,6 +69,12 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain("im-message-avatar");
     expect(im.text).toContain("im-member-avatar");
     expect(im.text).toContain("im-mention-avatar");
+    expect(im.text).toContain("data-im-open-member-add");
+    expect(im.text).toContain("openMemberAddDialog");
+    expect(im.text).toContain("loadMemberAddCharacters");
+    expect(im.text).toContain("loadMemberAddHumans");
+    expect(im.text).not.toContain('id="im-add-character-select"');
+    expect(im.text).not.toContain('id="im-add-human-select"');
     expect(im.text).toContain('document.querySelector("#im-detail-threshold")');
     expect(im.text).toContain("serializeImComposer");
     expect(styles.text).toContain(".im-view { display: grid; grid-template-columns:");
@@ -89,6 +99,9 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain(".im-selected-avatar");
     expect(styles.text).toContain(".im-message-avatar");
     expect(styles.text).toContain(".im-member-avatar");
+    expect(styles.text).toContain(".im-member-add-button");
+    expect(styles.text).toContain(".im-member-add-dialog");
+    expect(styles.text).toContain(".im-member-picker-option");
     expect(styles.text).toContain("--im-narration-surface:");
     expect(styles.text).toContain("background: var(--im-narration-surface)");
     expect(styles.text).toContain("border-width: 1px 0");

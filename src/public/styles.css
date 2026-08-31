@@ -4766,26 +4766,47 @@ body { font-size: var(--ui-font-size); }
 .im-member-identity { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .im-member-identity > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .im-member-avatar { width: 30px; height: 30px; font-size: 10px; }
+.im-member-add-button { display: inline-grid; justify-self: end; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid color-mix(in srgb, var(--accent) 52%, var(--line)); border-radius: 50%; background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); transition: border-color .15s ease, background-color .15s ease, transform .15s ease; }
+.im-member-add-button:hover, .im-member-add-button:focus-visible { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 20%, var(--surface)); outline: none; }
+.im-member-add-button:active { transform: translateY(1px); }
+.im-member-add-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-width: 1.8; }
 .im-diagnostic-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 7px; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 9px; }
 .im-privacy-note { margin: 0; padding: 10px 11px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--accent) 6%, var(--surface-soft)); color: var(--muted); font-size: 10px; line-height: 1.6; }
-.im-settings-dialog .account-settings-form, .im-group-form, .im-announcement-form { min-width: 0; max-height: calc(88dvh - 80px); overflow-y: auto; padding: 18px 24px 24px; }
+.im-settings-dialog .account-settings-form, .im-group-form, .im-announcement-form, .im-member-add-form { min-width: 0; max-height: calc(88dvh - 80px); overflow-y: auto; padding: 18px 24px 24px; }
 .im-settings-dialog .account-settings-form { grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 14px; margin: 0; }
-.im-settings-dialog .account-settings-form label, .im-group-form > label, .im-group-settings-row label, .im-create-role-toolbar label, .im-create-group-settings > label, .im-announcement-form > label { display: grid; min-width: 0; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 650; }
+.im-settings-dialog .account-settings-form label, .im-group-form > label, .im-group-settings-row label, .im-create-role-toolbar label, .im-create-group-settings > label, .im-announcement-form > label, .im-member-picker-toolbar label { display: grid; min-width: 0; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 650; }
 .im-settings-dialog .account-settings-form .card-actions { grid-column: 1 / -1; }
 .im-settings-dialog :is(input:not([type="checkbox"]):not([type="range"]), textarea, select),
 .im-group-form :is(input:not([type="checkbox"]):not([type="range"]), textarea, select),
-.im-announcement-form :is(input:not([type="checkbox"]):not([type="range"]), textarea, select) { width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 11px; line-height: 1.45; }
+.im-announcement-form :is(input:not([type="checkbox"]):not([type="range"]), textarea, select),
+.im-member-add-form :is(input:not([type="checkbox"]):not([type="range"]), textarea, select) { width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 11px; line-height: 1.45; }
 .im-settings-dialog :is(input:not([type="checkbox"]):not([type="range"]), textarea, select):focus-visible,
 .im-group-form :is(input:not([type="checkbox"]):not([type="range"]), textarea, select):focus-visible,
-.im-announcement-form :is(input:not([type="checkbox"]):not([type="range"]), textarea, select):focus-visible { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
+.im-announcement-form :is(input:not([type="checkbox"]):not([type="range"]), textarea, select):focus-visible,
+.im-member-add-form :is(input:not([type="checkbox"]):not([type="range"]), textarea, select):focus-visible { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
 .im-settings-dialog :is(input, textarea, select):disabled,
 .im-group-form :is(input, textarea, select):disabled,
-.im-announcement-form :is(input, textarea, select):disabled { background: var(--surface-soft); color: var(--muted); cursor: not-allowed; opacity: .62; }
-.im-settings-dialog :is(input, textarea)::placeholder, .im-group-form :is(input, textarea)::placeholder, .im-announcement-form :is(input, textarea)::placeholder { color: var(--muted); opacity: .8; }
+.im-announcement-form :is(input, textarea, select):disabled,
+.im-member-add-form :is(input, textarea, select):disabled { background: var(--surface-soft); color: var(--muted); cursor: not-allowed; opacity: .62; }
+.im-settings-dialog :is(input, textarea)::placeholder, .im-group-form :is(input, textarea)::placeholder, .im-announcement-form :is(input, textarea)::placeholder, .im-member-add-form :is(input, textarea)::placeholder { color: var(--muted); opacity: .8; }
 .im-settings-dialog textarea, .im-announcement-form textarea { resize: vertical; }
 .im-announcement-form { display: grid; gap: 14px; }
 .im-announcement-form textarea { min-height: 150px; }
 .im-announcement-note { margin: 0; padding: 10px 11px; border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line)); border-radius: 7px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--muted); font-size: 10px; line-height: 1.6; }
+.im-member-add-dialog { width: min(680px, 92vw); }
+.im-member-add-form { display: grid; gap: 14px; }
+.im-member-add-guidance { margin: 0; padding: 10px 11px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius: 7px; background: color-mix(in srgb, var(--accent) 6%, var(--surface-soft)); color: var(--muted); font-size: 10px; line-height: 1.6; }
+.im-member-picker-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
+#im-member-add-human-fields { grid-template-columns: minmax(0, 1fr); }
+.im-member-picker-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 7px; min-height: 92px; max-height: 340px; overflow-y: auto; }
+.im-member-picker-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; min-width: 0; min-height: 54px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); text-align: left; transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease; }
+.im-member-picker-option:hover, .im-member-picker-option:focus-visible { border-color: color-mix(in srgb, var(--accent) 62%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--surface)); outline: none; }
+.im-member-picker-option[aria-selected="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); box-shadow: inset 3px 0 0 var(--accent); }
+.im-member-picker-option > span:last-child { display: grid; min-width: 0; gap: 3px; }
+.im-member-picker-option strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.im-member-picker-option small { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; color: var(--muted); font-size: 8px; line-height: 1.45; }
+.im-member-picker-option small em { font-style: normal; }
+.im-member-picker-avatar { width: 36px; height: 36px; font-size: 11px; }
 .im-group-form { display: grid; gap: 14px; }
 .im-create-guidance { margin: 0; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius: 7px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--muted); font-size: 10px; line-height: 1.5; }
 .im-create-role-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
@@ -4845,7 +4866,8 @@ body { font-size: var(--ui-font-size); }
   .im-composer { min-height: 46px; }
   .im-group-settings-row, .im-option-grid { grid-template-columns: 1fr; }
   .im-create-role-toolbar { grid-template-columns: 1fr; }
-  .im-settings-dialog .account-settings-form, .im-group-form, .im-announcement-form { padding: 14px 12px 16px; }
+  .im-settings-dialog .account-settings-form, .im-group-form, .im-announcement-form, .im-member-add-form { padding: 14px 12px 16px; }
+  .im-member-picker-toolbar, .im-member-picker-options { grid-template-columns: 1fr; }
 }
 .reader-view .eyebrow { color: var(--reader-accent); }
 .reader-view button,
