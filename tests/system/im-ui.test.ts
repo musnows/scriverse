@@ -30,6 +30,10 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain('id="im-details"');
     expect(page.text).toContain('id="im-settings-dialog"');
     expect(page.text).toContain('id="im-group-dialog"');
+    expect(page.text).toContain('id="im-announcement-button"');
+    expect(page.text).toContain('id="im-announcement-dialog"');
+    expect(page.text).toContain('id="im-announcement-form"');
+    expect(page.text).toContain("公告将作为一次性旁白进入所有当前 AI 角色的后续上下文，不会触发 AI 回复");
     expect(page.text).toContain('id="im-new-conversation"');
     expect(page.text).toContain('id="im-create-work"');
     expect(page.text).toContain('id="im-create-search"');
@@ -38,8 +42,8 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v14");
-    expect(application.text).toContain('/im.js?v=20260831-global-im-v14');
+    expect(page.text).toContain("feature=global-im-v15");
+    expect(application.text).toContain('/im.js?v=20260831-global-im-v15');
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');
     expect(im.text).toContain("mention://${item.kind}/${item.id}");
@@ -52,6 +56,9 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain("item.isPinned");
     expect(im.text).toContain("item.isFavorite");
     expect(im.text).toContain("data-im-remove-selected");
+    expect(im.text).toContain('model.type === "announcement"');
+    expect(im.text).toContain("/announcements");
+    expect(im.text).toContain('toast("旁白公告已发布", "success")');
     expect(im.text).toContain('document.querySelector("#im-detail-threshold")');
     expect(im.text).toContain("serializeImComposer");
     expect(styles.text).toContain(".im-view { display: grid; grid-template-columns:");
@@ -61,6 +68,9 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain(".im-button-positive");
     expect(styles.text).toContain(".im-button-danger-quiet");
     expect(styles.text).toContain(".im-button:disabled");
+    expect(styles.text).toContain(".im-button-announcement");
+    expect(styles.text).toContain(".im-message.is-announcement");
+    expect(styles.text).toContain(".im-announcement-form");
     expect(styles.text).toContain(".im-create-role-toolbar");
     expect(styles.text).toContain(".im-create-selected button");
     expect(styles.text).toContain(".im-character-preference.is-pinned");

@@ -2073,6 +2073,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     imOrchestrator.publishMessageResult(result);
     data(response, result, 201);
   });
+  app.post("/api/im/conversations/:conversationId/announcements", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({
+      content: z.string().trim().min(1).max(20_000),
+      requestId: idempotencyKeySchema
+    }).strict(), request.body);
+    const result = im.publishAnnouncement(user, request.params.conversationId, input);
+    imOrchestrator.publishMessageResult(result);
+    data(response, result, 201);
+  });
   app.post("/api/im/conversations/:conversationId/read", (request, response) => {
     const user = requireImUser(request);
     const input = parse(z.object({ sequence: z.number().int().min(0) }).strict(), request.body);

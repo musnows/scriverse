@@ -127,10 +127,11 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
     }
     feed.innerHTML = messages.map((message) => {
       const sender = value(message, "sender", {});
-      const label = sender.name || sender.displayName || (message.senderKind === "system" ? "系统" : "成员");
-      const own = message.senderUserId === currentUserId();
       const model = value(message, "metadata", {});
-      return `<article class="im-message is-${esc(message.senderKind)}${own ? " is-own" : ""}" data-im-message="${esc(message.id)}">
+      const announcement = model.type === "announcement";
+      const label = announcement ? "旁白" : sender.name || sender.displayName || (message.senderKind === "system" ? "系统" : "成员");
+      const own = message.senderUserId === currentUserId();
+      return `<article class="im-message is-${esc(message.senderKind)}${announcement ? " is-announcement" : ""}${own ? " is-own" : ""}" data-im-message="${esc(message.id)}">
         <header><strong>${esc(label)}</strong><time>${esc(new Date(message.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }))}</time></header>
         <div class="im-message-body message-body">${messageHtml(message)}</div>
         ${message.senderKind === "character" ? `<details class="im-model-details"><summary>调用详情</summary><span>${esc(model.modelDisplayName || model.modelId || "未知模型")} · ${model.modelStage === "fallback" ? "fallback" : "主模型"} · ${Number(model.attemptCount || 1)} 次请求 · ${Number(model.durationMs || 0)} ms</span></details>` : ""}
@@ -149,9 +150,12 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
 
   function syncComposer() {
     const writable = current?.active === true && current?.status === "active";
+    const canAnnounce = writable && current?.kind === "group" && current?.ownerUserId === currentUserId();
     composer.contentEditable = String(writable);
     composer.setAttribute("aria-disabled", String(!writable));
     document.querySelector("#im-send").disabled = !writable;
+    document.querySelector("#im-announcement-button").classList.toggle("hidden", !canAnnounce);
+    document.querySelector("#im-announcement-button").disabled = !canAnnounce;
     document.querySelector("#im-stop").classList.toggle("hidden", !["queued", "running"].includes(current?.activeChain?.status));
     document.querySelector("#im-retry").classList.toggle("hidden", !["waiting_config", "failed", "interrupted"].includes(current?.activeChain?.status));
   }
@@ -287,6 +291,14 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
     document.querySelector("#im-setting-fallback").innerHTML = '<option value="">选择 fallback 模型</option>' + models.map((model) => `<option value="${esc(model.id)}" ${settings.fallbackModelId === model.id ? "selected" : ""}>${esc(model.displayName)} · ${esc(model.providerName)}</option>`).join("");
     document.querySelector("#im-setting-retries").value = String(settings.retryCount || 3);
     dialog.showModal();
+  }
+
+  function openAnnouncementDialog() {
+    if (current?.kind !== "group" || current?.ownerUserId !== currentUserId() || current?.active !== true) return;
+    const dialog = document.querySelector("#im-announcement-dialog");
+    document.querySelector("#im-announcement-form").reset();
+    dialog.showModal();
+    document.querySelector("#im-announcement-content").focus();
   }
 
   function characterPreferenceBadges(item) {
@@ -535,6 +547,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
   function bind() {
     document.querySelector("#im-open-button").addEventListener("click", () => void open().catch((error) => toast(error.message, "error")));
     document.querySelector("#im-settings-button").addEventListener("click", openSettings);
+    document.querySelector("#im-announcement-button").addEventListener("click", openAnnouncementDialog);
     document.querySelector("#im-new-conversation").addEventListener("click", openConversationDialog);
     document.querySelector("#im-create-work").addEventListener("change", () => {
       createCharacters = [];
@@ -645,6 +658,28 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
       document.querySelector("#im-settings-dialog").close();
       toast("IM 身份与模型设置已保存", "success");
       if (current?.activeChain?.status === "waiting_config") await openConversation(current.id);
+    });
+    document.querySelector("#im-announcement-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const submit = form.querySelector('button[type="submit"]');
+      const content = document.querySelector("#im-announcement-content").value.trim();
+      if (!content || !current?.id || submit.disabled) return;
+      const conversationId = current.id;
+      submit.disabled = true;
+      try {
+        await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/announcements`, {
+          method: "POST",
+          body: { content, requestId: requestId() }
+        });
+        document.querySelector("#im-announcement-dialog").close();
+        if (current?.id === conversationId) await openConversation(conversationId);
+        toast("旁白公告已发布", "success");
+      } catch (error) {
+        toast(error.message, "error");
+      } finally {
+        submit.disabled = false;
+      }
     });
     document.querySelector("#im-group-form").addEventListener("submit", async (event) => {
       event.preventDefault();

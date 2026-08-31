@@ -1023,6 +1023,66 @@ export class ImService {
     });
   }
 
+  publishAnnouncement(owner: AuthUser, conversationId: string, input: ImMessageInput): Record<string, unknown> {
+    const conversation = this.assertOwner(conversationId, owner.userId);
+    if (requiredString(conversation.kind) !== "group") throw new AppError(400, "IM_GROUP_REQUIRED", "单聊不能发布旁白公告");
+    this.refreshCharacterAvailability(conversationId);
+    const existing = this.db.get(
+      "SELECT * FROM im_messages WHERE conversation_id = ? AND request_id = ?",
+      conversationId,
+      input.requestId
+    );
+    if (existing) {
+      const metadata = json<Record<string, unknown>>(requiredString(existing.metadata_json), {});
+      if (metadata.type !== "announcement") {
+        throw new AppError(409, "IM_REQUEST_ID_CONFLICT", "请求标识已被其他 IM 消息使用");
+      }
+      return { message: this.mapMessage(existing), chain: null, duplicate: true };
+    }
+    const messageId = id("imMessage");
+    const timestamp = now();
+    return this.db.transaction(() => {
+      const sequence = this.nextSequence(conversationId);
+      this.db.run(
+        `INSERT INTO im_messages (
+           id, conversation_id, sequence, context_epoch, sender_kind, sender_snapshot_json,
+           content, request_id, metadata_json, created_at
+         ) VALUES (?, ?, ?, ?, 'system', ?, ?, ?, ?, ?)`,
+        messageId,
+        conversationId,
+        sequence,
+        Number(conversation.context_epoch),
+        JSON.stringify({ name: "旁白" }),
+        input.content,
+        input.requestId,
+        JSON.stringify({ type: "announcement", publishedBy: this.humanSnapshot(owner) }),
+        timestamp
+      );
+      const activeCharacters = this.db.all(
+        `SELECT id FROM im_character_memberships
+         WHERE conversation_id = ? AND left_at IS NULL AND status = 'active'`,
+        conversationId
+      );
+      for (const membership of activeCharacters) {
+        this.db.run(
+          "INSERT INTO im_message_deliveries (message_id, character_membership_id, delivered_at) VALUES (?, ?, ?)",
+          messageId,
+          requiredString(membership.id),
+          timestamp
+        );
+      }
+      this.db.run("UPDATE im_conversations SET updated_at = ? WHERE id = ?", timestamp, conversationId);
+      this.store.audit(null, "im.announcement-published", "im-message", messageId, {
+        conversationId,
+        sequence,
+        deliveredCharacterCount: activeCharacters.length
+      });
+      const message = this.db.get("SELECT * FROM im_messages WHERE id = ?", messageId);
+      if (!message) throw notFound("IM 公告");
+      return { message: this.mapMessage(message), chain: null, duplicate: false };
+    });
+  }
+
   markRead(userId: string, conversationId: string, sequence: number): Record<string, unknown> {
     const conversation = this.assertActiveMembership(conversationId, userId);
     const latest = this.nextSequence(conversationId) - 1;

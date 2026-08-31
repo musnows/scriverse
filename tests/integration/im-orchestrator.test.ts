@@ -130,6 +130,7 @@ describe("IM AI 调度", () => {
   });
 
   it("主动模式让各角色独立打分并只选择最高分角色", async () => {
+    const requestPrompts: string[] = [];
     runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "im-proactive-test-master-secret-with-enough-length",
@@ -138,6 +139,7 @@ describe("IM AI 调度", () => {
         const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
         const messages = body.messages as Array<{ role: string; content: string }>;
         const system = messages[0]?.content ?? "";
+        requestPrompts.push(messages.map((message) => message.content).join("\n"));
         const judge = system.includes("只判断当前角色现在是否有必要发送一条新消息");
         if (judge) return completion(system.indexOf("林舟") < system.indexOf("顾遥") ? '{"score":85}' : '{"score":30}', false);
         return completion("我来处理这件事。", body.stream === true);
@@ -165,6 +167,16 @@ describe("IM AI 调度", () => {
       responseThreshold: 60,
       maxAiMessages: 1
     });
+    const announcement = runtime.im.publishAnnouncement(owner, String(group.id), {
+      content: "远方的风暴正在逼近，甲板开始剧烈摇晃。",
+      requestId: "im-proactive-announcement-0001"
+    });
+    expect(announcement).toMatchObject({ chain: null, duplicate: false });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_message_deliveries WHERE message_id = ?",
+      String((announcement.message as Record<string, unknown>).id)
+    )).toEqual({ count: 2 });
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM im_chains WHERE conversation_id = ?", String(group.id))).toEqual({ count: 0 });
     const sent = runtime.im.sendMessage(owner, String(group.id), {
       content: "谁来安排今天的航线？",
       requestId: "im-proactive-request-0001"
@@ -173,6 +185,8 @@ describe("IM AI 调度", () => {
     const chainId = String((sent.chain as Record<string, unknown>).id);
     const chain = await waitForChain(runtime, chainId);
     expect(chain).toMatchObject({ status: "limit", generated_count: 1 });
+    expect(requestPrompts.length).toBeGreaterThanOrEqual(3);
+    expect(requestPrompts.every((prompt) => prompt.includes("[1] 旁白：远方的风暴正在逼近，甲板开始剧烈摇晃。"))).toBe(true);
     expect(runtime.database.all(
       `SELECT membership.character_id, turn.score, turn.selected FROM im_chain_turns turn
        JOIN im_character_memberships membership ON membership.id = turn.character_membership_id

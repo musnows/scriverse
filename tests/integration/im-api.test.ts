@@ -159,6 +159,39 @@ describe("全局 IM API", () => {
       .expect(201);
     const groupId = group.body.data.id;
 
+    await member.agent.post(`/api/im/conversations/${groupId}/announcements`)
+      .set("X-CSRF-Token", member.csrfToken)
+      .send({ content: "海面升起了白雾。", requestId: "im-announcement-request-denied" })
+      .expect(403);
+    await owner.agent.post(`/api/im/conversations/${direct.body.data.id}/announcements`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ content: "单聊旁白。", requestId: "im-announcement-request-direct" })
+      .expect(400);
+    const announcement = await owner.agent.post(`/api/im/conversations/${groupId}/announcements`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ content: "海面升起了白雾。", requestId: "im-announcement-request-0001" })
+      .expect(201);
+    expect(announcement.body.data).toMatchObject({
+      chain: null,
+      duplicate: false,
+      message: {
+        senderKind: "system",
+        content: "海面升起了白雾。",
+        metadata: { type: "announcement", publishedBy: { userId: owner.user.userId } }
+      }
+    });
+    const duplicateAnnouncement = await owner.agent.post(`/api/im/conversations/${groupId}/announcements`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ content: "海面升起了白雾。", requestId: "im-announcement-request-0001" })
+      .expect(201);
+    expect(duplicateAnnouncement.body.data).toMatchObject({ duplicate: true });
+    expect(duplicateAnnouncement.body.data.message.id).toBe(announcement.body.data.message.id);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM im_chains WHERE conversation_id = ?", groupId)).toEqual({ count: 0 });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_message_deliveries WHERE message_id = ?",
+      announcement.body.data.message.id
+    )).toEqual({ count: 1 });
+
     const firstMessage = await owner.agent.post(`/api/im/conversations/${groupId}/messages`)
       .set("X-CSRF-Token", owner.csrfToken)
       .send({
@@ -172,8 +205,12 @@ describe("全局 IM API", () => {
     ]);
 
     const memberView = await member.agent.get(`/api/im/conversations/${groupId}`).expect(200);
-    expect(memberView.body.data.messages).toHaveLength(1);
-    expect(memberView.body.data.messages[0].content).toContain("mention://character/");
+    expect(memberView.body.data.messages).toHaveLength(2);
+    expect(memberView.body.data.messages[0]).toMatchObject({
+      content: "海面升起了白雾。",
+      metadata: { type: "announcement" }
+    });
+    expect(memberView.body.data.messages[1].content).toContain("mention://character/");
 
     await admin.agent.get(`/api/im/conversations/${groupId}`).expect(403);
 
@@ -197,11 +234,13 @@ describe("全局 IM API", () => {
       groupId
     )).toEqual([
       { sequence: 1, context_epoch: 1 },
-      { sequence: 2, context_epoch: 2 },
-      { sequence: 3, context_epoch: 2 }
+      { sequence: 2, context_epoch: 1 },
+      { sequence: 3, context_epoch: 2 },
+      { sequence: 4, context_epoch: 2 }
     ]);
     const ownerAfter = await owner.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(ownerAfter.body.data.messages.map((item: { content: string }) => item.content)).toEqual([
+      "海面升起了白雾。",
       expect.stringContaining("我们出发"),
       "im_late_member 加入了群聊",
       "我已登舰。"
