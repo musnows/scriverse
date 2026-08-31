@@ -363,7 +363,13 @@ export class ImOrchestrator {
     const characterId = optionalString(membership.character_id);
     const workId = optionalString(membership.source_work_id);
     if (!characterId || !workId) throw new AppError(409, "IM_CHARACTER_UNAVAILABLE", "来源角色或作品已不可用");
-    this.im.assertCharacterAvailable(owner, characterId);
+    try {
+      this.im.assertCharacterAvailable(owner, characterId);
+    } catch (error) {
+      this.db.run("UPDATE im_character_memberships SET status = 'suspended' WHERE id = ?", requiredString(membership.id));
+      this.publishConversation(requiredString(chain.conversation_id));
+      throw error;
+    }
     return { owner, workId, characterId };
   }
 
@@ -393,13 +399,17 @@ export class ImOrchestrator {
     const authorization = this.assertCharacterAuthorization(chain, membership);
     const snapshot = json<Record<string, unknown>>(requiredString(sourceMessage.sender_snapshot_json), {});
     const context = this.characterHistory(membership, conversation, Number(sourceMessage.sequence));
+    const modelIds = [optionalString(chain.primary_model_id), optionalString(chain.fallback_model_id)].filter((modelId): modelId is string => Boolean(modelId));
+    const contextWindows = modelIds.map((modelId) => Number(this.db.get("SELECT context_window FROM models WHERE id = ?", modelId)?.context_window ?? 128_000));
+    const minimumContextWindow = contextWindows.length ? Math.min(...contextWindows) : 128_000;
+    const maximumHistoryChars = Math.max(2_000, Math.floor(minimumContextWindow * 2));
     const common = {
       workId: authorization.workId,
       characterId: authorization.characterId,
       kind,
       instruction,
       participantContext: this.participantContext(requiredString(conversation.id), snapshot),
-      history: context.history,
+      history: context.history.slice(-maximumHistoryChars),
       summary: context.summary,
       retryCount: Number(chain.retry_count),
       createdByUserId: requiredString(chain.initiator_user_id),
@@ -722,6 +732,7 @@ export class ImOrchestrator {
     const conversationId = requiredString(chain.conversation_id);
     try {
       if (requiredString(chain.status) !== "queued") return;
+      this.im.refreshCharacterAvailability(conversationId);
       this.db.run("UPDATE im_chains SET status = 'running', updated_at = ? WHERE id = ?", now(), chainId);
       this.publish(conversationId, "chain", { chainId, status: "running", modelStage: chain.model_stage });
       let sourceMessage = this.messageRow(requiredString(chain.trigger_message_id));

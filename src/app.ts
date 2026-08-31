@@ -2026,6 +2026,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     imOrchestrator.publishConversation(request.params.conversationId);
     noContent(response);
   });
+  app.get("/api/im/conversations/:conversationId/characters/:characterId/avatar", async (request, response) => {
+    const user = requireImUser(request);
+    const avatar = im.getCharacterAvatarAccess(user.userId, request.params.conversationId, request.params.characterId);
+    const content = await characterAvatarStorage.read(String(avatar.storageKey));
+    response.setHeader("Content-Type", String(avatar.mimeType));
+    response.setHeader("Content-Length", String(content.byteLength));
+    response.setHeader("ETag", `\"${String(avatar.sha256)}\"`);
+    response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.send(content);
+  });
   app.post("/api/im/conversations/:conversationId/transfer", (request, response) => {
     const user = requireImUser(request);
     const input = parse(z.object({ userId: identifier }).strict(), request.body);

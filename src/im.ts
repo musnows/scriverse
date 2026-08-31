@@ -435,7 +435,9 @@ export class ImService {
       sourceWorkId: optionalString(row.source_work_id) ?? snapshot.workId ?? null,
       name: snapshot.name ?? "已删除角色",
       code: snapshot.code ?? "",
-      avatarUrl: snapshot.avatarUrl ?? null,
+      avatarUrl: row.character_id
+        ? `/api/im/conversations/${encodeURIComponent(requiredString(row.conversation_id))}/characters/${encodeURIComponent(requiredString(row.character_id))}/avatar`
+        : null,
       workTitle: snapshot.workTitle ?? "已删除作品",
       publicSummary: snapshot.publicSummary ?? "",
       status: requiredString(row.status),
@@ -579,6 +581,47 @@ export class ImService {
         conversationId
       ) ?? null
     };
+  }
+
+  refreshCharacterAvailability(conversationId: string): void {
+    const conversation = this.db.get("SELECT owner_user_id FROM im_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("IM 会话");
+    let owner: AuthUser | null = null;
+    try {
+      owner = this.auth.getUser(requiredString(conversation.owner_user_id));
+    } catch {
+      owner = null;
+    }
+    for (const membership of this.db.all(
+      `SELECT id, character_id FROM im_character_memberships
+       WHERE conversation_id = ? AND left_at IS NULL AND character_id IS NOT NULL`,
+      conversationId
+    )) {
+      let status: "active" | "suspended" = "suspended";
+      if (owner?.status === "active") {
+        try {
+          this.assertCharacterAvailable(owner, requiredString(membership.character_id));
+          status = "active";
+        } catch {
+          status = "suspended";
+        }
+      }
+      this.db.run("UPDATE im_character_memberships SET status = ? WHERE id = ?", status, requiredString(membership.id));
+    }
+  }
+
+  getCharacterAvatarAccess(userId: string, conversationId: string, characterId: string): Record<string, unknown> {
+    this.assertReadableConversation(conversationId, userId);
+    const membership = this.db.get(
+      `SELECT 1 AS present FROM im_character_memberships
+       WHERE conversation_id = ? AND character_id = ? LIMIT 1`,
+      conversationId,
+      characterId
+    );
+    if (!membership) throw notFound("IM 群角色");
+    const avatar = this.store.getCharacterAvatar(characterId);
+    if (!avatar) throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "角色头像不存在");
+    return avatar;
   }
 
   updateGroup(owner: AuthUser, conversationId: string, input: Partial<Pick<ImGroupInput, "title" | "replyMode" | "responseThreshold" | "maxAiMessages">>): Record<string, unknown> {
@@ -829,6 +872,7 @@ export class ImService {
 
   sendMessage(user: AuthUser, conversationId: string, input: ImMessageInput): Record<string, unknown> {
     const conversation = this.assertActiveMembership(conversationId, user.userId);
+    this.refreshCharacterAvailability(conversationId);
     const existing = this.db.get(
       "SELECT * FROM im_messages WHERE conversation_id = ? AND request_id = ?",
       conversationId,
@@ -891,7 +935,8 @@ export class ImService {
           timestamp
         );
       }
-      const shouldCreateChain = mode === "direct" || mode === "proactive" || deliveryIds.length > 0;
+      const shouldCreateChain = activeCharacters.length > 0
+        && (mode === "direct" || mode === "proactive" || deliveryIds.length > 0);
       let chain: Record<string, unknown> | null = null;
       if (shouldCreateChain) {
         const configured = Boolean(settings.primaryModelId && settings.fallbackModelId);
