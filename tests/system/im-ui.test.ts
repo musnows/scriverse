@@ -42,8 +42,8 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v16");
-    expect(application.text).toContain('/im.js?v=20260831-global-im-v16');
+    expect(page.text).toContain("feature=global-im-v17");
+    expect(application.text).toContain('/im.js?v=20260901-global-im-v17');
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');
     expect(im.text).toContain("mention://${item.kind}/${item.id}");
@@ -59,6 +59,11 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain('model.type === "announcement"');
     expect(im.text).toContain("/announcements");
     expect(im.text).toContain('toast("旁白公告已发布", "success")');
+    expect(im.text).toContain("imAvatarHtml");
+    expect(im.text).toContain("im-conversation-avatar-stack");
+    expect(im.text).toContain("im-message-avatar");
+    expect(im.text).toContain("im-member-avatar");
+    expect(im.text).toContain("im-mention-avatar");
     expect(im.text).toContain('document.querySelector("#im-detail-threshold")');
     expect(im.text).toContain("serializeImComposer");
     expect(styles.text).toContain(".im-view { display: grid; grid-template-columns:");
@@ -78,5 +83,10 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain("#im-details-content :is(input:not");
     expect(styles.text).toContain("#im-detail-threshold::-webkit-slider-thumb");
     expect(styles.text).toContain(".im-settings-dialog .account-settings-form");
+    expect(styles.text).toContain(".im-conversation-character-avatar");
+    expect(styles.text).toContain(".im-option-avatar");
+    expect(styles.text).toContain(".im-selected-avatar");
+    expect(styles.text).toContain(".im-message-avatar");
+    expect(styles.text).toContain(".im-member-avatar");
   });
 });

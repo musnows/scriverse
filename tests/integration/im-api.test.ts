@@ -87,6 +87,15 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ name: "林舟", attributes: { identity: "北港领航员" }, profile: { summary: "谨慎而可靠" } })
       .expect(201);
+    const characterAvatarSha256 = "a".repeat(64);
+    runtime.store.setCharacterAvatar(character.body.data.id, {
+      mimeType: "image/png",
+      byteLength: 128,
+      sha256: characterAvatarSha256,
+      storageKey: "im-api-character-avatar.png",
+      width: 64,
+      height: 64
+    });
     const favoriteCharacter = await owner.agent.post(`/api/works/${work.body.data.id}/characters`)
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ name: "收藏角色" })
@@ -115,7 +124,11 @@ describe("全局 IM API", () => {
     ]);
     const searchedCharacters = await owner.agent.get(`/api/im/characters?workId=${work.body.data.id}&q=${encodeURIComponent("林舟")}`).expect(200);
     expect(searchedCharacters.body.data).toEqual([
-      expect.objectContaining({ id: character.body.data.id, name: "林舟" })
+      expect.objectContaining({
+        id: character.body.data.id,
+        name: "林舟",
+        avatarUrl: `/api/characters/${character.body.data.id}/avatar?v=${characterAvatarSha256}`
+      })
     ]);
 
     const settings = await owner.agent.patch("/api/im/settings")
@@ -140,6 +153,13 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ characterId: character.body.data.id })
       .expect(201);
+    expect(direct.body.data.avatarCharacters).toEqual([
+      expect.objectContaining({
+        characterId: character.body.data.id,
+        name: "林舟",
+        avatarUrl: `/api/im/conversations/${direct.body.data.id}/characters/${character.body.data.id}/avatar?v=${characterAvatarSha256}`
+      })
+    ]);
     const duplicateDirect = await owner.agent.post("/api/im/conversations/direct")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ characterId: character.body.data.id })
@@ -158,6 +178,16 @@ describe("全局 IM API", () => {
       })
       .expect(201);
     const groupId = group.body.data.id;
+    expect(group.body.data.avatarCharacters).toEqual([
+      expect.objectContaining({
+        characterId: character.body.data.id,
+        avatarUrl: `/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar?v=${characterAvatarSha256}`
+      })
+    ]);
+    expect(group.body.data.participants.characters[0]).toMatchObject({
+      characterId: character.body.data.id,
+      avatarUrl: `/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar?v=${characterAvatarSha256}`
+    });
 
     await member.agent.post(`/api/im/conversations/${groupId}/announcements`)
       .set("X-CSRF-Token", member.csrfToken)
@@ -211,6 +241,9 @@ describe("全局 IM API", () => {
       metadata: { type: "announcement" }
     });
     expect(memberView.body.data.messages[1].content).toContain("mention://character/");
+    expect(memberView.body.data.participants.characters[0].avatarUrl).toBe(
+      `/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar?v=${characterAvatarSha256}`
+    );
 
     await admin.agent.get(`/api/im/conversations/${groupId}`).expect(403);
 

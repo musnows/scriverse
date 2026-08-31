@@ -155,6 +155,15 @@ describe("IM AI 调度", () => {
         runtime.store.createCharacter(String(work.id), { name: "顾遥" })
       ];
     });
+    const avatarSha256 = "b".repeat(64);
+    runtime.store.setCharacterAvatar(String(characters[0]?.id), {
+      mimeType: "image/png",
+      byteLength: 128,
+      sha256: avatarSha256,
+      storageKey: "im-orchestrator-character-avatar.png",
+      width: 64,
+      height: 64
+    });
     runtime.im.updateSettings(owner.userId, {
       primaryModelId: models.primaryModelId,
       fallbackModelId: models.fallbackModelId,
@@ -196,10 +205,14 @@ describe("IM AI 调度", () => {
       { character_id: characters[0]?.id, score: 85, selected: 1 },
       { character_id: characters[1]?.id, score: 30, selected: 0 }
     ]);
-    expect(runtime.database.get(
-      "SELECT sender_character_id, content FROM im_messages WHERE conversation_id = ? AND sender_kind = 'character'",
+    const characterMessage = runtime.database.get(
+      "SELECT sender_character_id, sender_snapshot_json, content FROM im_messages WHERE conversation_id = ? AND sender_kind = 'character'",
       String(group.id)
-    )).toEqual({ sender_character_id: characters[0]?.id, content: "我来处理这件事。" });
+    );
+    expect(characterMessage).toMatchObject({ sender_character_id: characters[0]?.id, content: "我来处理这件事。" });
+    expect(JSON.parse(String(characterMessage?.sender_snapshot_json))).toMatchObject({
+      avatarUrl: `/api/im/conversations/${group.id}/characters/${characters[0]?.id}/avatar?v=${avatarSha256}`
+    });
   });
 
   it("允许 AI 互相 mention 并使用最初人类发起人的模型归属", async () => {

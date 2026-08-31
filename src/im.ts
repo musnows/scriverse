@@ -481,14 +481,16 @@ export class ImService {
 
   private mapCharacterMembership(row: Record<string, unknown>): Record<string, unknown> {
     const snapshot = json<Record<string, unknown>>(requiredString(row.snapshot_json), {});
+    const characterId = optionalString(row.character_id) ?? optionalString(snapshot.id);
+    const avatarSha256 = optionalString(row.avatar_sha256);
     return {
       membershipId: requiredString(row.id),
-      characterId: optionalString(row.character_id) ?? snapshot.id ?? null,
+      characterId,
       sourceWorkId: optionalString(row.source_work_id) ?? snapshot.workId ?? null,
       name: snapshot.name ?? "已删除角色",
       code: snapshot.code ?? "",
-      avatarUrl: row.character_id
-        ? `/api/im/conversations/${encodeURIComponent(requiredString(row.conversation_id))}/characters/${encodeURIComponent(requiredString(row.character_id))}/avatar`
+      avatarUrl: characterId && avatarSha256
+        ? `/api/im/conversations/${encodeURIComponent(requiredString(row.conversation_id))}/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
         : null,
       workTitle: snapshot.workTitle ?? "已删除作品",
       publicSummary: snapshot.publicSummary ?? "",
@@ -507,8 +509,11 @@ export class ImService {
       conversationId
     ).map((row) => this.mapHumanMembership(row));
     const characters = this.db.all(
-      `SELECT * FROM im_character_memberships WHERE conversation_id = ?
-       ORDER BY joined_at, id`,
+      `SELECT membership.*, avatar.sha256 AS avatar_sha256
+       FROM im_character_memberships membership
+       LEFT JOIN character_avatars avatar ON avatar.character_id = membership.character_id
+       WHERE membership.conversation_id = ?
+       ORDER BY membership.joined_at, membership.id`,
       conversationId
     ).map((row) => this.mapCharacterMembership(row));
     return { humans, characters };
@@ -536,6 +541,16 @@ export class ImService {
 
   private mapMessage(row: Record<string, unknown>): Record<string, unknown> {
     const messageId = requiredString(row.id);
+    const conversationId = requiredString(row.conversation_id);
+    const senderCharacterId = optionalString(row.sender_character_id);
+    const sender = json<Record<string, unknown>>(requiredString(row.sender_snapshot_json), {});
+    if (requiredString(row.sender_kind) === "character" && senderCharacterId) {
+      const avatar = this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", senderCharacterId);
+      const avatarSha256 = optionalString(avatar?.sha256);
+      sender.avatarUrl = avatarSha256
+        ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(senderCharacterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
+        : null;
+    }
     const mentions = this.db.all(
       "SELECT * FROM im_mentions WHERE message_id = ? ORDER BY position",
       messageId
@@ -547,13 +562,13 @@ export class ImService {
     }));
     return {
       id: messageId,
-      conversationId: requiredString(row.conversation_id),
+      conversationId,
       sequence: Number(row.sequence),
       contextEpoch: Number(row.context_epoch),
       senderKind: requiredString(row.sender_kind),
       senderUserId: optionalString(row.sender_user_id),
-      senderCharacterId: optionalString(row.sender_character_id),
-      sender: json(requiredString(row.sender_snapshot_json), {}),
+      senderCharacterId,
+      sender,
       content: requiredString(row.content),
       mentions,
       chainId: optionalString(row.chain_id),
@@ -564,6 +579,25 @@ export class ImService {
 
   private mapConversation(row: Record<string, unknown>, userId: string): Record<string, unknown> {
     const conversationId = requiredString(row.id);
+    const avatarCharacters = this.db.all(
+      `SELECT membership.character_id, membership.snapshot_json, avatar.sha256 AS avatar_sha256
+       FROM im_character_memberships membership
+       LEFT JOIN character_avatars avatar ON avatar.character_id = membership.character_id
+       WHERE membership.conversation_id = ? AND membership.left_at IS NULL AND membership.status = 'active'
+       ORDER BY membership.joined_at, membership.id LIMIT 3`,
+      conversationId
+    ).map((membership) => {
+      const snapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
+      const characterId = requiredString(membership.character_id);
+      const avatarSha256 = optionalString(membership.avatar_sha256);
+      return {
+        characterId,
+        name: snapshot.name ?? "角色",
+        avatarUrl: avatarSha256
+          ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
+          : null
+      };
+    });
     const activeMembership = this.activeMembership(conversationId, userId);
     const latestSequence = Number(this.db.get(
       "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM im_messages WHERE conversation_id = ?",
@@ -601,6 +635,7 @@ export class ImService {
       maxAiMessages: Number(row.max_ai_messages),
       contextEpoch: Number(row.context_epoch),
       status: requiredString(row.status),
+      avatarCharacters,
       active: Boolean(activeMembership) && requiredString(row.status) === "active",
       unreadCount: unread,
       mentionUnreadCount: mentionUnread,

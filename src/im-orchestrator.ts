@@ -592,6 +592,14 @@ export class ImOrchestrator {
     )?.sequence ?? 1);
     const mentions = this.validatedOutputMentions(conversationId, invocation.content);
     const snapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
+    const senderCharacterId = optionalString(membership.character_id);
+    const avatar = senderCharacterId
+      ? this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", senderCharacterId)
+      : undefined;
+    const avatarSha256 = optionalString(avatar?.sha256);
+    snapshot.avatarUrl = senderCharacterId && avatarSha256
+      ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(senderCharacterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
+      : null;
     const metadata = {
       modelId: requiredString(invocation.model.id),
       modelDisplayName: requiredString(invocation.model.displayName),
@@ -614,7 +622,7 @@ export class ImOrchestrator {
         conversationId,
         sequence,
         Number(conversation.context_epoch),
-        optionalString(membership.character_id),
+        senderCharacterId,
         JSON.stringify(snapshot),
         invocation.content,
         requiredString(chain.id),

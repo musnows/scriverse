@@ -14,6 +14,19 @@ function requestId() {
   return `im-${crypto.randomUUID()}`;
 }
 
+function imAvatarInitial(item, kind) {
+  const label = kind === "user"
+    ? item?.displayName || item?.username || "人"
+    : item?.name || "角";
+  return Array.from(String(label))[0] ?? (kind === "user" ? "人" : "角");
+}
+
+function bindImAvatarFallbacks(root) {
+  root.querySelectorAll("[data-im-avatar-image]").forEach((image) => {
+    image.addEventListener("error", () => image.remove(), { once: true });
+  });
+}
+
 export function serializeImComposer(root) {
   const visit = (node) => {
     if (node.nodeType === Node.TEXT_NODE) return node.nodeValue ?? "";
@@ -60,6 +73,15 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
 
   const currentUserId = () => state.user?.userId ?? "";
 
+  function imAvatarHtml(item, kind, extraClass = "") {
+    const avatarClass = kind === "user" ? "user-avatar" : "character-avatar";
+    const fallbackClass = kind === "user" ? "user-avatar-fallback" : "character-avatar-fallback";
+    const image = item?.avatarUrl
+      ? `<img src="${esc(item.avatarUrl)}" alt="" loading="lazy" decoding="async" data-im-avatar-image>`
+      : "";
+    return `<span class="${avatarClass}${extraClass ? ` ${esc(extraClass)}` : ""}" aria-hidden="true"><span class="${fallbackClass}">${esc(imAvatarInitial(item, kind))}</span>${image}</span>`;
+  }
+
   function renderUnread() {
     const count = conversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0);
     unreadBadge.textContent = count > 99 ? "99+" : String(count);
@@ -83,11 +105,14 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
   function renderConversationList() {
     listHost.innerHTML = conversations.length
       ? conversations.map((item) => `<button class="im-conversation-item${current?.id === item.id ? " is-active" : ""}" type="button" data-im-conversation="${esc(item.id)}">
-          <span class="im-conversation-avatar" aria-hidden="true">${item.kind === "group" ? "群" : "角"}</span>
+          ${array(item.avatarCharacters).length
+            ? `<span class="im-conversation-avatar-stack" aria-hidden="true">${array(item.avatarCharacters).map((character) => imAvatarHtml(character, "character", "im-conversation-character-avatar")).join("")}</span>`
+            : `<span class="im-conversation-avatar" aria-hidden="true">${item.kind === "group" ? "群" : "角"}</span>`}
           <span><strong>${esc(item.title)}</strong><small>${esc(conversationSubtitle(item))}</small></span>
           ${item.mentionUnreadCount ? `<b class="im-mention-unread">@${Number(item.mentionUnreadCount)}</b>` : item.unreadCount ? `<b class="im-item-unread">${Number(item.unreadCount)}</b>` : ""}
         </button>`).join("")
       : '<p class="im-empty">还没有 IM 会话。点击“新建会话”，先选书籍，再选择一个或多个角色。</p>';
+    bindImAvatarFallbacks(listHost);
   }
 
   function mentionLabel(mention) {
@@ -131,12 +156,16 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
       const announcement = model.type === "announcement";
       const label = announcement ? "旁白" : sender.name || sender.displayName || (message.senderKind === "system" ? "系统" : "成员");
       const own = message.senderUserId === currentUserId();
+      const avatar = announcement || message.senderKind === "system"
+        ? ""
+        : imAvatarHtml(sender, message.senderKind === "character" ? "character" : "user", "im-message-avatar");
       return `<article class="im-message is-${esc(message.senderKind)}${announcement ? " is-announcement" : ""}${own ? " is-own" : ""}" data-im-message="${esc(message.id)}">
-        <header><strong>${esc(label)}</strong><time>${esc(new Date(message.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }))}</time></header>
+        <header>${avatar}<strong>${esc(label)}</strong><time>${esc(new Date(message.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }))}</time></header>
         <div class="im-message-body message-body">${messageHtml(message)}</div>
         ${message.senderKind === "character" ? `<details class="im-model-details"><summary>调用详情</summary><span>${esc(model.modelDisplayName || model.modelId || "未知模型")} · ${model.modelStage === "fallback" ? "fallback" : "主模型"} · ${Number(model.attemptCount || 1)} 次请求 · ${Number(model.durationMs || 0)} ms</span></details>` : ""}
       </article>`;
-    }).join("") + (provisional ? `<article class="im-message is-character is-provisional"><header><strong>${esc(provisional.name || "角色")}</strong><span>正在输入</span></header><div class="im-message-body message-body">${renderMarkdown(provisional.content || "等待响应…")}</div></article>` : "");
+    }).join("") + (provisional ? `<article class="im-message is-character is-provisional"><header>${imAvatarHtml(provisional, "character", "im-message-avatar")}<strong>${esc(provisional.name || "角色")}</strong><span>正在输入</span></header><div class="im-message-body message-body">${renderMarkdown(provisional.content || "等待响应…")}</div></article>` : "");
+    bindImAvatarFallbacks(feed);
     feed.scrollTop = feed.scrollHeight;
   }
 
@@ -167,8 +196,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
       return;
     }
     const owner = current.ownerUserId === currentUserId();
-    const humanRows = activeHumans().map((item) => `<li><span>${esc(item.displayName)} <small>@${esc(item.username)}</small>${item.role === "owner" ? " · 群主" : ""}</span>${owner && item.userId !== currentUserId() ? `<button class="im-button im-button-danger-quiet" type="button" data-im-remove-human="${esc(item.userId)}" aria-label="移除 ${esc(item.displayName)}">移除</button>` : ""}</li>`).join("");
-    const characterRows = activeCharacters().map((item) => `<li><span>${esc(item.name)} <small>${esc(item.workTitle)}</small></span>${owner && current.kind === "group" && activeCharacters().length > 1 ? `<button class="im-button im-button-danger-quiet" type="button" data-im-remove-character="${esc(item.characterId)}" aria-label="移除 ${esc(item.name)}">移除</button>` : ""}</li>`).join("");
+    const humanRows = activeHumans().map((item) => `<li><span class="im-member-identity">${imAvatarHtml(item, "user", "im-member-avatar")}<span>${esc(item.displayName)} <small>@${esc(item.username)}</small>${item.role === "owner" ? " · 群主" : ""}</span></span>${owner && item.userId !== currentUserId() ? `<button class="im-button im-button-danger-quiet" type="button" data-im-remove-human="${esc(item.userId)}" aria-label="移除 ${esc(item.displayName)}">移除</button>` : ""}</li>`).join("");
+    const characterRows = activeCharacters().map((item) => `<li><span class="im-member-identity">${imAvatarHtml(item, "character", "im-member-avatar")}<span>${esc(item.name)} <small>${esc(item.workTitle)}</small></span></span>${owner && current.kind === "group" && activeCharacters().length > 1 ? `<button class="im-button im-button-danger-quiet" type="button" data-im-remove-character="${esc(item.characterId)}" aria-label="移除 ${esc(item.name)}">移除</button>` : ""}</li>`).join("");
     host.innerHTML = `<section><h3>AI 角色</h3><ul class="im-member-list">${characterRows}</ul></section>
       <section><h3>人类成员</h3><ul class="im-member-list">${humanRows}</ul></section>
       ${current.kind === "group" && owner ? `<section class="im-owner-settings"><h3>群设置</h3>
@@ -183,6 +212,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
       <section><h3>群主操作</h3><label>转让给<select id="im-transfer-select"><option value="">选择成员</option>${activeHumans().filter((item) => item.userId !== currentUserId()).map((item) => `<option value="${esc(item.userId)}">${esc(item.displayName)}</option>`).join("")}</select></label><button id="im-transfer" class="im-button im-button-secondary" type="button">转让群主</button><button id="im-disband" class="danger-button" type="button">解散群聊</button></section>` : ""}
       ${current.kind === "group" && !owner && current.active ? '<button id="im-leave" class="danger-button" type="button">退出群聊</button>' : ""}
       ${owner && current.kind === "group" ? '<section><h3>主动判断诊断</h3><div id="im-diagnostics"><p class="im-empty">尚无诊断记录。</p></div></section>' : ""}`;
+    bindImAvatarFallbacks(host);
     bindDetailActions(owner);
     if (owner && current.kind === "group") void loadDiagnostics();
   }
@@ -311,8 +341,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
   function renderCreateCharacterOptions() {
     const host = document.querySelector("#im-group-character-options");
     host.innerHTML = createCharacters.length
-      ? createCharacters.map((item) => `<label class="im-character-option"><input type="checkbox" value="${esc(item.id)}" ${createSelectedCharacters.has(item.id) ? "checked" : ""}><span><strong>${esc(item.name)}</strong><small>${characterPreferenceBadges(item)}${item.code ? `<em>${esc(item.code)}</em>` : ""}</small></span></label>`).join("")
+      ? createCharacters.map((item) => `<label class="im-character-option"><input type="checkbox" value="${esc(item.id)}" ${createSelectedCharacters.has(item.id) ? "checked" : ""}>${imAvatarHtml(item, "character", "im-option-avatar")}<span><strong>${esc(item.name)}</strong><small>${characterPreferenceBadges(item)}${item.code ? `<em>${esc(item.code)}</em>` : ""}</small></span></label>`).join("")
       : '<p class="im-empty">没有匹配的角色。</p>';
+    bindImAvatarFallbacks(host);
   }
 
   function renderCreateSelectedCharacters() {
@@ -320,8 +351,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
     const selected = [...createSelectedCharacters.values()];
     host.classList.toggle("hidden", selected.length === 0);
     host.innerHTML = selected.length
-      ? `<div><strong>已选角色</strong><small>${selected.length} / 10</small></div><div>${selected.map((item) => `<button type="button" data-im-remove-selected="${esc(item.id)}" aria-label="移除角色 ${esc(item.name)}（${esc(item.workTitle)}）"><span>${esc(item.name)}</span><small>${esc(item.workTitle)}</small><b aria-hidden="true">×</b></button>`).join("")}</div>`
+      ? `<div><strong>已选角色</strong><small>${selected.length} / 10</small></div><div>${selected.map((item) => `<button type="button" data-im-remove-selected="${esc(item.id)}" aria-label="移除角色 ${esc(item.name)}（${esc(item.workTitle)}）">${imAvatarHtml(item, "character", "im-selected-avatar")}<span>${esc(item.name)}</span><small>${esc(item.workTitle)}</small><b aria-hidden="true">×</b></button>`).join("")}</div>`
       : "";
+    bindImAvatarFallbacks(host);
   }
 
   function syncCreateSelection() {
@@ -419,13 +451,14 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
     const caret = composerCaret();
     if (caret) mentionCaretState = { anchor: caret.anchor, offset: caret.offset };
     mentionOptions = [
-      ...activeCharacters().map((item) => ({ kind: "character", id: item.characterId, label: item.name, detail: item.workTitle })),
-      ...activeHumans().map((item) => ({ kind: "user", id: item.userId, label: item.displayName, detail: `@${item.username}` }))
+      ...activeCharacters().map((item) => ({ ...item, kind: "character", id: item.characterId, label: item.name, detail: item.workTitle })),
+      ...activeHumans().map((item) => ({ ...item, kind: "user", id: item.userId, label: item.displayName, detail: `@${item.username}` }))
     ].filter((item) => item.label.toLocaleLowerCase("zh-CN").includes(query)).slice(0, 12);
     mentionIndex = mentionOptions.length ? 0 : -1;
     mentionMenu.innerHTML = mentionOptions.length
-      ? mentionOptions.map((item, index) => `<button type="button" role="option" aria-selected="${index === mentionIndex}" data-im-mention-index="${index}"><small>${item.kind === "character" ? "角色" : "用户"}</small><span><strong>${esc(item.label)}</strong><em>${esc(item.detail)}</em></span></button>`).join("")
+      ? mentionOptions.map((item, index) => `<button type="button" role="option" aria-selected="${index === mentionIndex}" data-im-mention-index="${index}">${imAvatarHtml(item, item.kind, "im-mention-avatar")}<span><strong>${esc(item.label)}</strong><em>${item.kind === "character" ? "角色" : "用户"} · ${esc(item.detail)}</em></span></button>`).join("")
       : '<p class="im-empty">没有匹配的群成员</p>';
+    bindImAvatarFallbacks(mentionMenu);
     mentionMenu.classList.remove("hidden");
     composer.setAttribute("aria-expanded", "true");
   }
@@ -496,7 +529,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
     const envelope = JSON.parse(event.data);
     const eventConversationId = envelope.conversationId;
     if (envelope.type === "delta" && current?.id === eventConversationId) {
-      provisional ??= { content: "", name: activeCharacters().find((item) => item.characterId === envelope.payload.characterId)?.name || "角色" };
+      const character = activeCharacters().find((item) => item.characterId === envelope.payload.characterId);
+      provisional ??= { content: "", characterId: envelope.payload.characterId, name: character?.name || "角色", avatarUrl: character?.avatarUrl || null };
       provisional.content += envelope.payload.delta || "";
       renderMessages();
       return;
