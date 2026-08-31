@@ -3736,6 +3736,30 @@ async function favoriteAiConversation(conversation) {
   toast(updated.isFavorite ? "对话已收藏" : "已取消收藏");
 }
 
+async function renameAiConversation(conversation) {
+  if (!conversation?.id) return;
+  const title = await inputToast("输入新的对话名称", {
+    title: "重命名对话",
+    inputLabel: "对话名称",
+    value: conversation.title || "新对话",
+    placeholder: "对话名称",
+    confirmLabel: "保存",
+    maxLength: 200
+  });
+  if (title === null) return;
+  if (!title) {
+    toast("对话名称不能为空", "error");
+    return;
+  }
+  const updated = await api(`/api/ai-conversations/${encodeURIComponent(conversation.id)}/title`, {
+    method: "PATCH",
+    body: { title }
+  });
+  upsertAiConversationSummary(updated);
+  applyAiConversationTitle(updated.title, updated.id);
+  toast("对话已重命名");
+}
+
 async function deleteAiConversation(conversation) {
   if (conversation.isFavorite === true) {
     toast("收藏的对话不能清理，请先取消收藏", "error");
@@ -20939,6 +20963,19 @@ $("#ai-history-action-menu").addEventListener("click", async (event) => {
       closeAiHistoryActionMenu(true);
     } catch (error) {
       toast(`对话收藏状态更新失败：${error.message}`, "error");
+      option.focus();
+    } finally {
+      option.disabled = false;
+    }
+    return;
+  }
+  if (action === "rename") {
+    option.disabled = true;
+    try {
+      await renameAiConversation(conversation);
+      closeAiHistoryActionMenu(true);
+    } catch (error) {
+      toast(`对话重命名失败：${error.message}`, "error");
       option.focus();
     } finally {
       option.disabled = false;

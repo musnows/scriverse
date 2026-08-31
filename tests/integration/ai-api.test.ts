@@ -832,6 +832,21 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(secondPage.body.data.items).toHaveLength(1);
   });
 
+  it("支持通过标题接口人工重命名对话并规范输入", async () => {
+    const created = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "旧对话名称" }).expect(201);
+    const conversationId = String(created.body.data.id);
+
+    const renamed = await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/title`).send({
+      title: "  新  对话\n名称  "
+    }).expect(200);
+    expect(renamed.body.data).toMatchObject({ id: conversationId, title: "新 对话 名称" });
+
+    const listed = await request(runtime.app).get(`/api/works/${workId}/ai-conversations`).expect(200);
+    expect(listed.body.data.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: conversationId, title: "新 对话 名称" })]));
+    await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/title`).send({ title: "   " }).expect(400);
+    await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/title`).send({ title: "合法标题", unexpected: true }).expect(400);
+  });
+
   it("收藏对话后置顶历史并禁止清理", async () => {
     const first = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "待收藏对话" }).expect(201);
     const second = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "普通对话" }).expect(201);
