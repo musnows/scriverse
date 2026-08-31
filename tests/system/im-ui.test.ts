@@ -24,6 +24,8 @@ describe("全局 IM 工作区界面", () => {
     ]);
 
     expect(page.text).toContain('id="im-open-button"');
+    expect(page.text).toContain('id="im-settings-button" class="im-icon-button im-settings-icon-button"');
+    expect(page.text).toContain('id="im-settings-button" class="im-icon-button im-settings-icon-button" type="button" aria-label="IM 设置" title="IM 设置"><svg class="settings-icon"');
     expect(page.text).toContain('id="im-view" class="im-view hidden"');
     expect(page.text).toContain('id="im-conversation-list"');
     expect(page.text).toContain('id="im-message-feed"');
@@ -50,6 +52,8 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
+    expect(page.text).toContain("feature=im-settings-gear-v1");
+    expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(application.text).toContain('/im.js?v=20260901-global-im-v19');
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');

@@ -4682,7 +4682,7 @@ body { font-size: var(--ui-font-size); }
 .im-button-danger-quiet { min-height: 28px; border: 1px solid color-mix(in srgb, #c44949 62%, var(--line)); background: color-mix(in srgb, #c44949 11%, var(--surface)); color: color-mix(in srgb, #c44949 78%, var(--ink)); }
 .im-button-danger-quiet:hover, .im-button-danger-quiet:focus-visible { border-color: #c44949; background: color-mix(in srgb, #c44949 21%, var(--surface)); outline: none; }
 .im-button:disabled { border-color: var(--line); background: var(--paper-deep); color: var(--muted); cursor: not-allowed; opacity: .56; transform: none; }
-.im-icon-button { display: inline-grid; place-items: center; width: 32px; min-width: 32px; height: 32px; padding: 0; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 17px; line-height: 1; }
+.im-icon-button { display: inline-grid; place-items: center; width: 32px; min-width: 32px; height: 32px; min-height: 32px; padding: 0; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 17px; line-height: 1; }
 .im-icon-button:hover, .im-icon-button:focus-visible { border-color: color-mix(in srgb, var(--muted) 62%, var(--line)); background: var(--paper-deep); color: var(--ink); outline: none; }
 #im-details-content > .danger-button, #im-disband { border-color: #c44949; background: color-mix(in srgb, #c44949 15%, var(--surface)); color: color-mix(in srgb, #c44949 78%, var(--ink)); }
 #im-details-content > .danger-button:hover, #im-details-content > .danger-button:focus-visible, #im-disband:hover, #im-disband:focus-visible { background: color-mix(in srgb, #c44949 25%, var(--surface)); }
