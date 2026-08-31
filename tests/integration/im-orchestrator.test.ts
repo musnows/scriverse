@@ -187,4 +187,69 @@ describe("IM AI 调度", () => {
       String(group.id)
     )).toEqual({ sender_character_id: characters[0]?.id, content: "我来处理这件事。" });
   });
+
+  it("允许 AI 互相 mention 并使用最初人类发起人的模型归属", async () => {
+    let firstCharacterId = "";
+    let secondCharacterId = "";
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-mutual-mention-test-master-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const system = messages[0]?.content ?? "";
+        const firstSpeaker = system.indexOf("林舟") < system.indexOf("顾遥");
+        return completion(firstSpeaker
+          ? `航线交给你复核，mention://character/${secondCharacterId}`
+          : "复核完成，星图没有异常。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const workOwner = runtime.auth.register({ username: "source_owner", password: "secure-password-123" }).session.user;
+    const groupOwner = runtime.auth.register({ username: "group_owner", password: "secure-password-123" }).session.user;
+    const member = runtime.auth.register({ username: "trigger_member", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const seeded = runWithRequestActor(actor(workOwner), () => {
+      const work = runtime.store.createWork({ title: "共享角色来源" });
+      const first = runtime.store.createCharacter(String(work.id), { name: "林舟" });
+      const second = runtime.store.createCharacter(String(work.id), { name: "顾遥" });
+      runtime.auth.addMember(String(work.id), groupOwner.userId, { role: "editor" }, workOwner.userId);
+      return { work, first, second };
+    });
+    firstCharacterId = String(seeded.first.id);
+    secondCharacterId = String(seeded.second.id);
+    runtime.im.updateSettings(member.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(groupOwner, {
+      title: "跨权限联络群",
+      characterIds: [firstCharacterId, secondCharacterId],
+      humanUserIds: [member.userId],
+      replyMode: "mention",
+      maxAiMessages: 5
+    });
+    const sent = runtime.im.sendMessage(member, String(group.id), {
+      content: `mention://character/${firstCharacterId} 请开始复核。`,
+      requestId: "im-mutual-mention-request-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+
+    expect(chain).toMatchObject({ status: "completed", generated_count: 2, initiator_user_id: member.userId, authorization_user_id: groupOwner.userId });
+    expect(runtime.database.all(
+      "SELECT sender_character_id, content FROM im_messages WHERE conversation_id = ? AND sender_kind = 'character' ORDER BY sequence",
+      String(group.id)
+    )).toEqual([
+      { sender_character_id: firstCharacterId, content: `航线交给你复核，mention://character/${secondCharacterId}` },
+      { sender_character_id: secondCharacterId, content: "复核完成，星图没有异常。" }
+    ]);
+    expect(runtime.database.all(
+      "SELECT DISTINCT created_by_user_id, work_id FROM ai_calls ORDER BY work_id",
+    )).toEqual([{ created_by_user_id: member.userId, work_id: String(seeded.work.id) }]);
+    expect(runtime.auth.workRole(member, String(seeded.work.id))).toBeNull();
+  });
 });
