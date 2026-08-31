@@ -7,3 +7,4 @@ export type KeyboardShortcutEvent = {
 };
 
 export function isGlobalSearchShortcut(event?: KeyboardShortcutEvent | null): boolean;
+export function isSaveShortcut(event?: KeyboardShortcutEvent | null, platform?: string): boolean;
