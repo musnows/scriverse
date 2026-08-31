@@ -49,6 +49,7 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("feature=global-im-v19");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
+    expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(application.text).toContain('/im.js?v=20260901-global-im-v19');
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');
@@ -105,6 +106,9 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain(".im-member-section-heading");
     expect(styles.text).toContain(".im-member-add-dialog");
     expect(styles.text).toContain(".im-member-picker-option");
+    expect(styles.text).toContain(".im-button-secondary { border: 1px solid var(--line); background: var(--surface); color: var(--muted);");
+    expect(styles.text).toContain(".im-button-announcement { border: 1px solid var(--im-narration-line); background: var(--im-narration-surface);");
+    expect(styles.text).toContain("border: 1px solid color-mix(in srgb, var(--green) 58%, var(--line));");
     expect(styles.text).toContain("--im-narration-surface:");
     expect(styles.text).toContain("background: var(--im-narration-surface)");
     expect(styles.text).toContain("border-width: 1px 0");
