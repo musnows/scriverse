@@ -1940,10 +1940,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     requireImUser(request);
     data(response, im.listModels());
   });
+  app.get("/api/im/works", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.listAvailableWorks(user));
+  });
   app.get("/api/im/characters", (request, response) => {
     const user = requireImUser(request);
-    const query = parse(z.object({ q: z.string().trim().max(100).default("") }).strict(), request.query);
-    data(response, im.listAvailableCharacters(user, query.q));
+    const query = parse(z.object({
+      q: z.string().trim().max(100).default(""),
+      workId: identifier.optional()
+    }).strict(), request.query);
+    data(response, im.listAvailableCharacters(user, query.q, query.workId));
   });
   app.get("/api/im/conversations", (request, response) => {
     const user = requireImUser(request);

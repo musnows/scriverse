@@ -87,6 +87,36 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ name: "林舟", attributes: { identity: "北港领航员" }, profile: { summary: "谨慎而可靠" } })
       .expect(201);
+    const favoriteCharacter = await owner.agent.post(`/api/works/${work.body.data.id}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "收藏角色" })
+      .expect(201);
+    const pinnedCharacter = await owner.agent.post(`/api/works/${work.body.data.id}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "置顶角色" })
+      .expect(201);
+    await owner.agent.patch(`/api/characters/${favoriteCharacter.body.data.id}/favorite`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ isFavorite: true })
+      .expect(200);
+    await owner.agent.patch(`/api/characters/${pinnedCharacter.body.data.id}/pin`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ isPinned: true })
+      .expect(200);
+
+    const imWorks = await owner.agent.get("/api/im/works").expect(200);
+    expect(imWorks.body.data).toEqual([
+      expect.objectContaining({ id: work.body.data.id, title: "IM 来源作品", characterCount: 3 })
+    ]);
+    const imCharacters = await owner.agent.get(`/api/im/characters?workId=${work.body.data.id}`).expect(200);
+    expect(imCharacters.body.data.slice(0, 2)).toEqual([
+      expect.objectContaining({ id: pinnedCharacter.body.data.id, isPinned: true }),
+      expect.objectContaining({ id: favoriteCharacter.body.data.id, isFavorite: true })
+    ]);
+    const searchedCharacters = await owner.agent.get(`/api/im/characters?workId=${work.body.data.id}&q=${encodeURIComponent("林舟")}`).expect(200);
+    expect(searchedCharacters.body.data).toEqual([
+      expect.objectContaining({ id: character.body.data.id, name: "林舟" })
+    ]);
 
     const settings = await owner.agent.patch("/api/im/settings")
       .set("X-CSRF-Token", owner.csrfToken)

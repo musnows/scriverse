@@ -35,7 +35,12 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
   const unreadBadge = document.querySelector("#im-unread-count");
   let conversations = [];
   let current = null;
+  let works = [];
   let characters = [];
+  let createCharacters = [];
+  const createSelectedCharacters = new Map();
+  let createSearchTimer = null;
+  let createSearchRequest = 0;
   let users = [];
   let models = [];
   let settings = null;
@@ -82,7 +87,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
           <span><strong>${esc(item.title)}</strong><small>${esc(conversationSubtitle(item))}</small></span>
           ${item.mentionUnreadCount ? `<b class="im-mention-unread">@${Number(item.mentionUnreadCount)}</b>` : item.unreadCount ? `<b class="im-item-unread">${Number(item.unreadCount)}</b>` : ""}
         </button>`).join("")
-      : '<p class="im-empty">还没有 IM 会话。选择一个角色单聊，或创建包含 AI 角色的群聊。</p>';
+      : '<p class="im-empty">还没有 IM 会话。点击“新建会话”，先选书籍，再选择一个或多个角色。</p>';
   }
 
   function mentionLabel(mention) {
@@ -263,13 +268,13 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
   }
 
   async function loadCatalogs() {
-    [characters, users, models, settings] = await Promise.all([
+    [works, characters, users, models, settings] = await Promise.all([
+      api("/api/im/works"),
       api("/api/im/characters"),
       api("/api/users/directory?q="),
       api("/api/im/models"),
       api("/api/im/settings")
     ]);
-    document.querySelector("#im-direct-character").innerHTML = '<option value="">选择角色</option>' + characters.map((item) => `<option value="${esc(item.id)}">${esc(item.name)} · ${esc(item.workTitle)}</option>`).join("");
   }
 
   function openSettings() {
@@ -284,11 +289,90 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
     dialog.showModal();
   }
 
-  function openGroupDialog() {
+  function characterPreferenceBadges(item) {
+    return [
+      item.isPinned ? '<b class="im-character-preference is-pinned">置顶</b>' : "",
+      item.isFavorite ? '<b class="im-character-preference is-favorite">已收藏</b>' : ""
+    ].filter(Boolean).join("");
+  }
+
+  function renderCreateCharacterOptions() {
+    const host = document.querySelector("#im-group-character-options");
+    host.innerHTML = createCharacters.length
+      ? createCharacters.map((item) => `<label class="im-character-option"><input type="checkbox" value="${esc(item.id)}" ${createSelectedCharacters.has(item.id) ? "checked" : ""}><span><strong>${esc(item.name)}</strong><small>${characterPreferenceBadges(item)}${item.code ? `<em>${esc(item.code)}</em>` : ""}</small></span></label>`).join("")
+      : '<p class="im-empty">没有匹配的角色。</p>';
+  }
+
+  function renderCreateSelectedCharacters() {
+    const host = document.querySelector("#im-create-selected");
+    const selected = [...createSelectedCharacters.values()];
+    host.classList.toggle("hidden", selected.length === 0);
+    host.innerHTML = selected.length
+      ? `<div><strong>已选角色</strong><small>${selected.length} / 10</small></div><div>${selected.map((item) => `<button type="button" data-im-remove-selected="${esc(item.id)}" aria-label="移除角色 ${esc(item.name)}（${esc(item.workTitle)}）"><span>${esc(item.name)}</span><small>${esc(item.workTitle)}</small><b aria-hidden="true">×</b></button>`).join("")}</div>`
+      : "";
+  }
+
+  function syncCreateSelection() {
+    const selected = [...createSelectedCharacters.values()];
+    const count = selected.length;
+    const hasWork = Boolean(document.querySelector("#im-create-work").value);
+    const groupMode = count >= 2;
+    const groupSection = document.querySelector("#im-create-group-settings");
+    const humanSection = document.querySelector("#im-create-human-section");
+    const title = document.querySelector("#im-create-group-title");
+    const submit = document.querySelector("#im-create-submit");
+    groupSection.classList.toggle("hidden", !groupMode);
+    humanSection.classList.toggle("hidden", !groupMode);
+    groupSection.querySelectorAll("input, select").forEach((control) => { control.disabled = !groupMode; });
+    humanSection.querySelectorAll("input").forEach((control) => { control.disabled = !groupMode; });
+    renderCreateSelectedCharacters();
+    title.required = groupMode;
+    if (groupMode && !title.value.trim()) title.value = selected.slice(0, 3).map((item) => item.name).join("、").slice(0, 80);
+    submit.disabled = count === 0 || !hasWork;
+    submit.textContent = !hasWork ? "请先选择书籍" : count === 0 ? "请选择角色" : count === 1 ? "创建单聊" : `创建群聊（${count} 个角色）`;
+    document.querySelector("#im-create-guidance").textContent = !hasWork
+      ? "请先选择一本书，再选择要开始会话的角色。"
+      : count === 0
+        ? "请选择角色。置顶和收藏的角色会优先显示。"
+        : count === 1
+          ? `将创建与“${selected[0].name}”的单聊。`
+          : `将创建包含 ${count} 个角色的群聊，可继续添加人类成员。`;
+  }
+
+  async function loadCreateCharacters() {
+    const workId = document.querySelector("#im-create-work").value;
+    const search = document.querySelector("#im-create-search");
+    const requestId = ++createSearchRequest;
+    if (!workId) {
+      createCharacters = [];
+      search.disabled = true;
+      document.querySelector("#im-group-character-options").innerHTML = '<p class="im-empty">选择书籍后显示角色。</p>';
+      return;
+    }
+    search.disabled = false;
+    const query = search.value.trim();
+    const nextCharacters = array(await api(`/api/im/characters?workId=${encodeURIComponent(workId)}&q=${encodeURIComponent(query)}`));
+    if (requestId !== createSearchRequest) return;
+    createCharacters = nextCharacters;
+    renderCreateCharacterOptions();
+  }
+
+  function openConversationDialog() {
     const dialog = document.querySelector("#im-group-dialog");
     document.querySelector("#im-group-form").reset();
-    document.querySelector("#im-group-character-options").innerHTML = characters.map((item) => `<label><input type="checkbox" name="characterId" value="${esc(item.id)}"><span><strong>${esc(item.name)}</strong><small>${esc(item.workTitle)}</small></span></label>`).join("") || '<p class="im-empty">没有同时具备角色读取和 AI 对话写入权限的角色。</p>';
+    if (createSearchTimer !== null) window.clearTimeout(createSearchTimer);
+    createSearchTimer = null;
+    createSearchRequest += 1;
+    createSelectedCharacters.clear();
+    createCharacters = [];
+    const workSelect = document.querySelector("#im-create-work");
+    workSelect.innerHTML = '<option value="">请选择书籍</option>' + works.map((work) => `<option value="${esc(work.id)}">${esc(work.title)} · ${Number(work.characterCount)} 个角色</option>`).join("");
+    const search = document.querySelector("#im-create-search");
+    search.value = "";
+    search.disabled = true;
+    document.querySelector("#im-group-character-options").innerHTML = '<p class="im-empty">选择书籍后显示角色。</p>';
     document.querySelector("#im-group-human-options").innerHTML = users.filter((item) => item.userId !== currentUserId()).map((item) => `<label><input type="checkbox" name="humanUserId" value="${esc(item.userId)}"><span><strong>${esc(item.displayName)}</strong><small>@${esc(item.username)}</small></span></label>`).join("") || '<p class="im-empty">没有可添加的其他用户。</p>';
+    syncCreateSelection();
     dialog.showModal();
   }
 
@@ -451,13 +535,43 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
   function bind() {
     document.querySelector("#im-open-button").addEventListener("click", () => void open().catch((error) => toast(error.message, "error")));
     document.querySelector("#im-settings-button").addEventListener("click", openSettings);
-    document.querySelector("#im-new-group").addEventListener("click", openGroupDialog);
-    document.querySelector("#im-direct-character").addEventListener("change", async (event) => {
-      if (!event.target.value) return;
-      const conversation = await api("/api/im/conversations/direct", { method: "POST", body: { characterId: event.target.value } });
-      event.target.value = "";
-      await refreshConversations();
-      await openConversation(conversation.id);
+    document.querySelector("#im-new-conversation").addEventListener("click", openConversationDialog);
+    document.querySelector("#im-create-work").addEventListener("change", () => {
+      createCharacters = [];
+      document.querySelector("#im-create-search").value = "";
+      document.querySelector("#im-group-character-options").innerHTML = document.querySelector("#im-create-work").value
+        ? '<p class="im-empty">正在载入角色…</p>'
+        : '<p class="im-empty">选择书籍后显示角色。</p>';
+      syncCreateSelection();
+      void loadCreateCharacters().catch((error) => toast(error.message, "error"));
+    });
+    document.querySelector("#im-create-search").addEventListener("input", () => {
+      if (createSearchTimer !== null) window.clearTimeout(createSearchTimer);
+      createSearchTimer = window.setTimeout(() => {
+        createSearchTimer = null;
+        void loadCreateCharacters().catch((error) => toast(error.message, "error"));
+      }, 160);
+    });
+    document.querySelector("#im-group-character-options").addEventListener("change", (event) => {
+      const checkbox = event.target.closest('input[type="checkbox"]');
+      if (!checkbox) return;
+      const item = createCharacters.find((character) => character.id === checkbox.value);
+      if (!item) return;
+      if (checkbox.checked && createSelectedCharacters.size >= 10) {
+        checkbox.checked = false;
+        toast("一个群聊最多选择 10 个 AI 角色", "warning");
+        return;
+      }
+      if (checkbox.checked) createSelectedCharacters.set(item.id, item);
+      else createSelectedCharacters.delete(item.id);
+      syncCreateSelection();
+    });
+    document.querySelector("#im-create-selected").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-im-remove-selected]");
+      if (!button) return;
+      createSelectedCharacters.delete(button.dataset.imRemoveSelected);
+      renderCreateCharacterOptions();
+      syncCreateSelection();
     });
     listHost.addEventListener("click", (event) => {
       const button = event.target.closest("[data-im-conversation]");
@@ -535,14 +649,18 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
     document.querySelector("#im-group-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
-      const conversation = await api("/api/im/conversations/group", { method: "POST", body: {
-        title: String(form.get("title") || "").trim(),
-        characterIds: form.getAll("characterId").map(String),
-        humanUserIds: form.getAll("humanUserId").map(String),
-        replyMode: String(form.get("replyMode") || "mention"),
-        responseThreshold: Number(form.get("responseThreshold") || 60),
-        maxAiMessages: Number(form.get("maxAiMessages") || 20)
-      } });
+      const characterIds = [...createSelectedCharacters.keys()];
+      if (!characterIds.length) return;
+      const conversation = characterIds.length === 1
+        ? await api("/api/im/conversations/direct", { method: "POST", body: { characterId: characterIds[0] } })
+        : await api("/api/im/conversations/group", { method: "POST", body: {
+            title: String(form.get("title") || "").trim(),
+            characterIds,
+            humanUserIds: form.getAll("humanUserId").map(String),
+            replyMode: String(form.get("replyMode") || "mention"),
+            responseThreshold: Number(form.get("responseThreshold") || 60),
+            maxAiMessages: Number(form.get("maxAiMessages") || 20)
+          } });
       document.querySelector("#im-group-dialog").close();
       await refreshConversations();
       await openConversation(conversation.id);

@@ -212,19 +212,69 @@ export class ImService {
     }));
   }
 
-  listAvailableCharacters(user: AuthUser, query = ""): Record<string, unknown>[] {
+  listAvailableWorks(user: AuthUser): Record<string, unknown>[] {
+    return this.db.all(
+      `SELECT DISTINCT work.* FROM works work
+       LEFT JOIN work_memberships membership ON membership.work_id = work.id AND membership.user_id = ?
+       WHERE work.deleted_at IS NULL AND COALESCE(work.is_internal, 0) = 0
+         AND (work.owner_user_id = ? OR membership.user_id = ?)
+       ORDER BY work.updated_at DESC, work.title`,
+      user.userId,
+      user.userId,
+      user.userId
+    ).flatMap((work) => {
+      const workId = requiredString(work.id);
+      const permissions = this.auth.workModulePermissions(user, workId, true);
+      if (!permissions || !canReadWorkModule(permissions, "characters") || !canWriteWorkModule(permissions, "ai-chat")) return [];
+      return [{
+        id: workId,
+        title: requiredString(work.title),
+        characterCount: Number(this.db.get(
+          "SELECT COUNT(*) AS count FROM characters WHERE work_id = ? AND merged_into_character_id IS NULL",
+          workId
+        )?.count ?? 0)
+      }];
+    }).filter((work) => Number(work.characterCount) > 0);
+  }
+
+  listAvailableCharacters(user: AuthUser, query = "", selectedWorkId?: string): Record<string, unknown>[] {
     const normalizedQuery = query.normalize("NFKC").trim();
+    if (selectedWorkId) {
+      this.assertWorkMembership(user.userId, selectedWorkId);
+      const permissions = this.auth.workModulePermissions(user, selectedWorkId, true);
+      if (!permissions || !canReadWorkModule(permissions, "characters") || !canWriteWorkModule(permissions, "ai-chat")) {
+        throw new AppError(403, "IM_CHARACTER_ACCESS_DENIED", "需要角色读取和 AI 对话写入权限才能浏览这本书的角色");
+      }
+    }
     const rows = this.db.all(
-      `SELECT character.id, character.work_id, work.title AS work_title
+      `SELECT character.id, character.work_id, work.title AS work_title,
+              EXISTS (
+                SELECT 1 FROM work_entity_pins pin
+                WHERE pin.work_id = character.work_id AND pin.entity_type = 'character'
+                  AND pin.entity_id = character.id AND pin.is_pinned = 1
+              ) AS is_pinned,
+              EXISTS (
+                SELECT 1 FROM work_entity_favorites favorite
+                WHERE favorite.work_id = character.work_id AND favorite.entity_type = 'character'
+                  AND favorite.entity_id = character.id AND favorite.user_id = ? AND favorite.is_favorite = 1
+              ) AS user_is_favorite
        FROM characters character JOIN works work ON work.id = character.work_id
        LEFT JOIN work_memberships membership ON membership.work_id = work.id AND membership.user_id = ?
        WHERE work.deleted_at IS NULL AND character.merged_into_character_id IS NULL
          AND (work.owner_user_id = ? OR membership.user_id = ?)
-         AND (? = '' OR character.name LIKE '%' || ? || '%' COLLATE NOCASE)
-       ORDER BY work.updated_at DESC, character.name LIMIT 100`,
+         AND (? IS NULL OR character.work_id = ?)
+         AND (? = '' OR character.name LIKE '%' || ? || '%' COLLATE NOCASE OR EXISTS (
+           SELECT 1 FROM character_names name
+           WHERE name.character_id = character.id AND name.display_name LIKE '%' || ? || '%' COLLATE NOCASE
+         ))
+       ORDER BY work.updated_at DESC, is_pinned DESC, user_is_favorite DESC, character.name`,
       user.userId,
       user.userId,
       user.userId,
+      user.userId,
+      selectedWorkId ?? null,
+      selectedWorkId ?? null,
+      normalizedQuery,
       normalizedQuery,
       normalizedQuery
     );
@@ -241,6 +291,8 @@ export class ImService {
         code: requiredString(character.code),
         gender: requiredString(character.gender),
         isDead: Boolean(character.isDead),
+        isPinned: Boolean(row.is_pinned),
+        isFavorite: Boolean(row.user_is_favorite),
         avatarUrl: character.avatarUrl ?? null,
         publicSummary: publicCharacterSummary(character)
       }];
