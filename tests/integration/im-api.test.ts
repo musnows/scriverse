@@ -1,0 +1,189 @@
+import request from "supertest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createRuntime, type Runtime } from "../../src/app.js";
+import { PLATFORM_AI_WORK_ID } from "../../src/database.js";
+
+type RegisteredUser = {
+  agent: ReturnType<typeof request.agent>;
+  csrfToken: string;
+  user: { userId: string; username: string; displayName: string };
+};
+
+const setupToken = "im-api-test-setup-token-with-at-least-32-characters";
+
+async function register(runtime: Runtime, username: string): Promise<RegisteredUser> {
+  const agent = request.agent(runtime.app);
+  const captcha = await request(runtime.app).get("/api/auth/captcha").expect(200);
+  const response = await agent.post("/api/auth/register").send({
+    username,
+    password: "secure-password-123",
+    passwordConfirmation: "secure-password-123",
+    setupToken,
+    captchaId: captcha.body.data.captchaId,
+    captchaAnswer: captcha.body.data.answer
+  }).expect(201);
+  return { agent, csrfToken: response.body.data.csrfToken, user: response.body.data.user };
+}
+
+function seedModels(runtime: Runtime): { primaryModelId: string; fallbackModelId: string } {
+  const timestamp = "2026-08-31T00:00:00.000Z";
+  runtime.database.run(
+    `INSERT INTO providers (
+       id, work_id, name, base_url, encrypted_key, key_iv, key_tag, key_hint,
+       status, connection_status, created_at, updated_at
+     ) VALUES ('provider-im', ?, 'IM Provider', 'https://example.test/v1', 'cipher', 'iv', 'tag', 'hint',
+       'enabled', 'success', ?, ?)`,
+    PLATFORM_AI_WORK_ID,
+    timestamp,
+    timestamp
+  );
+  const models: Array<[string, string, string]> = [
+    ["model-im-primary", "Primary", "primary-model"],
+    ["model-im-fallback", "Fallback", "fallback-model"]
+  ];
+  for (const [id, displayName, modelId] of models) {
+    runtime.database.run(
+      `INSERT INTO models (
+         id, provider_id, display_name, model_id, model_kind, created_at, updated_at
+       ) VALUES (?, 'provider-im', ?, ?, 'chat', ?, ?)`,
+      id,
+      displayName,
+      modelId,
+      timestamp,
+      timestamp
+    );
+  }
+  return { primaryModelId: "model-im-primary", fallbackModelId: "model-im-fallback" };
+}
+
+describe("全局 IM API", () => {
+  let runtime: Runtime;
+
+  afterEach(async () => {
+    await runtime?.close();
+  });
+
+  it("按成员任期隔离群历史并允许群主分享跨书角色", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-api-test-master-secret-with-enough-length",
+      serveUi: false,
+      revealCaptchaAnswer: true,
+      security: { allowRegistration: true, enforceSameOrigin: true, setupToken }
+    });
+    const admin = await register(runtime, "im_admin");
+    const owner = await register(runtime, "im_owner");
+    const member = await register(runtime, "im_member");
+    const lateMember = await register(runtime, "im_late_member");
+    const models = seedModels(runtime);
+
+    await request(runtime.app).get("/api/im/conversations").expect(401);
+
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "IM 来源作品" })
+      .expect(201);
+    const character = await owner.agent.post(`/api/works/${work.body.data.id}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "林舟", attributes: { identity: "北港领航员" }, profile: { summary: "谨慎而可靠" } })
+      .expect(201);
+
+    const settings = await owner.agent.patch("/api/im/settings")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        preferredName: "舰长",
+        pronouns: "她",
+        identitySummary: "远航队指挥官",
+        additionalNotes: "偏好直接沟通",
+        primaryModelId: models.primaryModelId,
+        fallbackModelId: models.fallbackModelId,
+        retryCount: 3
+      })
+      .expect(200);
+    expect(settings.body.data).toMatchObject({ configured: true, preferredName: "舰长", retryCount: 3 });
+    await owner.agent.patch("/api/im/settings")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ primaryModelId: models.primaryModelId, fallbackModelId: models.primaryModelId })
+      .expect(400);
+
+    const direct = await owner.agent.post("/api/im/conversations/direct")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ characterId: character.body.data.id })
+      .expect(201);
+    const duplicateDirect = await owner.agent.post("/api/im/conversations/direct")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ characterId: character.body.data.id })
+      .expect(201);
+    expect(duplicateDirect.body.data.id).toBe(direct.body.data.id);
+
+    const group = await owner.agent.post("/api/im/conversations/group")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        title: "远航群",
+        characterIds: [character.body.data.id],
+        humanUserIds: [member.user.userId],
+        replyMode: "mention",
+        responseThreshold: 60,
+        maxAiMessages: 20
+      })
+      .expect(201);
+    const groupId = group.body.data.id;
+
+    const firstMessage = await owner.agent.post(`/api/im/conversations/${groupId}/messages`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        content: `mention://character/${character.body.data.id} 我们出发。`,
+        requestId: "im-message-request-0001"
+      })
+      .expect(201);
+    expect(firstMessage.body.data.chain).toMatchObject({ status: "queued", mode: "mention" });
+    expect(firstMessage.body.data.message.mentions).toEqual([
+      expect.objectContaining({ kind: "character", id: character.body.data.id })
+    ]);
+
+    const memberView = await member.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(memberView.body.data.messages).toHaveLength(1);
+    expect(memberView.body.data.messages[0].content).toContain("mention://character/");
+
+    await admin.agent.get(`/api/im/conversations/${groupId}`).expect(403);
+
+    const joined = await owner.agent.post(`/api/im/conversations/${groupId}/humans`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: lateMember.user.userId })
+      .expect(201);
+    expect(joined.body.data.contextEpoch).toBe(2);
+
+    const lateView = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(lateView.body.data.messages).toHaveLength(1);
+    expect(lateView.body.data.messages[0].metadata).toMatchObject({ type: "human-joined" });
+    expect(lateView.body.data.messages[0].content).not.toContain("我们出发");
+
+    await lateMember.agent.post(`/api/im/conversations/${groupId}/messages`)
+      .set("X-CSRF-Token", lateMember.csrfToken)
+      .send({ content: "我已登舰。", requestId: "im-message-request-0002" })
+      .expect(201);
+    const ownerAfter = await owner.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(ownerAfter.body.data.messages.map((item: { content: string }) => item.content)).toEqual([
+      expect.stringContaining("我们出发"),
+      "im_late_member 加入了群聊",
+      "我已登舰。"
+    ]);
+
+    await lateMember.agent.post(`/api/im/conversations/${groupId}/leave`)
+      .set("X-CSRF-Token", lateMember.csrfToken)
+      .send({})
+      .expect(204);
+    const readOnly = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(readOnly.body.data.active).toBe(false);
+    await lateMember.agent.post(`/api/im/conversations/${groupId}/messages`)
+      .set("X-CSRF-Token", lateMember.csrfToken)
+      .send({ content: "不能发送", requestId: "im-message-request-0003" })
+      .expect(403);
+
+    await owner.agent.post(`/api/im/conversations/${groupId}/transfer`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: member.user.userId })
+      .expect(403);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});

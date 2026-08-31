@@ -68,6 +68,7 @@ import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
+import { ImService } from "./im.js";
 import { OfflineSyncService } from "./offline-sync.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -1060,6 +1061,7 @@ export type Runtime = {
   liteLlmPriceCache: LiteLlmPriceCache;
   backups: S3BackupManager;
   auth: UserAuthService;
+  im: ImService;
   offlineSync: OfflineSyncService;
   attachmentStorage: AttachmentStorage;
   characterAvatarStorage: AttachmentStorage;
@@ -1517,6 +1519,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
   const store = new Store(database);
+  const im = new ImService(store, auth);
   const offlineSync = new OfflineSyncService(database, store);
   const platformAiSettings = store.getPlatformAiSettings();
   const platformAiStreamIdleTimeoutMs = normalizeAiStreamIdleTimeoutSeconds(
@@ -1890,6 +1893,132 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const updated = auth.updateUser(request.authUser, request.params.userId, parse(userUpdateSchema, request.body));
     store.audit(null, "user.updated", "user", updated.userId, { role: updated.role, status: updated.status });
     data(response, updated);
+  });
+
+  const requireImUser = (request: Request): AuthUser => {
+    if (!request.authUser || !hasInteractiveSession(request)) {
+      throw new AppError(401, "SESSION_REQUIRED", "请使用交互式会话访问 IM");
+    }
+    return request.authUser;
+  };
+  const imSettingsSchema = z.object({
+    preferredName: z.string().trim().max(80).optional(),
+    pronouns: z.string().trim().max(80).optional(),
+    identitySummary: z.string().trim().max(2000).optional(),
+    additionalNotes: z.string().trim().max(4000).optional(),
+    primaryModelId: identifier.nullable().optional(),
+    fallbackModelId: identifier.nullable().optional(),
+    retryCount: z.number().int().min(1).max(20).optional()
+  }).strict();
+  const imGroupSchema = z.object({
+    title: nonEmpty.max(80),
+    characterIds: z.array(identifier).min(1).max(10),
+    humanUserIds: z.array(identifier).max(49).optional(),
+    replyMode: z.enum(["mention", "proactive"]).optional(),
+    responseThreshold: z.number().int().min(0).max(100).optional(),
+    maxAiMessages: z.number().int().min(1).max(100).optional()
+  }).strict();
+  const imGroupUpdateSchema = imGroupSchema.pick({
+    title: true,
+    replyMode: true,
+    responseThreshold: true,
+    maxAiMessages: true
+  }).partial().strict();
+
+  app.get("/api/im/settings", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.getSettings(user.userId));
+  });
+  app.patch("/api/im/settings", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.updateSettings(user.userId, parse(imSettingsSchema, request.body)));
+  });
+  app.get("/api/im/models", (request, response) => {
+    requireImUser(request);
+    data(response, im.listModels());
+  });
+  app.get("/api/im/characters", (request, response) => {
+    const user = requireImUser(request);
+    const query = parse(z.object({ q: z.string().trim().max(100).default("") }).strict(), request.query);
+    data(response, im.listAvailableCharacters(user, query.q));
+  });
+  app.get("/api/im/conversations", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.listConversations(user.userId));
+  });
+  app.post("/api/im/conversations/direct", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({ characterId: identifier }).strict(), request.body);
+    data(response, im.createDirect(user, input.characterId), 201);
+  });
+  app.post("/api/im/conversations/group", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.createGroup(user, parse(imGroupSchema, request.body)), 201);
+  });
+  app.get("/api/im/conversations/:conversationId", (request, response) => {
+    const user = requireImUser(request);
+    const query = parse(z.object({ beforeSequence: z.coerce.number().int().positive().optional() }).strict(), request.query);
+    data(response, im.getConversation(request.params.conversationId, user.userId, query.beforeSequence));
+  });
+  app.patch("/api/im/conversations/:conversationId", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.updateGroup(user, request.params.conversationId, parse(imGroupUpdateSchema, request.body)));
+  });
+  app.post("/api/im/conversations/:conversationId/humans", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({ userId: identifier }).strict(), request.body);
+    data(response, im.addHuman(user, request.params.conversationId, input.userId), 201);
+  });
+  app.delete("/api/im/conversations/:conversationId/humans/:userId", (request, response) => {
+    const user = requireImUser(request);
+    im.removeHuman(user, request.params.conversationId, request.params.userId);
+    noContent(response);
+  });
+  app.post("/api/im/conversations/:conversationId/leave", (request, response) => {
+    const user = requireImUser(request);
+    parse(z.object({}).strict(), request.body ?? {});
+    im.leaveGroup(user, request.params.conversationId);
+    noContent(response);
+  });
+  app.post("/api/im/conversations/:conversationId/characters", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({ characterId: identifier }).strict(), request.body);
+    data(response, im.addCharacter(user, request.params.conversationId, input.characterId), 201);
+  });
+  app.delete("/api/im/conversations/:conversationId/characters/:characterId", (request, response) => {
+    const user = requireImUser(request);
+    im.removeCharacter(user, request.params.conversationId, request.params.characterId);
+    noContent(response);
+  });
+  app.post("/api/im/conversations/:conversationId/transfer", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({ userId: identifier }).strict(), request.body);
+    data(response, im.transferGroup(user, request.params.conversationId, input.userId));
+  });
+  app.post("/api/im/conversations/:conversationId/disband", (request, response) => {
+    const user = requireImUser(request);
+    parse(z.object({}).strict(), request.body ?? {});
+    im.disbandGroup(user, request.params.conversationId);
+    noContent(response);
+  });
+  app.post("/api/im/conversations/:conversationId/messages", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({
+      content: z.string().trim().min(1).max(20_000),
+      requestId: idempotencyKeySchema
+    }).strict(), request.body);
+    data(response, im.sendMessage(user, request.params.conversationId, input), 201);
+  });
+  app.post("/api/im/conversations/:conversationId/read", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({ sequence: z.number().int().min(0) }).strict(), request.body);
+    data(response, im.markRead(user.userId, request.params.conversationId, input.sequence));
+  });
+  app.post("/api/im/conversations/:conversationId/stop", (request, response) => {
+    const user = requireImUser(request);
+    parse(z.object({}).strict(), request.body ?? {});
+    im.stopChain(user.userId, request.params.conversationId);
+    noContent(response);
   });
 
   app.get("/api/works", (request, response) => {
@@ -4285,5 +4414,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     })();
     return closePromise;
   };
-  return { app, database, store, ai, liteLlmPriceCache, backups, auth, offlineSync, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
+  return { app, database, store, ai, liteLlmPriceCache, backups, auth, im, offlineSync, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
 }
