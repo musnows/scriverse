@@ -27,6 +27,10 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain('id="im-settings-button" class="im-icon-button im-settings-icon-button"');
     expect(page.text).toContain('id="im-settings-button" class="im-icon-button im-settings-icon-button" type="button" aria-label="IM 设置" title="IM 设置"><svg class="settings-icon"');
     expect(page.text).toContain('id="im-view" class="im-view hidden"');
+    expect(page.text).toContain('id="im-view" class="im-view hidden" aria-label="IM 工作区"');
+    expect(page.text).toContain('class="im-create-action-buttons"');
+    expect(page.text).not.toContain('id="im-workspace-title"');
+    expect(page.text).not.toContain('class="im-sidebar-header"');
     expect(page.text).toContain('id="im-conversation-list"');
     expect(page.text).toContain('id="im-message-feed"');
     expect(page.text).toContain('id="im-details"');
@@ -54,6 +58,7 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
+    expect(page.text).toContain("feature=im-sidebar-compact-v1");
     expect(application.text).toContain('/im.js?v=20260901-global-im-v19');
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');
@@ -110,6 +115,8 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain(".im-member-section-heading");
     expect(styles.text).toContain(".im-member-add-dialog");
     expect(styles.text).toContain(".im-member-picker-option");
+    expect(styles.text).toContain(".im-conversations { display: flex; flex-direction: column;");
+    expect(styles.text).toContain(".im-create-action-buttons");
     expect(styles.text).toContain(".im-button-secondary { border: 1px solid var(--line); background: var(--surface); color: var(--muted);");
     expect(styles.text).toContain(".im-button-announcement { border: 1px solid var(--im-narration-line); background: var(--im-narration-surface);");
     expect(styles.text).toContain("border: 1px solid color-mix(in srgb, var(--green) 58%, var(--line));");
