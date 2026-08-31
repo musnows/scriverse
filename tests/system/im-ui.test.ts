@@ -30,8 +30,8 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain('id="im-details"');
     expect(page.text).toContain('id="im-settings-dialog"');
     expect(page.text).toContain('id="im-group-dialog"');
-    expect(page.text).toContain("feature=global-im-v9");
-    expect(application.text).toContain('/im.js?v=20260831-global-im-v9');
+    expect(page.text).toContain("feature=global-im-v11");
+    expect(application.text).toContain('/im.js?v=20260831-global-im-v11');
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');
     expect(im.text).toContain("mention://${item.kind}/${item.id}");
@@ -43,5 +43,9 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain(".im-view { display: grid; grid-template-columns:");
     expect(styles.text).toContain("@media (max-width: 620px)");
     expect(styles.text).toContain(".im-composer-mention");
+    expect(styles.text).toContain(".im-button-secondary");
+    expect(styles.text).toContain(".im-button-positive");
+    expect(styles.text).toContain(".im-button-danger-quiet");
+    expect(styles.text).toContain(".im-button:disabled");
   });
 });
