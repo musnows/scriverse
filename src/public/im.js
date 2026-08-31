@@ -417,6 +417,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
   function connectEvents() {
     eventSource?.close();
     eventSource = new EventSource("/api/im/events");
+    eventSource.addEventListener("ready", () => {
+      void (current ? openConversation(current.id) : refreshConversations()).catch(() => undefined);
+    });
     for (const type of ["conversation", "message", "chain", "turn", "delta", "reset"]) {
       eventSource.addEventListener(type, (event) => void handleRealtime(event).catch(() => undefined));
     }
