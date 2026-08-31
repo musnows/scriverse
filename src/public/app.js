@@ -3027,8 +3027,9 @@ function bindAiFeedAutoScroll(feed) {
   update();
 }
 
-function scrollAiFeedToBottom(feed = $("#ai-feed")) {
+function scrollAiFeedToBottom(feed = $("#ai-feed"), { force = false } = {}) {
   bindAiFeedAutoScroll(feed);
+  if (force) aiFeedAutoScrollStates.set(feed, true);
   if (!aiFeedAutoScrollStates.get(feed)) return;
   feed.scrollTop = feed.scrollHeight;
   const currentFrame = aiFeedScrollFrames.get(feed);
@@ -17909,6 +17910,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
   }
   setAiChatTabStatus(tab, "streaming");
   syncAiRequestControls();
+  scrollAiFeedToBottom(tab.feed, { force: true });
   try {
     try {
       await ensureAiModelsLoaded();
