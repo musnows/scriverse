@@ -15,6 +15,9 @@
   --surface-strong: rgba(255,254,250,.94);
   --row-active: #ebe4d8;
   --surface-hover: #dfd6c7;
+  --im-narration-surface: #edf1f4;
+  --im-narration-line: #b6c2cc;
+  --im-narration-label: #627587;
   --app-glow: rgba(255,255,255,.95);
   --toast-bg: #25231f;
   --toast-fg: #fffefa;
@@ -263,6 +266,9 @@
   --surface-strong: rgba(38,35,30,.96);
   --row-active: #332d27;
   --surface-hover: #3a342d;
+  --im-narration-surface: #20272d;
+  --im-narration-line: #526471;
+  --im-narration-label: #9bb0be;
   --app-glow: rgba(98,82,66,.18);
   --toast-bg: #25231f;
   --toast-fg: #fffefa;
@@ -4719,8 +4725,9 @@ body { font-size: var(--ui-font-size); }
 .im-message.is-own .im-message-body { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 9%, var(--panel)); }
 .im-message.is-system .im-message-body { display: inline-block; padding: 5px 10px; border: 0; background: var(--paper-deep); font-size: 9px; }
 .im-message.is-announcement { width: min(90%, 760px); margin: 20px auto; color: var(--ink); text-align: center; }
-.im-message.is-announcement > header { justify-content: center; color: var(--accent-dark); font-weight: 600; letter-spacing: .08em; }
-.im-message.is-announcement .im-message-body { display: block; padding: 13px 16px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--accent) 7%, var(--panel)); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 72%, transparent); color: var(--ink); font-size: 11px; line-height: 1.75; text-align: left; }
+.im-message.is-announcement > header { justify-content: center; color: var(--im-narration-label); font-weight: 600; letter-spacing: .08em; }
+.im-message.is-announcement > header::before, .im-message.is-announcement > header::after { content: ""; flex: 1 1 72px; max-width: 120px; height: 1px; background: var(--im-narration-line); opacity: .72; }
+.im-message.is-announcement .im-message-body { display: block; padding: 13px 18px; border: solid var(--im-narration-line); border-width: 1px 0; border-radius: 0; background: var(--im-narration-surface); box-shadow: none; color: var(--ink); font-size: 11px; line-height: 1.75; text-align: left; }
 .im-message.is-provisional { opacity: .78; }
 .im-model-details { margin-top: 5px; color: var(--muted); font-size: 8px; }
 .im-model-details summary { cursor: pointer; }

@@ -43,6 +43,7 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
     expect(page.text).toContain("feature=global-im-v17");
+    expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(application.text).toContain('/im.js?v=20260901-global-im-v17');
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');
@@ -88,5 +89,8 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain(".im-selected-avatar");
     expect(styles.text).toContain(".im-message-avatar");
     expect(styles.text).toContain(".im-member-avatar");
+    expect(styles.text).toContain("--im-narration-surface:");
+    expect(styles.text).toContain("background: var(--im-narration-surface)");
+    expect(styles.text).toContain("border-width: 1px 0");
   });
 });
