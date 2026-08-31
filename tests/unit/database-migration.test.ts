@@ -79,6 +79,80 @@ function insertSystemOwnedWork(database: Database, workId: string, title: string
 }
 
 describe("数据库版本化迁移", () => {
+  it("迁移 127 创建 IM 持久化结构并恢复中断链路", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-im-"));
+    roots.push(root);
+    const filename = join(root, "im.db");
+    const current = new Database(filename);
+    insertSystemOwnedWork(current, "work-im", "IM 迁移测试作品", "2026-08-31T00:00:00.000Z");
+    current.run(
+      `INSERT INTO characters (id, work_id, name, created_at, updated_at)
+       VALUES ('character-im', 'work-im', '林舟', '2026-08-31T00:00:00.000Z', '2026-08-31T00:00:00.000Z')`
+    );
+    current.run(
+      `INSERT INTO im_conversations (
+         id, kind, owner_user_id, direct_character_id, title, created_at, updated_at
+       ) VALUES ('im-conversation', 'direct', ?, 'character-im', '林舟', '2026-08-31T00:00:00.000Z', '2026-08-31T00:00:00.000Z')`,
+      SYSTEM_USER_ID
+    );
+    current.run(
+      `INSERT INTO im_human_memberships (
+         id, conversation_id, user_id, role, joined_at
+       ) VALUES ('im-human-membership', 'im-conversation', ?, 'owner', '2026-08-31T00:00:00.000Z')`,
+      SYSTEM_USER_ID
+    );
+    current.run(
+      `INSERT INTO im_character_memberships (
+         id, conversation_id, character_id, source_work_id, snapshot_json, joined_at
+       ) VALUES ('im-character-membership', 'im-conversation', 'character-im', 'work-im', '{}', '2026-08-31T00:00:00.000Z')`
+    );
+    current.run(
+      `INSERT INTO im_messages (
+         id, conversation_id, sequence, sender_kind, sender_user_id, content, created_at
+       ) VALUES ('im-message', 'im-conversation', 1, 'human', ?, '你好', '2026-08-31T00:00:00.000Z')`,
+      SYSTEM_USER_ID
+    );
+    current.run(
+      `INSERT INTO im_chains (
+         id, conversation_id, initiator_user_id, authorization_user_id, trigger_message_id,
+         mode, threshold, max_ai_messages, retry_count, status, created_at, updated_at
+       ) VALUES (
+         'im-chain', 'im-conversation', ?, ?, 'im-message',
+         'direct', 60, 20, 3, 'running', '2026-08-31T00:00:00.000Z', '2026-08-31T00:00:00.000Z'
+       )`,
+      SYSTEM_USER_ID,
+      SYSTEM_USER_ID
+    );
+    current.run(
+      `INSERT INTO im_chain_turns (
+         id, chain_id, character_membership_id, kind, status, created_at
+       ) VALUES ('im-turn', 'im-chain', 'im-character-membership', 'reply', 'running', '2026-08-31T00:00:00.000Z')`
+    );
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 127")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA table_info(im_user_settings)").map((column) => column.name)).toEqual([
+      "user_id",
+      "preferred_name",
+      "pronouns",
+      "identity_summary",
+      "additional_notes",
+      "primary_model_id",
+      "fallback_model_id",
+      "retry_count",
+      "updated_at"
+    ]);
+    expect(migrated.get("SELECT status, error_code FROM im_chains WHERE id = 'im-chain'")).toEqual({
+      status: "interrupted",
+      error_code: "IM_CHAIN_RUNTIME_RESTARTED"
+    });
+    expect(migrated.get("SELECT status FROM im_chain_turns WHERE id = 'im-turn'")).toEqual({ status: "cancelled" });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
   it("迁移 126 创建按作品级联清理的加密远程 MCP 配置表", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-remote-mcp-"));
     roots.push(root);
