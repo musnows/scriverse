@@ -162,6 +162,14 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", lateMember.csrfToken)
       .send({ content: "我已登舰。", requestId: "im-message-request-0002" })
       .expect(201);
+    expect(runtime.database.all(
+      "SELECT sequence, context_epoch FROM im_messages WHERE conversation_id = ? ORDER BY sequence",
+      groupId
+    )).toEqual([
+      { sequence: 1, context_epoch: 1 },
+      { sequence: 2, context_epoch: 2 },
+      { sequence: 3, context_epoch: 2 }
+    ]);
     const ownerAfter = await owner.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(ownerAfter.body.data.messages.map((item: { content: string }) => item.content)).toEqual([
       expect.stringContaining("我们出发"),

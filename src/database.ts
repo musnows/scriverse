@@ -92,6 +92,7 @@ const IM_SCHEMA_SQL = `
     id TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL REFERENCES im_conversations(id) ON DELETE CASCADE,
     sequence INTEGER NOT NULL CHECK(sequence > 0),
+    context_epoch INTEGER NOT NULL DEFAULT 1 CHECK(context_epoch > 0),
     sender_kind TEXT NOT NULL CHECK(sender_kind IN ('human', 'character', 'system')),
     sender_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     sender_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
@@ -5227,9 +5228,15 @@ export class Database {
       "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?",
       table
     ) !== undefined);
-    if (!applied.has(127) || !imTablesPresent) {
+    const imMessageContextEpochPresent = this.all<{ name: string }>("PRAGMA table_info(im_messages)")
+      .some((column) => column.name === "context_epoch");
+    if (!applied.has(127) || !imTablesPresent || !imMessageContextEpochPresent) {
       this.transaction(() => {
         this.raw.exec(IM_SCHEMA_SQL);
+        const messageColumns = new Set(this.all<{ name: string }>("PRAGMA table_info(im_messages)").map((column) => column.name));
+        if (!messageColumns.has("context_epoch")) {
+          this.run("ALTER TABLE im_messages ADD COLUMN context_epoch INTEGER NOT NULL DEFAULT 1 CHECK(context_epoch > 0)");
+        }
         this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (127, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");

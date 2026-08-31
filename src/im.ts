@@ -495,6 +495,7 @@ export class ImService {
       id: messageId,
       conversationId: requiredString(row.conversation_id),
       sequence: Number(row.sequence),
+      contextEpoch: Number(row.context_epoch),
       senderKind: requiredString(row.sender_kind),
       senderUserId: optionalString(row.sender_user_id),
       senderCharacterId: optionalString(row.sender_character_id),
@@ -748,13 +749,18 @@ export class ImService {
 
   private insertSystemMessage(conversationId: string, content: string, metadata: Record<string, unknown>): void {
     const timestamp = now();
+    const contextEpoch = Number(this.db.get(
+      "SELECT context_epoch FROM im_conversations WHERE id = ?",
+      conversationId
+    )?.context_epoch ?? 1);
     this.db.run(
       `INSERT INTO im_messages (
-         id, conversation_id, sequence, sender_kind, content, metadata_json, created_at
-       ) VALUES (?, ?, ?, 'system', ?, ?, ?)`,
+         id, conversation_id, sequence, context_epoch, sender_kind, content, metadata_json, created_at
+       ) VALUES (?, ?, ?, ?, 'system', ?, ?, ?)`,
       id("imMessage"),
       conversationId,
       this.nextSequence(conversationId),
+      contextEpoch,
       content,
       JSON.stringify(metadata),
       timestamp
@@ -843,12 +849,13 @@ export class ImService {
       const sequence = this.nextSequence(conversationId);
       this.db.run(
         `INSERT INTO im_messages (
-           id, conversation_id, sequence, sender_kind, sender_user_id, sender_snapshot_json,
+           id, conversation_id, sequence, context_epoch, sender_kind, sender_user_id, sender_snapshot_json,
            content, chain_id, request_id, created_at
-         ) VALUES (?, ?, ?, 'human', ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, 'human', ?, ?, ?, ?, ?, ?)`,
         messageId,
         conversationId,
         sequence,
+        Number(conversation.context_epoch),
         user.userId,
         JSON.stringify(this.humanSnapshot(user)),
         input.content,
