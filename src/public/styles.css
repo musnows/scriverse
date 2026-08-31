@@ -1161,7 +1161,7 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .work-access-options span { padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink); font-size: 10px; line-height: 1.35; }
 .work-editor-preference-options { display: grid; flex: 0 1 320px; gap: 7px; }
 .work-editor-preference-option { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); cursor: pointer; }
-.work-editor-preference-option input { flex: 0 0 auto; margin: 2px 0 0; }
+.work-editor-preference-option input[type="checkbox"] { align-self: flex-start; flex: 0 0 16px; width: 16px; min-width: 16px; height: 16px; min-height: 16px; margin: 2px 0 0; padding: 0; }
 .work-editor-preference-option span { display: grid; gap: 2px; min-width: 0; }
 .work-editor-preference-option b { color: var(--ink); font-size: 11px; }
 .account-dialog { width: min(640px, 92vw); overflow: hidden; }
