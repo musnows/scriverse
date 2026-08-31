@@ -12,6 +12,7 @@ describe("作品级正文编辑辅助设置", () => {
     ]);
 
     expect(page).toContain("feature=work-editor-preferences-v1");
+    expect(page).toContain("feature=work-editor-preference-checkbox-v1");
     expect(application).toContain('id="work-editor-preferences-title">正文编辑辅助');
     expect(application).toContain('name="editorAutoIndentEnabled" type="checkbox"');
     expect(application).toContain('name="editorTypewriterModeEnabled" type="checkbox"');
@@ -20,5 +21,6 @@ describe("作品级正文编辑辅助设置", () => {
     expect(application).toContain('classList.toggle("editor-typewriter-mode", Boolean(state.work?.editorTypewriterModeEnabled))');
     expect(styles).toContain(".work-editor-preference-options");
     expect(styles).toContain(".work-editor-preference-option");
+    expect(styles).toContain('.work-editor-preference-option input[type="checkbox"] { align-self: flex-start; flex: 0 0 16px; width: 16px; min-width: 16px; height: 16px; min-height: 16px; margin: 2px 0 0; padding: 0; }');
   });
 });
