@@ -46,9 +46,10 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v18");
+    expect(page.text).toContain("feature=global-im-v19");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
-    expect(application.text).toContain('/im.js?v=20260901-global-im-v18');
+    expect(page.text).toContain("feature=im-member-add-plus-v2");
+    expect(application.text).toContain('/im.js?v=20260901-global-im-v19');
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');
     expect(im.text).toContain("mention://${item.kind}/${item.id}");
@@ -70,6 +71,7 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain("im-member-avatar");
     expect(im.text).toContain("im-mention-avatar");
     expect(im.text).toContain("data-im-open-member-add");
+    expect(im.text).toContain("im-member-section-heading");
     expect(im.text).toContain("openMemberAddDialog");
     expect(im.text).toContain("loadMemberAddCharacters");
     expect(im.text).toContain("loadMemberAddHumans");
@@ -100,6 +102,7 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain(".im-message-avatar");
     expect(styles.text).toContain(".im-member-avatar");
     expect(styles.text).toContain(".im-member-add-button");
+    expect(styles.text).toContain(".im-member-section-heading");
     expect(styles.text).toContain(".im-member-add-dialog");
     expect(styles.text).toContain(".im-member-picker-option");
     expect(styles.text).toContain("--im-narration-surface:");

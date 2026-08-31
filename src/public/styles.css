@@ -4766,7 +4766,8 @@ body { font-size: var(--ui-font-size); }
 .im-member-identity { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .im-member-identity > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .im-member-avatar { width: 30px; height: 30px; font-size: 10px; }
-.im-member-add-button { display: inline-grid; justify-self: end; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid color-mix(in srgb, var(--accent) 52%, var(--line)); border-radius: 50%; background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); transition: border-color .15s ease, background-color .15s ease, transform .15s ease; }
+.im-member-section-heading { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 8px; }
+.im-member-add-button { display: inline-grid; flex: 0 0 28px; place-items: center; width: 28px; min-width: 28px; height: 28px; min-height: 28px; padding: 0; border: 1px solid color-mix(in srgb, var(--accent) 52%, var(--line)); border-radius: 50%; background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); transition: border-color .15s ease, background-color .15s ease, transform .15s ease; }
 .im-member-add-button:hover, .im-member-add-button:focus-visible { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 20%, var(--surface)); outline: none; }
 .im-member-add-button:active { transform: translateY(1px); }
 .im-member-add-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-width: 1.8; }
