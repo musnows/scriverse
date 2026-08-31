@@ -19,6 +19,7 @@ type EventListener = (event: ImRealtimeEvent) => void;
 type InvocationResult = {
   callId: string;
   attemptCount: number;
+  primaryAttemptCount: number;
   content: string;
   model: Record<string, unknown>;
   stage: "primary" | "fallback";
@@ -416,6 +417,7 @@ export class ImOrchestrator {
       return {
         callId: result.callId,
         attemptCount: result.attemptCount,
+        primaryAttemptCount: 0,
         content: result.content,
         model: result.model,
         stage,
@@ -443,7 +445,11 @@ export class ImOrchestrator {
         reason: "fallback",
         modelStage: "fallback"
       });
-      return invokeModel(fallbackModelId, "fallback");
+      const fallback = await invokeModel(fallbackModelId, "fallback");
+      const details = error instanceof AppError && error.details && typeof error.details === "object"
+        ? error.details as Record<string, unknown>
+        : {};
+      return { ...fallback, primaryAttemptCount: Number(details.attemptCount) || Number(chain.retry_count) + 1 };
     }
   }
 
@@ -469,7 +475,7 @@ export class ImOrchestrator {
       selected ? 1 : 0,
       requiredString(result.model.id),
       result.stage,
-      result.attemptCount,
+      result.primaryAttemptCount + result.attemptCount,
       result.durationMs,
       JSON.stringify([result.callId]),
       now(),
@@ -583,7 +589,9 @@ export class ImOrchestrator {
       durationMs: invocation.durationMs,
       callId: invocation.callId,
       retryCount: Number(chain.retry_count),
-      attemptCount: invocation.attemptCount
+      attemptCount: invocation.primaryAttemptCount + invocation.attemptCount,
+      primaryAttemptCount: invocation.primaryAttemptCount,
+      fallbackAttemptCount: invocation.stage === "fallback" ? invocation.attemptCount : 0
     };
     const timestamp = now();
     this.db.transaction(() => {

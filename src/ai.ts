@@ -10038,6 +10038,7 @@ export class AiManager {
     let activeSecrets: string[] = [];
     let streamedContent = "";
     let streamedPartialContent = "";
+    let totalAttemptCount = 0;
     let trackedInputTokens = 0;
     let trackedOutputTokens = 0;
     let trackedCachedInputTokens = 0;
@@ -10076,7 +10077,6 @@ export class AiManager {
         requestRetryPolicy.backoffRetryCount + 1
       );
       let completionRequestCount = 0;
-      let totalAttemptCount = 0;
       let cacheUsageComplete = true;
       let totalInputTokens = 0;
       let totalCachedInputTokens = 0;
@@ -10745,11 +10745,12 @@ export class AiManager {
       )) {
         throw new AppError(error.status, error.code, error.message, {
           callId,
+          attemptCount: totalAttemptCount,
           ...(error.details && typeof error.details === "object" ? error.details : {}),
           ...failureTarget
         });
       }
-      throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", { callId, failure: message, ...failureTarget });
+      throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", { callId, attemptCount: totalAttemptCount, failure: message, ...failureTarget });
     }
   }
 

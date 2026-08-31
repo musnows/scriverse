@@ -110,7 +110,13 @@ describe("IM AI 调度", () => {
       { sender: "human", content: "准备出发。" },
       { sender: "character", content: "已收到，立即启航。" }
     ]);
-    expect(JSON.parse(String(messages[1]?.metadata_json))).toMatchObject({ modelStage: "fallback", retryCount: 3 });
+    expect(JSON.parse(String(messages[1]?.metadata_json))).toMatchObject({
+      modelStage: "fallback",
+      retryCount: 3,
+      primaryAttemptCount: 4,
+      fallbackAttemptCount: 1,
+      attemptCount: 5
+    });
     expect(events).toEqual(expect.arrayContaining(["chain", "reset", "delta", "message"]));
     const systemPrompt = bodies.find((body) => body.model === "fallback-model")?.messages as Array<{ role: string; content: string }>;
     expect(systemPrompt[0]?.content).toContain("<im_roleplay_rules>");
