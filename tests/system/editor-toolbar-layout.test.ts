@@ -37,6 +37,7 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('&feature=annotation-line-anchor-v1');
     expect(page.text).toContain('&feature=stable-line-ids-v1');
     expect(page.text).toContain('&feature=live-annotation-anchors-v1');
+    expect(page.text).toContain('&feature=chapter-save-shortcut-v2');
     expect(page.text).toMatch(/styles\.css\?[^"\n]*feature=markdown-word-count-five-digit-v2/u);
     expect(page.text).toMatch(/styles\.css\?[^"\n]*feature=annotation-marker-offset-v1/u);
     expect(application.text).toContain("async function createSelectedLineAnnotation(");
@@ -76,6 +77,9 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain("function enterChapterEditMode()");
     expect(application.text).toContain('persistentToast("正在保存中")');
     expect(application.text).toContain('toast(`保存成功（正文 v${saved.versionNo}）`)');
+    expect(application.text).toContain('import { isGlobalSearchShortcut, isSaveShortcut } from "/keyboard-shortcuts.js?v=20260831-chapter-save-shortcut-v2";');
+    expect(application.text).toContain('if (!isSaveShortcut(event, navigator.platform) || !state.chapter || state.module !== "editor" || chapterEditorReadOnly || !canEditProse()) return;');
+    expect(application.text).toContain('$("#save-button").click();');
     expect(application.text).toContain('editButton.textContent = chapterEditorReadOnly ? "编辑" : "预览";');
     expect(application.text).toContain('function toggleChapterEditPreviewMode()');
     expect(application.text).toContain('$("#chapter-edit-button").addEventListener("click", toggleChapterEditPreviewMode)');
