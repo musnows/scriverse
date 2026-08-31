@@ -1,6 +1,7 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1";
 import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260830-adjacent-blockquotes-v1";
+import { createImWorkspace } from "/im.js?v=20260831-global-im-v8";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { applyAiSkillCommand, findAiSkillCommand, listAiSkillOptions } from "/ai-skill-menu.js?v=20260830-ai-skill-slash-menu-v1";
 import {
@@ -1226,6 +1227,7 @@ async function confirmConcurrentSave() {
 
 function currentPageRoute() {
   const workId = state.work?.id ?? null;
+  if (!$("#im-view").classList.contains("hidden")) return { view: "im" };
   if (!$("#reader-view").classList.contains("hidden") && workId) {
     return { view: "reader", workId, chapterId: readingTargetChapter?.id ?? null };
   }
@@ -6812,6 +6814,10 @@ async function initializePage() {
       showShelf();
       return;
     }
+    if (route.view === "im") {
+      await imWorkspace.open();
+      return;
+    }
 
     const requestedWork = route.workId ? state.works.find((work) => work.id === route.workId) : null;
     if (route.workId && !requestedWork) {
@@ -6893,6 +6899,7 @@ async function initializePage() {
 }
 
 function showShelf() {
+  imWorkspace.close();
   stopBackgroundTaskCenter();
   dismissChapterInsightToast();
   dismissDeleteToasts();
@@ -8217,6 +8224,7 @@ async function openSearchResult(result) {
 }
 
 async function showSettingsHub() {
+  imWorkspace.close();
   const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden")
     || !$("#platform-ai-view").classList.contains("hidden")
     || !$("#platform-usage-view").classList.contains("hidden")
@@ -8411,6 +8419,7 @@ function resetWorkScopedUiCaches() {
 }
 
 async function selectWork(workId, preferredChapterId = null) {
+  imWorkspace.close();
   chapterSelectionRequestGeneration += 1;
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !(await confirmDiscardChanges())) return false;
@@ -9104,6 +9113,7 @@ async function resolveCurrentChapterForeshadowReminder() {
 }
 
 async function selectChapter(chapterId, { editMode = false } = {}) {
+  imWorkspace.close();
   const workId = state.work?.id;
   if (!workId) return false;
   const selectionGeneration = ++chapterSelectionRequestGeneration;
@@ -9664,6 +9674,7 @@ function tidyChapterBlankLines() {
 }
 
 function showWelcome(hasWork = false) {
+  imWorkspace.close();
   chapterSelectionRequestId += 1;
   clearChapterForeshadowReminders({ invalidateRequest: true });
   dismissChapterInsightToast();
@@ -9697,6 +9708,7 @@ const moduleMeta = {
 };
 
 async function showModule(module) {
+  imWorkspace.close();
   if (!state.work) return showWelcome();
   if (!canReadModule(module)) {
     const fallback = firstReadableUiModule(state.work);
@@ -21241,8 +21253,10 @@ window.addEventListener("resize", () => {
   });
 });
 
+const imWorkspace = createImWorkspace({ api, esc, renderMarkdown, toast, state, showShelf });
+
 initializeAiChatTabs();
-initializePage().catch((error) => {
+initializePage().then(() => imWorkspace.start()).catch((error) => {
   restoringPageRoute = false;
   if (state.user) {
     document.body.classList.remove("auth-pending");
