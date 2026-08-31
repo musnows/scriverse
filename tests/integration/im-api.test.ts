@@ -184,6 +184,12 @@ describe("全局 IM API", () => {
         avatarUrl: `/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar?v=${characterAvatarSha256}`
       })
     ]);
+    expect(group.body.data.avatarMembers).toHaveLength(3);
+    expect(group.body.data.avatarMembers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "character", participantId: character.body.data.id }),
+      expect.objectContaining({ kind: "user", participantId: owner.user.userId }),
+      expect.objectContaining({ kind: "user", participantId: member.user.userId })
+    ]));
     expect(group.body.data.participants.characters[0]).toMatchObject({
       characterId: character.body.data.id,
       avatarUrl: `/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar?v=${characterAvatarSha256}`
@@ -244,6 +250,7 @@ describe("全局 IM API", () => {
     expect(memberView.body.data.participants.characters[0].avatarUrl).toBe(
       `/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar?v=${characterAvatarSha256}`
     );
+    expect(memberView.body.data.avatarMembers).toHaveLength(3);
 
     await admin.agent.get(`/api/im/conversations/${groupId}`).expect(403);
 

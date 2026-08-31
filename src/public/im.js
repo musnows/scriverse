@@ -106,12 +106,26 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
     return item.replyMode === "proactive" ? `主动交流 · 阈值 ${item.responseThreshold}` : "Mention 模式";
   }
 
+  function conversationAvatarHtml(item) {
+    if (item.kind === "direct") {
+      const character = array(item.avatarCharacters)[0];
+      return character
+        ? imAvatarHtml(character, "character", "im-conversation-single-avatar")
+        : '<span class="im-conversation-avatar" aria-hidden="true">角</span>';
+    }
+    const members = array(item.avatarMembers).slice(0, 9);
+    const gridSize = members.length <= 4 ? 4 : 9;
+    const cells = [
+      ...members.map((member) => imAvatarHtml(member, member.kind === "user" ? "user" : "character", "im-group-avatar-cell")),
+      ...Array.from({ length: Math.max(0, gridSize - members.length) }, () => '<span class="im-group-avatar-empty"></span>')
+    ];
+    return `<span class="im-group-avatar-grid" data-grid-size="${gridSize}" aria-hidden="true">${cells.join("")}</span>`;
+  }
+
   function renderConversationList() {
     listHost.innerHTML = conversations.length
       ? conversations.map((item) => `<button class="im-conversation-item${current?.id === item.id ? " is-active" : ""}" type="button" data-im-conversation="${esc(item.id)}">
-          ${array(item.avatarCharacters).length
-            ? `<span class="im-conversation-avatar-stack" aria-hidden="true">${array(item.avatarCharacters).map((character) => imAvatarHtml(character, "character", "im-conversation-character-avatar")).join("")}</span>`
-            : `<span class="im-conversation-avatar" aria-hidden="true">${item.kind === "group" ? "群" : "角"}</span>`}
+          ${conversationAvatarHtml(item)}
           <span><strong>${esc(item.title)}</strong><small>${esc(conversationSubtitle(item))}</small></span>
           ${item.mentionUnreadCount ? `<b class="im-mention-unread">@${Number(item.mentionUnreadCount)}</b>` : item.unreadCount ? `<b class="im-item-unread">${Number(item.unreadCount)}</b>` : ""}
         </button>`).join("")

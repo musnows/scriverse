@@ -598,6 +598,62 @@ export class ImService {
           : null
       };
     });
+    const avatarMembers = [
+      ...this.db.all(
+        `SELECT membership.id AS membership_id, membership.character_id, membership.snapshot_json,
+                membership.joined_at, avatar.sha256 AS avatar_sha256
+         FROM im_character_memberships membership
+         LEFT JOIN character_avatars avatar ON avatar.character_id = membership.character_id
+         WHERE membership.conversation_id = ? AND membership.left_at IS NULL AND membership.status = 'active'`,
+        conversationId
+      ).map((membership) => {
+        const snapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
+        const characterId = requiredString(membership.character_id);
+        const avatarSha256 = optionalString(membership.avatar_sha256);
+        return {
+          kind: "character",
+          participantId: characterId,
+          name: snapshot.name ?? "角色",
+          avatarUrl: avatarSha256
+            ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
+            : null,
+          joinedAt: requiredString(membership.joined_at),
+          membershipId: requiredString(membership.membership_id)
+        };
+      }),
+      ...this.db.all(
+        `SELECT membership.id AS membership_id, membership.joined_at,
+                user.id AS user_id, user.username, user.display_name, user.avatar_sha256
+         FROM im_human_memberships membership
+         JOIN users user ON user.id = membership.user_id
+         WHERE membership.conversation_id = ? AND membership.left_at IS NULL`,
+        conversationId
+      ).map((membership) => ({
+        kind: "user",
+        participantId: requiredString(membership.user_id),
+        name: requiredString(membership.display_name),
+        displayName: requiredString(membership.display_name),
+        username: requiredString(membership.username),
+        avatarUrl: membership.avatar_sha256
+          ? `/api/user-avatars/${encodeURIComponent(requiredString(membership.user_id))}?v=${encodeURIComponent(requiredString(membership.avatar_sha256))}`
+          : null,
+        joinedAt: requiredString(membership.joined_at),
+        membershipId: requiredString(membership.membership_id)
+      }))
+    ].sort((left, right) => left.joinedAt.localeCompare(right.joinedAt)
+      || left.kind.localeCompare(right.kind)
+      || left.membershipId.localeCompare(right.membershipId))
+      .slice(0, 9)
+      .map((member) => ({
+        kind: member.kind,
+        participantId: member.participantId,
+        name: member.name,
+        avatarUrl: member.avatarUrl,
+        ...("displayName" in member ? {
+          displayName: member.displayName,
+          username: "username" in member ? member.username : ""
+        } : {})
+      }));
     const activeMembership = this.activeMembership(conversationId, userId);
     const latestSequence = Number(this.db.get(
       "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM im_messages WHERE conversation_id = ?",
@@ -636,6 +692,7 @@ export class ImService {
       contextEpoch: Number(row.context_epoch),
       status: requiredString(row.status),
       avatarCharacters,
+      avatarMembers,
       active: Boolean(activeMembership) && requiredString(row.status) === "active",
       unreadCount: unread,
       mentionUnreadCount: mentionUnread,

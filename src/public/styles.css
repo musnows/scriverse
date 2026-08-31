@@ -4703,11 +4703,13 @@ body { font-size: var(--ui-font-size); }
 .im-conversation-item strong { font-size: 12px; }
 .im-conversation-item small { color: var(--muted); font-size: 9px; }
 .im-conversation-avatar { display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--accent); font-size: 11px; }
-.im-conversation-avatar-stack { display: flex; width: 44px; height: 36px; align-items: center; }
-.im-conversation-character-avatar { width: 32px; height: 32px; border-width: 2px; border-color: var(--panel); font-size: 11px; }
-.im-conversation-character-avatar + .im-conversation-character-avatar { margin-left: -18px; }
-.im-conversation-character-avatar:nth-child(2) { z-index: 1; }
-.im-conversation-character-avatar:nth-child(3) { z-index: 2; }
+.im-conversation-single-avatar { width: 36px; height: 36px; font-size: 12px; }
+.im-group-avatar-grid { display: grid; width: 40px; height: 40px; overflow: hidden; padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.im-group-avatar-grid[data-grid-size="4"] { grid-template: repeat(2, minmax(0, 1fr)) / repeat(2, minmax(0, 1fr)); }
+.im-group-avatar-grid[data-grid-size="9"] { grid-template: repeat(3, minmax(0, 1fr)) / repeat(3, minmax(0, 1fr)); }
+.im-group-avatar-cell { width: 100%; min-width: 0; height: 100%; border: 0; border-radius: 3px; font-size: 7px; }
+.im-group-avatar-grid[data-grid-size="9"] .im-group-avatar-cell { border-radius: 2px; font-size: 6px; }
+.im-group-avatar-empty { display: block; min-width: 0; min-height: 0; border-radius: 3px; background: var(--paper-deep); }
 .im-item-unread, .im-mention-unread { display: grid; min-width: 20px; height: 20px; place-items: center; padding: 0 5px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 9px; }
 .im-mention-unread { background: var(--green); }
 .im-empty, .im-feed-empty { margin: 0; padding: 18px; color: var(--muted); font-size: 11px; line-height: 1.6; text-align: center; }
