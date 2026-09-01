@@ -100,7 +100,7 @@ describe("IM AI 调度", () => {
     unsubscribe();
 
     expect(chain).toMatchObject({ status: "completed", model_stage: "primary", generated_count: 1 });
-    expect(primaryCalls).toBe(4);
+    expect(primaryCalls).toBe(3);
     expect(fallbackCalls).toBe(1);
     const messages = runtime.database.all(
       "SELECT sender_kind, content, metadata_json FROM im_messages WHERE conversation_id = ? ORDER BY sequence",
@@ -113,9 +113,9 @@ describe("IM AI 调度", () => {
     expect(JSON.parse(String(messages[1]?.metadata_json))).toMatchObject({
       modelStage: "fallback",
       retryCount: 3,
-      primaryAttemptCount: 4,
+      primaryAttemptCount: 3,
       fallbackAttemptCount: 1,
-      attemptCount: 5
+      attemptCount: 4
     });
     expect(events.map((event) => event.type)).toEqual(expect.arrayContaining(["chain", "turn", "reset", "delta", "message"]));
     expect(events.filter((event) => event.type === "turn" && event.payload.kind === "reply").map((event) => event.payload.status)).toEqual([

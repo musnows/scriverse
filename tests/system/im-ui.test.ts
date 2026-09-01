@@ -35,6 +35,8 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain('id="im-message-feed"');
     expect(page.text).toContain('id="im-details"');
     expect(page.text).toContain('id="im-settings-dialog"');
+    expect(page.text).toContain("每个模型最大失败次数");
+    expect(page.text).toContain("主模型最多请求 3 次；全部失败后 fallback 再最多请求 3 次");
     expect(page.text).toContain('id="im-group-dialog"');
     expect(page.text).toContain('id="im-announcement-button"');
     expect(page.text).toContain('id="im-announcement-dialog"');
@@ -60,14 +62,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v29");
+    expect(page.text).toContain("feature=global-im-v30");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260901-global-im-v29');
+    expect(application.text).toContain('/im.js?v=20260901-global-im-v30');
     expect(application.text).toContain("createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf })");
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');

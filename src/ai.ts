@@ -516,6 +516,7 @@ type GenerateInput = {
   extraSystemPrompt?: string;
   signal?: AbortSignal;
   maxAttempts?: number;
+  requestAttemptLimit?: number;
   onToolCall?: (call: AgentToolCallResult, round: number) => void;
   onProcessStep?: (step: AiProcessStep & { append?: boolean }) => void;
   onContextCompacted?: (event: AiContextCompactionEvent) => void;
@@ -9901,6 +9902,7 @@ export class AiManager {
       disableThinking: input.kind === "judge",
       agentToolIds: input.kind === "reply" ? roleplayReadTools : [],
       retryPolicy: { retryCount: input.retryCount, backoffRetryCount: input.retryCount },
+      requestAttemptLimit: input.retryCount,
       im: {
         characterId: input.characterId,
         kind: input.kind,
@@ -10088,7 +10090,10 @@ export class AiManager {
         ? providerAnalysisTimeoutSeconds(provider) * 1_000
         : AI_INTERACTIVE_TIMEOUT_MS;
       const legacyMaximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
-      const maximumAttempts = Math.max(
+      const requestAttemptLimit = Number.isSafeInteger(input.requestAttemptLimit)
+        ? Math.round(clamp(Number(input.requestAttemptLimit), 1, 20))
+        : null;
+      const maximumAttempts = requestAttemptLimit ?? Math.max(
         legacyMaximumAttempts,
         requestRetryPolicy.retryCount + 1,
         requestRetryPolicy.backoffRetryCount + 1
