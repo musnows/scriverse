@@ -3376,6 +3376,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-type-menu .danger-button { margin-top: 5px; border-top: 1px solid var(--line); border-radius: 0; color: var(--accent-dark); }
 .line-citation-menu { position: fixed; z-index: 82; display: grid; min-width: 230px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
 .line-citation-menu strong { padding: 5px 7px 8px; color: var(--muted); font-size: 9px; }
+.line-citation-menu-separator { height: 1px; margin: 5px 2px; background: var(--line); }
 .line-citation-menu button { border: 0; border-radius: 4px; padding: 8px; background: transparent; text-align: left; font-size: 11px; }.line-citation-menu button:hover { background: var(--paper-deep); color: var(--accent-dark); }
 .markdown-table-menu { position: fixed; z-index: 84; min-width: 210px; padding: 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
 .markdown-table-menu button { position: relative; display: grid; width: 100%; gap: 2px; padding: 8px 9px 8px 31px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); text-align: left; }
