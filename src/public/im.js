@@ -80,6 +80,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let memberAddSelectedId = "";
   let memberAddSearchTimer = null;
   let memberAddRequest = 0;
+  let conversationRequest = 0;
   let users = [];
   let models = [];
   let settings = null;
@@ -514,13 +515,18 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   async function openConversation(conversationId) {
-    current = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}`);
+    const request = ++conversationRequest;
+    const nextConversation = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}`);
+    if (request !== conversationRequest) return;
+    current = nextConversation;
     workspace.classList.add("has-conversation");
     syncProvisionalReplies();
     renderConversationList();
     renderConversation();
     if (current.active && current.latestSequence > 0 && shouldMarkImConversationRead(opened, document.visibilityState)) {
+      if (request !== conversationRequest) return;
       await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: { sequence: current.latestSequence } });
+      if (request !== conversationRequest) return;
       await refreshConversations();
     }
   }
@@ -909,6 +915,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
 
   function close() {
     opened = false;
+    conversationRequest += 1;
     workspace.classList.add("hidden");
     workspace.classList.remove("has-conversation");
     document.querySelector("#app").classList.remove("im-mode");
@@ -1014,6 +1021,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#im-details-toggle").addEventListener("click", () => document.querySelector("#im-details").classList.toggle("is-open"));
     document.querySelector("#im-details-close").addEventListener("click", () => document.querySelector("#im-details").classList.remove("is-open"));
     document.querySelector("#im-mobile-back").addEventListener("click", () => {
+      conversationRequest += 1;
       current = null;
       workspace.classList.remove("has-conversation");
       provisionalReplies.clear();
