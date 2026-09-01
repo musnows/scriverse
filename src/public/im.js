@@ -62,7 +62,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let models = [];
   let settings = null;
   let eventSource = null;
-  let provisional = null;
+  const provisionalReplies = new Map();
   let mentionOptions = [];
   let mentionIndex = -1;
   let mentionCaretState = null;
@@ -162,12 +162,62 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     return html;
   }
 
+  function upsertProvisionalReply(payload) {
+    const turnId = String(payload?.turnId || payload?.id || "");
+    if (!turnId) return null;
+    const previous = provisionalReplies.get(turnId) || {};
+    const eventCharacter = value(payload, "character", {});
+    const characterId = String(payload?.characterId || eventCharacter.characterId || previous.characterId || "");
+    const character = activeCharacters().find((item) => item.characterId === characterId);
+    const eventError = value(payload, "error", {});
+    const next = {
+      ...previous,
+      turnId,
+      chainId: String(payload?.chainId || previous.chainId || ""),
+      characterId,
+      name: eventCharacter.name || character?.name || previous.name || "角色",
+      avatarUrl: eventCharacter.avatarUrl || character?.avatarUrl || previous.avatarUrl || null,
+      status: String(payload?.status || previous.status || "pending"),
+      error: eventError.message || payload?.failure || previous.error || "",
+      content: previous.content || ""
+    };
+    provisionalReplies.set(turnId, next);
+    return next;
+  }
+
+  function syncProvisionalReplies() {
+    const previous = new Map(provisionalReplies);
+    provisionalReplies.clear();
+    for (const turn of array(current?.activeChain?.turns)) {
+      if (!['pending', 'running', 'failed', 'skipped'].includes(String(turn.status))) continue;
+      const retained = previous.get(String(turn.id));
+      const next = upsertProvisionalReply({ ...turn, turnId: turn.id });
+      if (next && retained?.content) next.content = retained.content;
+    }
+  }
+
   function renderMessages() {
     const messages = array(current?.messages);
-    if (!messages.length && !provisional) {
+    const provisional = [...provisionalReplies.values()];
+    if (!messages.length && !provisional.length) {
       feed.innerHTML = '<p class="im-feed-empty">从一条消息开始。角色单聊会直接回复；群聊按当前回复模式调度 AI。</p>';
       return;
     }
+    const generatingCount = provisional.filter((reply) => ['pending', 'running'].includes(reply.status)).length;
+    const generatingSummary = generatingCount
+      ? `<div class="im-generating-summary" role="status">${generatingCount} 个角色正在生成回答</div>`
+      : "";
+    const provisionalHtml = provisional.map((reply) => {
+      const failed = ['failed', 'skipped'].includes(reply.status);
+      const statusLabel = reply.status === "pending" ? "等待生成" : reply.status === "running" ? "正在生成" : reply.status === "skipped" ? "未生成" : "生成失败";
+      const pendingCopy = reply.status === "pending" ? "等待角色开始回答…" : "正在组织回答…";
+      const content = reply.content ? renderMarkdown(reply.content) : failed ? "" : `<p class="im-provisional-placeholder">${pendingCopy}</p>`;
+      const failure = failed ? `<p class="im-provisional-error">${esc(reply.error || "角色回答生成失败")}</p>` : "";
+      return `<article class="im-message is-character is-provisional${failed ? " is-failed" : ""}" data-im-provisional-turn="${esc(reply.turnId)}" data-im-provisional-status="${esc(reply.status)}">
+        <header>${imAvatarHtml(reply, "character", "im-message-avatar")}<strong>${esc(reply.name || "角色")}</strong><span class="im-provisional-status">${statusLabel}</span></header>
+        <div class="im-message-body message-body">${content}${failure}</div>
+      </article>`;
+    }).join("");
     feed.innerHTML = messages.map((message) => {
       const sender = value(message, "sender", {});
       const model = value(message, "metadata", {});
@@ -182,7 +232,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         <div class="im-message-body message-body">${messageHtml(message)}</div>
         ${message.senderKind === "character" ? `<details class="im-model-details"><summary>调用详情</summary><span>${esc(model.modelDisplayName || model.modelId || "未知模型")} · ${model.modelStage === "fallback" ? "fallback" : "主模型"} · ${Number(model.attemptCount || 1)} 次请求 · ${Number(model.durationMs || 0)} ms</span></details>` : ""}
       </article>`;
-    }).join("") + (provisional ? `<article class="im-message is-character is-provisional"><header>${imAvatarHtml(provisional, "character", "im-message-avatar")}<strong>${esc(provisional.name || "角色")}</strong><span>正在输入</span></header><div class="im-message-body message-body">${renderMarkdown(provisional.content || "等待响应…")}</div></article>` : "");
+    }).join("") + generatingSummary + provisionalHtml;
     bindImAvatarFallbacks(feed);
     feed.scrollTop = feed.scrollHeight;
   }
@@ -323,7 +373,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   async function openConversation(conversationId) {
     current = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}`);
     workspace.classList.add("has-conversation");
-    provisional = null;
+    syncProvisionalReplies();
     renderConversationList();
     renderConversation();
     if (current.active && current.latestSequence > 0) {
@@ -629,6 +679,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     if (!content) return;
     composer.replaceChildren();
     closeMentionMenu();
+    provisionalReplies.clear();
     try {
       const result = await api(`/api/im/conversations/${encodeURIComponent(current.id)}/messages`, {
         method: "POST",
@@ -638,6 +689,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       if (!existing) current.messages.push(result.message);
       current.activeChain = result.chain;
       renderConversation();
+      await openConversation(current.id);
       await refreshConversations();
       if (result.chain?.status === "waiting_config") toast("消息已发送；请配置主模型和 fallback 后重试 AI 链路", "warning");
     } catch (error) {
@@ -649,15 +701,28 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   async function handleRealtime(event) {
     const envelope = JSON.parse(event.data);
     const eventConversationId = envelope.conversationId;
+    if (envelope.type === "turn" && current?.id === eventConversationId && envelope.payload.kind === "reply") {
+      const status = String(envelope.payload.status || "");
+      const turnId = String(envelope.payload.turnId || "");
+      if (status === "completed" || status === "cancelled") provisionalReplies.delete(turnId);
+      else upsertProvisionalReply(envelope.payload);
+      renderMessages();
+      return;
+    }
     if (envelope.type === "delta" && current?.id === eventConversationId) {
-      const character = activeCharacters().find((item) => item.characterId === envelope.payload.characterId);
-      provisional ??= { content: "", characterId: envelope.payload.characterId, name: character?.name || "角色", avatarUrl: character?.avatarUrl || null };
-      provisional.content += envelope.payload.delta || "";
+      const provisional = upsertProvisionalReply({ ...envelope.payload, status: "running" });
+      if (provisional) provisional.content += envelope.payload.delta || "";
       renderMessages();
       return;
     }
     if (envelope.type === "reset" && current?.id === eventConversationId) {
-      provisional = null;
+      for (const reply of provisionalReplies.values()) {
+        if (reply.chainId !== String(envelope.payload.chainId || "")) continue;
+        if (envelope.payload.turnId && reply.turnId !== envelope.payload.turnId) continue;
+        if (envelope.payload.characterId && reply.characterId !== envelope.payload.characterId) continue;
+        reply.content = "";
+        reply.status = "running";
+      }
       renderMessages();
       return;
     }
@@ -695,7 +760,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     workspace.classList.add("hidden");
     workspace.classList.remove("has-conversation");
     document.querySelector("#app").classList.remove("im-mode");
-    provisional = null;
+    provisionalReplies.clear();
     closeMentionMenu();
   }
 
@@ -778,7 +843,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#im-send").addEventListener("click", () => void send());
     document.querySelector("#im-stop").addEventListener("click", async () => {
       await api(`/api/im/conversations/${encodeURIComponent(current.id)}/stop`, { method: "POST", body: {} });
-      provisional = null;
+      provisionalReplies.clear();
       await openConversation(current.id);
     });
     document.querySelector("#im-retry").addEventListener("click", async () => {
@@ -791,6 +856,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#im-mobile-back").addEventListener("click", () => {
       current = null;
       workspace.classList.remove("has-conversation");
+      provisionalReplies.clear();
       renderConversationList();
       renderConversation();
     });

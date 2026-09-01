@@ -219,7 +219,7 @@ export class ImOrchestrator {
   }
 
   private mentionedCharacterMembershipIds(messageId: string, conversationId: string, senderCharacterId?: string | null): string[] {
-    return this.db.all(
+    const membershipIds = this.db.all(
       `SELECT membership.id FROM im_mentions mention
        JOIN im_character_memberships membership
          ON membership.character_id = mention.target_id AND membership.conversation_id = ?
@@ -232,6 +232,7 @@ export class ImOrchestrator {
       senderCharacterId ?? null,
       senderCharacterId ?? null
     ).map((row) => requiredString(row.id));
+    return [...new Set(membershipIds)];
   }
 
   private participantContext(conversationId: string, currentSender: Record<string, unknown>): string {
@@ -453,7 +454,9 @@ export class ImOrchestrator {
       this.publish(requiredString(chain.conversation_id), "reset", {
         chainId: requiredString(chain.id),
         reason: "fallback",
-        modelStage: "fallback"
+        modelStage: "fallback",
+        kind,
+        characterId: membership.character_id
       });
       const fallback = await invokeModel(fallbackModelId, "fallback");
       const details = error instanceof AppError && error.details && typeof error.details === "object"
@@ -463,18 +466,93 @@ export class ImOrchestrator {
     }
   }
 
-  private createTurn(chainId: string, membershipId: string, kind: "judge" | "reply" | "compact"): string {
+  private createTurn(chainId: string, membershipId: string, kind: "judge" | "reply" | "compact", status: "pending" | "running" = "running"): string {
     const turnId = id("imTurn");
     this.db.run(
       `INSERT INTO im_chain_turns (id, chain_id, character_membership_id, kind, status, created_at)
-       VALUES (?, ?, ?, ?, 'running', ?)`,
+       VALUES (?, ?, ?, ?, ?, ?)`,
       turnId,
       chainId,
       membershipId,
       kind,
+      status,
       now()
     );
     return turnId;
+  }
+
+  private replyTurnPayload(
+    chain: Record<string, unknown>,
+    membership: Record<string, unknown>,
+    turnId: string,
+    status: "pending" | "running" | "completed" | "failed" | "cancelled" | "skipped",
+    error?: { code: string; message: string }
+  ): Record<string, unknown> {
+    const conversationId = requiredString(chain.conversation_id);
+    const snapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
+    const characterId = optionalString(membership.character_id) ?? requiredString(snapshot.id);
+    const avatar = characterId ? this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", characterId) : null;
+    const avatarSha256 = optionalString(avatar?.sha256);
+    return {
+      chainId: requiredString(chain.id),
+      turnId,
+      kind: "reply",
+      status,
+      characterId,
+      character: {
+        characterId,
+        name: snapshot.name ?? "角色",
+        avatarUrl: characterId && avatarSha256
+          ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
+          : null
+      },
+      ...(error ? { error } : {})
+    };
+  }
+
+  private publishReplyTurn(
+    chain: Record<string, unknown>,
+    membership: Record<string, unknown>,
+    turnId: string,
+    status: "pending" | "running" | "completed" | "failed" | "cancelled" | "skipped",
+    error?: { code: string; message: string }
+  ): void {
+    this.publish(
+      requiredString(chain.conversation_id),
+      "turn",
+      this.replyTurnPayload(chain, membership, turnId, status, error)
+    );
+  }
+
+  private planReplyTurn(chain: Record<string, unknown>, membershipId: string): { membershipId: string; turnId: string } {
+    const membership = this.characterMembership(membershipId);
+    const turnId = this.createTurn(requiredString(chain.id), membershipId, "reply", "pending");
+    this.publishReplyTurn(chain, membership, turnId, "pending");
+    return { membershipId, turnId };
+  }
+
+  private settlePendingReplyTurns(
+    chain: Record<string, unknown>,
+    status: "failed" | "cancelled" | "skipped",
+    error: { code: string; message: string }
+  ): void {
+    const turns = this.db.all(
+      `SELECT turn.id AS turn_id, membership.* FROM im_chain_turns turn
+       JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
+       WHERE turn.chain_id = ? AND turn.kind = 'reply' AND turn.status = 'pending'
+       ORDER BY turn.created_at, turn.id`,
+      requiredString(chain.id)
+    );
+    for (const turn of turns) {
+      this.db.run(
+        "UPDATE im_chain_turns SET status = ?, failure = ?, completed_at = ? WHERE id = ?",
+        status,
+        `${error.code}: ${error.message}`.slice(0, 2000),
+        now(),
+        requiredString(turn.turn_id)
+      );
+      this.publishReplyTurn(chain, turn, requiredString(turn.turn_id), status, error);
+    }
   }
 
   private finishTurn(turnId: string, result: InvocationResult, score?: number, selected = false): void {
@@ -493,10 +571,11 @@ export class ImOrchestrator {
     );
   }
 
-  private failTurn(turnId: string, error: unknown): void {
+  private failTurn(turnId: string, error: unknown, status: "failed" | "cancelled" = "failed"): void {
     const failure = publicError(error);
     this.db.run(
-      "UPDATE im_chain_turns SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?",
+      "UPDATE im_chain_turns SET status = ?, failure = ?, completed_at = ? WHERE id = ?",
+      status,
       `${failure.code}: ${failure.message}`.slice(0, 2000),
       now(),
       turnId
@@ -678,14 +757,16 @@ export class ImOrchestrator {
   private async reply(
     chain: Record<string, unknown>,
     membershipId: string,
+    turnId: string,
     sourceMessage: Record<string, unknown>,
     signal: AbortSignal
   ): Promise<Record<string, unknown>> {
     const membership = this.characterMembership(membershipId);
-    await this.maybeCompact(chain, membership, sourceMessage, signal);
-    const turnId = this.createTurn(requiredString(chain.id), membershipId, "reply");
     let streamed = "";
     try {
+      await this.maybeCompact(chain, membership, sourceMessage, signal);
+      this.db.run("UPDATE im_chain_turns SET status = 'running' WHERE id = ?", turnId);
+      this.publishReplyTurn(chain, membership, turnId, "running");
       const result = await this.invoke(
         chain,
         membership,
@@ -707,10 +788,14 @@ export class ImOrchestrator {
       this.finishTurn(turnId, result, undefined, true);
       const message = this.appendCharacterMessage(chain, membership, result);
       this.publish(requiredString(chain.conversation_id), "message", { message });
+      this.publishReplyTurn(chain, membership, turnId, "completed");
       return this.messageRow(requiredString(message.id));
     } catch (error) {
       if (streamed) this.publish(requiredString(chain.conversation_id), "reset", { chainId: requiredString(chain.id), turnId, reason: "retry" });
-      this.failTurn(turnId, error);
+      const failure = publicError(error);
+      const cancelled = signal.aborted || failure.code === "IM_CHAIN_CANCELLED" || failure.code === "AI_STREAM_REQUEST_CANCELLED";
+      this.failTurn(turnId, error, cancelled ? "cancelled" : "failed");
+      this.publishReplyTurn(chain, membership, turnId, cancelled ? "cancelled" : "failed", failure);
       throw error;
     }
   }
@@ -744,28 +829,31 @@ export class ImOrchestrator {
       this.db.run("UPDATE im_chains SET status = 'running', updated_at = ? WHERE id = ?", now(), chainId);
       this.publish(conversationId, "chain", { chainId, status: "running", modelStage: chain.model_stage });
       let sourceMessage = this.messageRow(requiredString(chain.trigger_message_id));
-      let forcedQueue = this.mentionedCharacterMembershipIds(requiredString(sourceMessage.id), conversationId);
       if (requiredString(chain.mode) === "direct") {
         const target = this.activeCharacters(conversationId)[0];
         if (!target) throw new AppError(409, "IM_CHARACTER_UNAVAILABLE", "单聊角色已不可用");
-        await this.reply(chain, requiredString(target.id), sourceMessage, signal);
+        const planned = this.planReplyTurn(chain, requiredString(target.id));
+        await this.reply(chain, planned.membershipId, planned.turnId, sourceMessage, signal);
         this.finishChain(chainId, "completed");
         return;
       }
+      let forcedQueue = this.mentionedCharacterMembershipIds(requiredString(sourceMessage.id), conversationId)
+        .map((membershipId) => this.planReplyTurn(chain, membershipId));
       for (;;) {
         if (signal.aborted) throw signal.reason;
         chain = this.chainRow(chainId);
         if (requiredString(chain.status) !== "running") return;
         if (Number(chain.generated_count) >= Number(chain.max_ai_messages)) {
+          this.settlePendingReplyTurns(chain, "skipped", { code: "IM_CHAIN_LIMIT", message: "已达到群聊链路上限，未继续生成回答" });
           this.finishChain(chainId, "limit");
           return;
         }
-        let targetMembershipId = forcedQueue.shift() ?? null;
-        if (!targetMembershipId && requiredString(chain.mode) === "mention") {
+        let plannedReply = forcedQueue.shift() ?? null;
+        if (!plannedReply && requiredString(chain.mode) === "mention") {
           this.finishChain(chainId, "completed");
           return;
         }
-        if (!targetMembershipId) {
+        if (!plannedReply) {
           const senderCharacterId = optionalString(sourceMessage.sender_character_id);
           const candidates = this.activeCharacters(conversationId).filter((row) => requiredString(row.character_id) !== senderCharacterId);
           const scores = await Promise.all(candidates.map(async (candidate) => ({
@@ -780,32 +868,36 @@ export class ImOrchestrator {
             this.finishChain(chainId, "quiet");
             return;
           }
-          targetMembershipId = selected.membershipId;
+          plannedReply = this.planReplyTurn(chain, selected.membershipId);
           this.db.run(
             `UPDATE im_chain_turns SET selected = 1
              WHERE id = (
                SELECT id FROM im_chain_turns
                WHERE chain_id = ? AND character_membership_id = ? AND kind = 'judge' AND status = 'completed'
                ORDER BY created_at DESC, id DESC LIMIT 1
-             )`,
+            )`,
             chainId,
-            targetMembershipId
+            plannedReply.membershipId
           );
         }
-        sourceMessage = await this.reply(chain, targetMembershipId, sourceMessage, signal);
+        sourceMessage = await this.reply(chain, plannedReply.membershipId, plannedReply.turnId, sourceMessage, signal);
         const newMentions = this.mentionedCharacterMembershipIds(
           requiredString(sourceMessage.id),
           conversationId,
           optionalString(sourceMessage.sender_character_id)
         );
-        for (const membershipId of newMentions) if (!forcedQueue.includes(membershipId)) forcedQueue.push(membershipId);
+        for (const membershipId of newMentions) {
+          if (!forcedQueue.some((item) => item.membershipId === membershipId)) forcedQueue.push(this.planReplyTurn(chain, membershipId));
+        }
       }
     } catch (error) {
       const failure = publicError(error);
       if (signal.aborted || failure.code === "IM_CHAIN_CANCELLED" || failure.code === "AI_STREAM_REQUEST_CANCELLED") {
+        this.settlePendingReplyTurns(chain, "cancelled", failure);
         this.finishChain(chainId, "cancelled", failure);
         return;
       }
+      this.settlePendingReplyTurns(chain, "failed", failure);
       this.finishChain(chainId, "failed", failure);
     }
   }

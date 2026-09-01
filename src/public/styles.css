@@ -4754,7 +4754,13 @@ body { font-size: var(--ui-font-size); }
 .im-message.is-announcement > header { justify-content: center; color: var(--im-narration-label); font-weight: 600; letter-spacing: .08em; }
 .im-message.is-announcement > header::before, .im-message.is-announcement > header::after { content: ""; flex: 1 1 72px; max-width: 120px; height: 1px; background: var(--im-narration-line); opacity: .72; }
 .im-message.is-announcement .im-message-body { display: block; padding: 13px 18px; border: solid var(--im-narration-line); border-width: 1px 0; border-radius: 0; background: var(--im-narration-surface); box-shadow: none; color: var(--ink); font-size: 11px; line-height: 1.75; text-align: left; }
-.im-message.is-provisional { opacity: .78; }
+.im-generating-summary { width: min(78%, 720px); margin: 2px auto 9px 0; color: var(--muted); font-size: 9px; line-height: 1.4; }
+.im-message.is-provisional { opacity: .82; }
+.im-message.is-provisional.is-failed { opacity: 1; }
+.im-provisional-status { color: var(--muted); font-size: 8px; }
+.im-provisional-placeholder { margin: 0; color: var(--muted); }
+.im-provisional-error { margin: 0; color: color-mix(in srgb, #c44949 82%, var(--ink)); font-weight: 600; }
+.im-message.is-provisional.is-failed .im-message-body { border-color: color-mix(in srgb, #c44949 48%, var(--line)); background: color-mix(in srgb, #c44949 8%, var(--panel)); }
 .im-model-details { margin-top: 5px; color: var(--muted); font-size: 8px; }
 .im-model-details summary { cursor: pointer; }
 .im-inline-mention, .im-composer-mention { display: inline-flex; align-items: center; max-width: 220px; padding: 1px 6px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 9%, var(--surface)); color: var(--accent-dark); font: 500 10px/1.6 var(--font-sans); vertical-align: baseline; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4897,6 +4903,7 @@ body { font-size: var(--ui-font-size); }
   .im-view:not(.has-conversation) .im-conversations { display: flex; }
   .im-view:not(.has-conversation) .im-chat { display: none; }
   .im-message { width: 92%; }
+  .im-generating-summary { width: 92%; }
   .im-message.is-announcement { width: 100%; }
   .im-message-feed { padding: 14px 10px; }
   .im-chat-header { min-height: 58px; padding: 9px 10px; }

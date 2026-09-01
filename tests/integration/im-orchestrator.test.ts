@@ -88,8 +88,8 @@ describe("IM AI 调度", () => {
       retryCount: 3
     });
     const direct = runtime.im.createDirect(owner, String(character.id));
-    const events: string[] = [];
-    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => events.push(event.type));
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => events.push({ type: event.type, payload: event.payload }));
     const sent = runtime.im.sendMessage(owner, String(direct.id), {
       content: "准备出发。",
       requestId: "im-orchestrator-request-0001"
@@ -117,7 +117,19 @@ describe("IM AI 调度", () => {
       fallbackAttemptCount: 1,
       attemptCount: 5
     });
-    expect(events).toEqual(expect.arrayContaining(["chain", "reset", "delta", "message"]));
+    expect(events.map((event) => event.type)).toEqual(expect.arrayContaining(["chain", "turn", "reset", "delta", "message"]));
+    expect(events.filter((event) => event.type === "turn" && event.payload.kind === "reply").map((event) => event.payload.status)).toEqual([
+      "pending",
+      "running",
+      "completed"
+    ]);
+    expect(events.find((event) => event.type === "turn" && event.payload.status === "pending")?.payload).toMatchObject({
+      characterId: character.id,
+      character: { name: "林舟" }
+    });
+    expect((runtime.im.getConversation(String(direct.id), owner.userId).activeChain as Record<string, unknown>).turns).toEqual([
+      expect.objectContaining({ characterId: character.id, status: "completed" })
+    ]);
     const systemPrompt = bodies.find((body) => body.model === "fallback-model")?.messages as Array<{ role: string; content: string }>;
     expect(systemPrompt[0]?.content).toContain("<im_roleplay_rules>");
     expect(systemPrompt[0]?.content).toContain("舰长");
@@ -127,6 +139,100 @@ describe("IM AI 调度", () => {
       JSON.parse(String(messages[1]?.metadata_json)).callId
     )).toEqual({ created_by_user_id: owner.userId });
     expect(String(work.id)).toBeTruthy();
+  });
+
+  it("在角色生成前发布气泡状态并把最终错误保留在角色 turn 中", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-reply-failure-test-master-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async () => new Response("provider unavailable", { status: 500 }),
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "reply_failure_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "失败气泡来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "沈砚" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => events.push({ type: event.type, payload: event.payload }));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "能收到吗？",
+      requestId: "im-reply-failure-request-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+    unsubscribe();
+
+    expect(chain).toMatchObject({ status: "failed", generated_count: 0 });
+    const replyEvents = events.filter((event) => event.type === "turn" && event.payload.kind === "reply");
+    expect(replyEvents.map((event) => event.payload.status)).toEqual(["pending", "running", "failed"]);
+    expect(replyEvents.at(-1)?.payload).toMatchObject({
+      characterId: character.id,
+      error: { code: "AI_CALL_FAILED" }
+    });
+    const activeChain = runtime.im.getConversation(String(direct.id), owner.userId).activeChain as Record<string, unknown>;
+    expect(activeChain.status).toBe("failed");
+    expect(activeChain.turns).toEqual([
+      expect.objectContaining({ characterId: character.id, status: "failed", failure: expect.stringContaining("AI_CALL_FAILED") })
+    ]);
+  });
+
+  it("在多个被提及角色开始生成前一次性发布全部等待气泡", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-multiple-pending-test-master-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return completion("收到。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "multiple_pending_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const characters = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "多气泡来源" });
+      return [
+        runtime.store.createCharacter(String(work.id), { name: "南乔" }),
+        runtime.store.createCharacter(String(work.id), { name: "闻溪" })
+      ];
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "多气泡群",
+      characterIds: characters.map((character) => String(character.id)),
+      replyMode: "mention",
+      maxAiMessages: 5
+    });
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => events.push({ type: event.type, payload: event.payload }));
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: characters.map((character) => `mention://character/${character.id}`).join(" 请分别回答 "),
+      requestId: "im-multiple-pending-request-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+    unsubscribe();
+
+    expect(chain).toMatchObject({ status: "completed", generated_count: 2 });
+    const replyEvents = events.filter((event) => event.type === "turn" && event.payload.kind === "reply");
+    expect(replyEvents.slice(0, 2).map((event) => ({ status: event.payload.status, characterId: event.payload.characterId }))).toEqual([
+      { status: "pending", characterId: characters[0]?.id },
+      { status: "pending", characterId: characters[1]?.id }
+    ]);
+    expect(replyEvents.findIndex((event) => event.payload.status === "running")).toBeGreaterThan(1);
   });
 
   it("主动模式让各角色独立打分并只选择最高分角色", async () => {

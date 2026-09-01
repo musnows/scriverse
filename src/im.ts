@@ -714,16 +714,46 @@ export class ImService {
 
   getConversation(conversationId: string, userId: string, beforeSequence?: number): Record<string, unknown> {
     const row = this.assertReadableConversation(conversationId, userId);
+    const activeChain = this.db.get(
+      `SELECT id, status, model_stage, generated_count, error_code, error_message, created_at, updated_at
+       FROM im_chains WHERE conversation_id = ?
+       ORDER BY created_at DESC LIMIT 1`,
+      conversationId
+    );
+    const replyTurns = activeChain ? this.db.all(
+      `SELECT turn.*, membership.character_id, membership.snapshot_json
+       FROM im_chain_turns turn JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
+       WHERE turn.chain_id = ? AND turn.kind = 'reply'
+       ORDER BY turn.created_at, turn.id`,
+      requiredString(activeChain.id)
+    ).map((turn) => {
+      const snapshot = json<Record<string, unknown>>(requiredString(turn.snapshot_json), {});
+      const characterId = optionalString(turn.character_id) ?? requiredString(snapshot.id);
+      const avatar = characterId ? this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", characterId) : null;
+      const avatarSha256 = optionalString(avatar?.sha256);
+      return {
+        id: requiredString(turn.id),
+        chainId: requiredString(activeChain.id),
+        characterId,
+        character: {
+          characterId,
+          name: snapshot.name ?? "角色",
+          avatarUrl: characterId && avatarSha256
+            ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
+            : null
+        },
+        kind: "reply",
+        status: requiredString(turn.status),
+        failure: optionalString(turn.failure),
+        createdAt: requiredString(turn.created_at),
+        completedAt: optionalString(turn.completed_at)
+      };
+    }) : [];
     return {
       ...this.mapConversation(row, userId),
       participants: this.conversationParticipants(conversationId),
       messages: this.visibleMessages(conversationId, userId, 50, beforeSequence),
-      activeChain: this.db.get(
-        `SELECT id, status, model_stage, generated_count, error_code, error_message, created_at, updated_at
-         FROM im_chains WHERE conversation_id = ?
-         ORDER BY created_at DESC LIMIT 1`,
-        conversationId
-      ) ?? null
+      activeChain: activeChain ? { ...activeChain, turns: replyTurns } : null
     };
   }
 
