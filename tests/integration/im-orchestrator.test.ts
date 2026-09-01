@@ -188,6 +188,64 @@ describe("IM AI 调度", () => {
     ]);
   });
 
+  it("一个角色回答失败时继续执行同批其他角色", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-partial-reply-failure-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const system = messages[0]?.content ?? "";
+        if (system.indexOf("故障角色") < system.indexOf("正常角色")) return new Response("provider unavailable", { status: 500 });
+        return completion("正常角色已回复。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "partial_failure_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const characters = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "局部失败来源" });
+      return [
+        runtime.store.createCharacter(String(work.id), { name: "故障角色" }),
+        runtime.store.createCharacter(String(work.id), { name: "正常角色" })
+      ];
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "局部失败群",
+      characterIds: characters.map((character) => String(character.id)),
+      replyMode: "mention",
+      maxAiMessages: 5
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: characters.map((character) => `mention://character/${character.id}`).join(" 请分别回复 "),
+      requestId: "im-partial-reply-failure-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+
+    expect(chain).toMatchObject({ status: "completed", generated_count: 1 });
+    expect(runtime.database.all(
+      `SELECT membership.character_id, turn.status FROM im_chain_turns turn
+       JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
+       WHERE turn.chain_id = ? AND turn.kind = 'reply' ORDER BY turn.rowid`,
+      chainId
+    )).toEqual([
+      { character_id: characters[0]?.id, status: "failed" },
+      { character_id: characters[1]?.id, status: "completed" }
+    ]);
+    expect(runtime.database.get(
+      "SELECT sender_character_id, content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      chainId
+    )).toEqual({ sender_character_id: characters[1]?.id, content: "正常角色已回复。" });
+  });
+
   it("在多个被提及角色开始生成前一次性发布全部等待气泡", async () => {
     runtime = createRuntime({
       databasePath: ":memory:",

@@ -839,6 +839,8 @@ export class ImOrchestrator {
       }
       let forcedQueue = this.mentionedCharacterMembershipIds(requiredString(sourceMessage.id), conversationId)
         .map((membershipId) => this.planReplyTurn(chain, membershipId, requiredString(sourceMessage.id)));
+      let lastJudgedSourceMessageId: string | null = null;
+      let lastReplyFailure: { code: string; message: string } | null = null;
       for (;;) {
         if (signal.aborted) throw signal.reason;
         chain = this.chainRow(chainId);
@@ -850,10 +852,17 @@ export class ImOrchestrator {
         }
         let plannedReply = forcedQueue.shift() ?? null;
         if (!plannedReply && requiredString(chain.mode) === "mention") {
-          this.finishChain(chainId, "completed");
+          const latest = this.chainRow(chainId);
+          if (Number(latest.generated_count) === 0 && lastReplyFailure) this.finishChain(chainId, "failed", lastReplyFailure);
+          else this.finishChain(chainId, "completed");
           return;
         }
         if (!plannedReply) {
+          if (lastJudgedSourceMessageId === requiredString(sourceMessage.id)) {
+            this.finishChain(chainId, "failed", lastReplyFailure ?? { code: "IM_REPLY_ALL_FAILED", message: "所有已选择角色的回答都生成失败" });
+            return;
+          }
+          lastJudgedSourceMessageId = requiredString(sourceMessage.id);
           const senderCharacterId = optionalString(sourceMessage.sender_character_id);
           const candidates = this.activeCharacters(conversationId).filter((row) => requiredString(row.character_id) !== senderCharacterId);
           const scores = await Promise.all(candidates.map(async (candidate) => ({
@@ -886,7 +895,14 @@ export class ImOrchestrator {
           if (!plannedReply) throw new AppError(500, "IM_REPLY_QUEUE_EMPTY", "主动交流没有生成可执行的角色回复队列");
         }
         const replySourceMessage = this.messageRow(plannedReply.sourceMessageId);
-        sourceMessage = await this.reply(chain, plannedReply.membershipId, plannedReply.turnId, replySourceMessage, signal);
+        try {
+          sourceMessage = await this.reply(chain, plannedReply.membershipId, plannedReply.turnId, replySourceMessage, signal);
+        } catch (error) {
+          const failure = publicError(error);
+          if (signal.aborted || failure.code === "IM_CHAIN_CANCELLED" || failure.code === "AI_STREAM_REQUEST_CANCELLED") throw error;
+          lastReplyFailure = failure;
+          continue;
+        }
         const newMentions = this.mentionedCharacterMembershipIds(
           requiredString(sourceMessage.id),
           conversationId,
