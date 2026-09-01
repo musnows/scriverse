@@ -308,6 +308,40 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     }
   }
 
+  function provisionalReplyBodyHtml(reply) {
+    const failed = ["failed", "skipped"].includes(reply.status);
+    const pendingCopy = reply.status === "pending" ? "等待角色开始回答…" : "正在组织回答…";
+    const content = reply.content ? renderMarkdown(reply.content) : failed ? "" : `<p class="im-provisional-placeholder">${pendingCopy}</p>`;
+    const failure = failed ? `<p class="im-provisional-error">${esc(reply.error || "角色回答生成失败")}</p>` : "";
+    return `${content}${failure}`;
+  }
+
+  function syncGeneratingSummary() {
+    const count = [...provisionalReplies.values()].filter((reply) => ["pending", "running"].includes(reply.status)).length;
+    const summary = feed.querySelector(".im-generating-summary");
+    if (summary && count > 0) summary.textContent = `${count} 个角色正在生成回答`;
+    else if (summary) summary.remove();
+    return count;
+  }
+
+  function updateProvisionalReplyElement(reply) {
+    const article = [...feed.querySelectorAll("[data-im-provisional-turn]")]
+      .find((item) => item.dataset.imProvisionalTurn === reply.turnId);
+    if (!article) {
+      renderMessages();
+      return;
+    }
+    const follow = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+    const failed = ["failed", "skipped"].includes(reply.status);
+    const statusLabel = reply.status === "pending" ? "等待生成" : reply.status === "running" ? "正在生成" : reply.status === "skipped" ? "未生成" : "生成失败";
+    article.classList.toggle("is-failed", failed);
+    article.dataset.imProvisionalStatus = reply.status;
+    article.querySelector(".im-provisional-status").textContent = statusLabel;
+    article.querySelector(".im-message-body").innerHTML = provisionalReplyBodyHtml(reply);
+    syncGeneratingSummary();
+    if (follow) feed.scrollTop = feed.scrollHeight;
+  }
+
   function renderMessages() {
     const messages = array(current?.messages);
     const provisional = [...provisionalReplies.values()];
@@ -322,12 +356,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const provisionalHtml = provisional.map((reply) => {
       const failed = ['failed', 'skipped'].includes(reply.status);
       const statusLabel = reply.status === "pending" ? "等待生成" : reply.status === "running" ? "正在生成" : reply.status === "skipped" ? "未生成" : "生成失败";
-      const pendingCopy = reply.status === "pending" ? "等待角色开始回答…" : "正在组织回答…";
-      const content = reply.content ? renderMarkdown(reply.content) : failed ? "" : `<p class="im-provisional-placeholder">${pendingCopy}</p>`;
-      const failure = failed ? `<p class="im-provisional-error">${esc(reply.error || "角色回答生成失败")}</p>` : "";
       return `<article class="im-message is-character is-provisional${failed ? " is-failed" : ""}" data-im-provisional-turn="${esc(reply.turnId)}" data-im-provisional-status="${esc(reply.status)}">
         <header>${imAvatarHtml(reply, "character", "im-message-avatar")}<strong>${esc(reply.name || "角色")}</strong><span class="im-provisional-status">${statusLabel}</span></header>
-        <div class="im-message-body message-body">${content}${failure}</div>
+        <div class="im-message-body message-body">${provisionalReplyBodyHtml(reply)}</div>
       </article>`;
     }).join("");
     feed.innerHTML = messages.map((message) => {
@@ -820,15 +851,20 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     if (envelope.type === "turn" && current?.id === eventConversationId && envelope.payload.kind === "reply") {
       const status = String(envelope.payload.status || "");
       const turnId = String(envelope.payload.turnId || "");
-      if (status === "completed" || status === "cancelled") provisionalReplies.delete(turnId);
-      else upsertProvisionalReply(envelope.payload);
-      renderMessages();
+      if (status === "completed" || status === "cancelled") {
+        provisionalReplies.delete(turnId);
+        feed.querySelector(`[data-im-provisional-turn="${turnId}"]`)?.remove();
+        syncGeneratingSummary();
+      } else {
+        const provisional = upsertProvisionalReply(envelope.payload);
+        if (provisional) updateProvisionalReplyElement(provisional);
+      }
       return;
     }
     if (envelope.type === "delta" && current?.id === eventConversationId) {
       const provisional = upsertProvisionalReply({ ...envelope.payload, status: "running" });
       if (provisional) provisional.content += envelope.payload.delta || "";
-      renderMessages();
+      if (provisional) updateProvisionalReplyElement(provisional);
       return;
     }
     if (envelope.type === "reset" && current?.id === eventConversationId) {
@@ -838,8 +874,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         if (envelope.payload.characterId && reply.characterId !== envelope.payload.characterId) continue;
         reply.content = "";
         reply.status = "running";
+        updateProvisionalReplyElement(reply);
       }
-      renderMessages();
       return;
     }
     if (current?.id === eventConversationId) await openConversation(eventConversationId);
