@@ -90,7 +90,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   function applyConversationsWidth(width, persist = false) {
     conversationsWidth = normalizeImConversationWidth(width, conversationsMaximumWidth());
     workspace.style.setProperty("--im-conversations-width", `${conversationsWidth}px`);
-    conversationsPanel.classList.toggle("is-compact", conversationsWidth <= 92);
+    conversationsPanel.classList.toggle("is-compact", conversationsWidth <= 180);
     conversationsResize.setAttribute("aria-valuemax", String(conversationsMaximumWidth()));
     conversationsResize.setAttribute("aria-valuenow", String(Math.round(conversationsWidth)));
     if (persist) {
