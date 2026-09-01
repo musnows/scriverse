@@ -49,7 +49,7 @@ describe("IM AI 调度", () => {
     await runtime?.close();
   });
 
-  it("主模型重试耗尽后整条链粘在 fallback 并持久化完整回复", async () => {
+  it("主模型重试耗尽后单次调用切换 fallback 并持久化完整回复", async () => {
     let primaryCalls = 0;
     let fallbackCalls = 0;
     const bodies: Record<string, unknown>[] = [];
@@ -99,7 +99,7 @@ describe("IM AI 调度", () => {
     const chain = await waitForChain(runtime, chainId);
     unsubscribe();
 
-    expect(chain).toMatchObject({ status: "completed", model_stage: "fallback", generated_count: 1 });
+    expect(chain).toMatchObject({ status: "completed", model_stage: "primary", generated_count: 1 });
     expect(primaryCalls).toBe(4);
     expect(fallbackCalls).toBe(1);
     const messages = runtime.database.all(
@@ -190,6 +190,7 @@ describe("IM AI 调度", () => {
   });
 
   it("一个角色回答失败时继续执行同批其他角色", async () => {
+    const normalCharacterModels: string[] = [];
     runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "im-partial-reply-failure-secret-with-enough-length",
@@ -199,6 +200,7 @@ describe("IM AI 调度", () => {
         const messages = body.messages as Array<{ role: string; content: string }>;
         const system = messages[0]?.content ?? "";
         if (system.indexOf("故障角色") < system.indexOf("正常角色")) return new Response("provider unavailable", { status: 500 });
+        normalCharacterModels.push(String(body.model));
         return completion("正常角色已回复。", body.stream === true);
       },
       aiRetrySleep: async () => undefined
@@ -245,6 +247,7 @@ describe("IM AI 调度", () => {
       "SELECT sender_character_id, content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
       chainId
     )).toEqual({ sender_character_id: characters[1]?.id, content: "正常角色已回复。" });
+    expect(normalCharacterModels).toEqual(["primary-model"]);
   });
 
   it("在多个被提及角色开始生成前一次性发布全部等待气泡", async () => {

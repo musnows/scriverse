@@ -477,12 +477,6 @@ export class ImOrchestrator {
         durationMs: Math.round(Number(process.hrtime.bigint() - started) / 1_000_000)
       };
     };
-    const currentStage = requiredString(this.chainRow(requiredString(chain.id)).model_stage) === "fallback" ? "fallback" : "primary";
-    if (currentStage === "fallback") {
-      const fallbackModelId = optionalString(chain.fallback_model_id);
-      if (!fallbackModelId) throw new AppError(409, "IM_MODEL_NOT_CONFIGURED", "fallback 模型未配置");
-      return invokeModel(fallbackModelId, "fallback");
-    }
     const primaryModelId = optionalString(chain.primary_model_id);
     if (!primaryModelId) throw new AppError(409, "IM_MODEL_NOT_CONFIGURED", "主模型未配置");
     try {
@@ -491,8 +485,6 @@ export class ImOrchestrator {
       if (!this.shouldFailover(error) || signal.aborted) throw error;
       const fallbackModelId = optionalString(chain.fallback_model_id);
       if (!fallbackModelId) throw error;
-      const timestamp = now();
-      this.db.run("UPDATE im_chains SET model_stage = 'fallback', updated_at = ? WHERE id = ?", timestamp, requiredString(chain.id));
       this.publish(requiredString(chain.conversation_id), "reset", {
         chainId: requiredString(chain.id),
         reason: "fallback",
