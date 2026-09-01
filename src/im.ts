@@ -500,22 +500,46 @@ export class ImService {
     };
   }
 
-  private conversationParticipants(conversationId: string): { humans: Record<string, unknown>[]; characters: Record<string, unknown>[] } {
+  private conversationParticipants(conversationId: string, viewerUserId: string): { humans: Record<string, unknown>[]; characters: Record<string, unknown>[] } {
+    const viewerMembership = this.db.get(
+      `SELECT joined_sequence, left_sequence FROM im_human_memberships
+       WHERE conversation_id = ? AND user_id = ?
+       ORDER BY joined_sequence DESC, joined_at DESC LIMIT 1`,
+      conversationId,
+      viewerUserId
+    );
+    if (!viewerMembership) throw new AppError(403, "IM_CONVERSATION_ACCESS_DENIED", "你不是这个 IM 会话的成员");
+    const leftSequence = viewerMembership.left_sequence === null || viewerMembership.left_sequence === undefined
+      ? null
+      : Number(viewerMembership.left_sequence);
+    const humanVisibility = leftSequence === null
+      ? "membership.left_at IS NULL"
+      : "membership.joined_sequence < ? AND (membership.left_sequence IS NULL OR membership.left_sequence >= ?)";
+    const characterVisibility = leftSequence === null
+      ? "membership.left_at IS NULL"
+      : "membership.joined_sequence < ? AND (membership.left_sequence IS NULL OR membership.left_sequence >= ?)";
+    const visibilityParams = leftSequence === null ? [] : [leftSequence, leftSequence];
     const humans = this.db.all(
       `SELECT membership.id AS membership_id, membership.user_id, membership.role, membership.joined_at, membership.left_at,
               user.username, user.display_name, user.avatar_sha256
        FROM im_human_memberships membership JOIN users user ON user.id = membership.user_id
-       WHERE membership.conversation_id = ? ORDER BY membership.joined_at, membership.id`,
-      conversationId
-    ).map((row) => this.mapHumanMembership(row));
+       WHERE membership.conversation_id = ? AND ${humanVisibility}
+       ORDER BY membership.joined_at, membership.id`,
+      conversationId,
+      ...visibilityParams
+    ).map((row) => ({ ...this.mapHumanMembership(row), ...(leftSequence === null ? {} : { leftAt: null }) }));
     const characters = this.db.all(
       `SELECT membership.*, avatar.sha256 AS avatar_sha256
        FROM im_character_memberships membership
        LEFT JOIN character_avatars avatar ON avatar.character_id = membership.character_id
-       WHERE membership.conversation_id = ?
+       WHERE membership.conversation_id = ? AND ${characterVisibility}
        ORDER BY membership.joined_at, membership.id`,
-      conversationId
-    ).map((row) => this.mapCharacterMembership(row));
+      conversationId,
+      ...visibilityParams
+    ).map((row) => ({
+      ...this.mapCharacterMembership(row),
+      ...(leftSequence === null ? {} : { leftAt: null, status: "active" })
+    }));
     return { humans, characters };
   }
 
@@ -579,66 +603,33 @@ export class ImService {
 
   private mapConversation(row: Record<string, unknown>, userId: string): Record<string, unknown> {
     const conversationId = requiredString(row.id);
-    const avatarCharacters = this.db.all(
-      `SELECT membership.character_id, membership.snapshot_json, avatar.sha256 AS avatar_sha256
-       FROM im_character_memberships membership
-       LEFT JOIN character_avatars avatar ON avatar.character_id = membership.character_id
-       WHERE membership.conversation_id = ? AND membership.left_at IS NULL AND membership.status = 'active'
-       ORDER BY membership.joined_at, membership.id LIMIT 3`,
-      conversationId
-    ).map((membership) => {
-      const snapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
-      const characterId = requiredString(membership.character_id);
-      const avatarSha256 = optionalString(membership.avatar_sha256);
-      return {
-        characterId,
-        name: snapshot.name ?? "角色",
-        avatarUrl: avatarSha256
-          ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
-          : null
-      };
-    });
+    const participants = this.conversationParticipants(conversationId, userId);
+    const avatarCharacters = participants.characters
+      .filter((membership) => requiredString(membership.status) === "active")
+      .slice(0, 3)
+      .map((membership) => ({
+        characterId: requiredString(membership.characterId),
+        name: requiredString(membership.name),
+        avatarUrl: optionalString(membership.avatarUrl)
+      }));
     const avatarMembers = [
-      ...this.db.all(
-        `SELECT membership.id AS membership_id, membership.character_id, membership.snapshot_json,
-                membership.joined_at, avatar.sha256 AS avatar_sha256
-         FROM im_character_memberships membership
-         LEFT JOIN character_avatars avatar ON avatar.character_id = membership.character_id
-         WHERE membership.conversation_id = ? AND membership.left_at IS NULL AND membership.status = 'active'`,
-        conversationId
-      ).map((membership) => {
-        const snapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
-        const characterId = requiredString(membership.character_id);
-        const avatarSha256 = optionalString(membership.avatar_sha256);
-        return {
-          kind: "character",
-          participantId: characterId,
-          name: snapshot.name ?? "角色",
-          avatarUrl: avatarSha256
-            ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
-            : null,
-          joinedAt: requiredString(membership.joined_at),
-          membershipId: requiredString(membership.membership_id)
-        };
-      }),
-      ...this.db.all(
-        `SELECT membership.id AS membership_id, membership.joined_at,
-                user.id AS user_id, user.username, user.display_name, user.avatar_sha256
-         FROM im_human_memberships membership
-         JOIN users user ON user.id = membership.user_id
-         WHERE membership.conversation_id = ? AND membership.left_at IS NULL`,
-        conversationId
-      ).map((membership) => ({
+      ...participants.characters.filter((membership) => requiredString(membership.status) === "active").map((membership) => ({
+        kind: "character",
+        participantId: requiredString(membership.characterId),
+        name: requiredString(membership.name),
+        avatarUrl: optionalString(membership.avatarUrl),
+        joinedAt: requiredString(membership.joinedAt),
+        membershipId: requiredString(membership.membershipId)
+      })),
+      ...participants.humans.map((membership) => ({
         kind: "user",
-        participantId: requiredString(membership.user_id),
-        name: requiredString(membership.display_name),
-        displayName: requiredString(membership.display_name),
+        participantId: requiredString(membership.userId),
+        name: requiredString(membership.displayName),
+        displayName: requiredString(membership.displayName),
         username: requiredString(membership.username),
-        avatarUrl: membership.avatar_sha256
-          ? `/api/user-avatars/${encodeURIComponent(requiredString(membership.user_id))}?v=${encodeURIComponent(requiredString(membership.avatar_sha256))}`
-          : null,
-        joinedAt: requiredString(membership.joined_at),
-        membershipId: requiredString(membership.membership_id)
+        avatarUrl: optionalString(membership.avatarUrl),
+        joinedAt: requiredString(membership.joinedAt),
+        membershipId: requiredString(membership.membershipId)
       }))
     ].sort((left, right) => left.joinedAt.localeCompare(right.joinedAt)
       || left.kind.localeCompare(right.kind)
@@ -751,7 +742,7 @@ export class ImService {
     }) : [];
     return {
       ...this.mapConversation(row, userId),
-      participants: this.conversationParticipants(conversationId),
+      participants: this.conversationParticipants(conversationId, userId),
       messages: this.visibleMessages(conversationId, userId, 50, beforeSequence),
       activeChain: activeChain ? { ...activeChain, turns: replyTurns } : null
     };

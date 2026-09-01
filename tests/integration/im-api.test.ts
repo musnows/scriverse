@@ -292,6 +292,16 @@ describe("全局 IM API", () => {
       .expect(204);
     const readOnly = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(readOnly.body.data.active).toBe(false);
+    await owner.agent.post(`/api/im/conversations/${groupId}/humans`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: admin.user.userId })
+      .expect(201);
+    const ownerAfterLateJoin = await owner.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(ownerAfterLateJoin.body.data.participants.humans.map((item: { userId: string }) => item.userId)).toContain(admin.user.userId);
+    const historicalView = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(historicalView.body.data.participants.humans.map((item: { userId: string }) => item.userId)).not.toContain(admin.user.userId);
+    expect(historicalView.body.data.avatarMembers.map((item: { participantId: string }) => item.participantId)).not.toContain(admin.user.userId);
+    expect(historicalView.body.data.messages.some((item: { content: string }) => item.content.includes("im_admin 加入了群聊"))).toBe(false);
     await lateMember.agent.post(`/api/im/conversations/${groupId}/messages`)
       .set("X-CSRF-Token", lateMember.csrfToken)
       .send({ content: "不能发送", requestId: "im-message-request-0003" })
