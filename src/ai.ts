@@ -905,7 +905,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
 
 function disabledThinkingParameters(provider: Row, model: Row): Record<string, unknown> {
   if (providerProtocol(provider) === "openai-responses") return { reasoning_effort: "none" };
-  if (isGeminiProviderOrModel(provider, model)) return {};
+  if (isGeminiProviderOrModel(provider, model)) return { reasoning_effort: "none" };
   return "thinking" in thinkingParameters(provider, model) ? { thinking: { type: "disabled" } } : {};
 }
 
