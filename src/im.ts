@@ -1044,6 +1044,13 @@ export class ImService {
       input.requestId
     );
     if (existing) {
+      const membership = this.activeMembership(conversationId, user.userId);
+      const sameRequest = requiredString(existing.sender_kind) === "human"
+        && requiredString(existing.sender_user_id) === user.userId
+        && requiredString(existing.content) === input.content
+        && membership
+        && Number(existing.sequence) > Number(membership.joined_sequence);
+      if (!sameRequest) throw new AppError(409, "IM_REQUEST_ID_CONFLICT", "请求标识已被其他 IM 消息、其他成员或不同内容使用");
       const existingChainId = optionalString(existing.chain_id);
       const chain = existingChainId ? this.db.get("SELECT * FROM im_chains WHERE id = ?", existingChainId) ?? null : null;
       return { message: this.mapMessage(existing), chain, duplicate: true };
@@ -1147,7 +1154,15 @@ export class ImService {
     );
     if (existing) {
       const metadata = json<Record<string, unknown>>(requiredString(existing.metadata_json), {});
-      if (metadata.type !== "announcement") {
+      const publishedBy = metadata.publishedBy && typeof metadata.publishedBy === "object" && !Array.isArray(metadata.publishedBy)
+        ? metadata.publishedBy as Record<string, unknown>
+        : {};
+      if (
+        metadata.type !== "announcement"
+        || requiredString(existing.sender_kind) !== "system"
+        || requiredString(existing.content) !== input.content
+        || requiredString(publishedBy.userId) !== owner.userId
+      ) {
         throw new AppError(409, "IM_REQUEST_ID_CONFLICT", "请求标识已被其他 IM 消息使用");
       }
       return { message: this.mapMessage(existing), chain: null, duplicate: true };

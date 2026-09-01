@@ -222,6 +222,10 @@ describe("全局 IM API", () => {
       .expect(201);
     expect(duplicateAnnouncement.body.data).toMatchObject({ duplicate: true });
     expect(duplicateAnnouncement.body.data.message.id).toBe(announcement.body.data.message.id);
+    await owner.agent.post(`/api/im/conversations/${groupId}/announcements`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ content: "不同的公告内容。", requestId: "im-announcement-request-0001" })
+      .expect(409);
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM im_chains WHERE conversation_id = ?", groupId)).toEqual({ count: 0 });
     expect(runtime.database.get(
       "SELECT COUNT(*) AS count FROM im_message_deliveries WHERE message_id = ?",
@@ -239,6 +243,30 @@ describe("全局 IM API", () => {
     expect(firstMessage.body.data.message.mentions).toEqual([
       expect.objectContaining({ kind: "character", id: character.body.data.id })
     ]);
+    const duplicateMessage = await owner.agent.post(`/api/im/conversations/${groupId}/messages`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        content: `mention://character/${character.body.data.id} 我们出发。`,
+        requestId: "im-message-request-0001"
+      })
+      .expect(201);
+    expect(duplicateMessage.body.data).toMatchObject({ duplicate: true });
+    expect(duplicateMessage.body.data.message.id).toBe(firstMessage.body.data.message.id);
+    await owner.agent.post(`/api/im/conversations/${groupId}/messages`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ content: "不同内容", requestId: "im-message-request-0001" })
+      .expect(409);
+    await member.agent.post(`/api/im/conversations/${groupId}/messages`)
+      .set("X-CSRF-Token", member.csrfToken)
+      .send({
+        content: `mention://character/${character.body.data.id} 我们出发。`,
+        requestId: "im-message-request-0001"
+      })
+      .expect(409);
+    await owner.agent.post(`/api/im/conversations/${groupId}/messages`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ content: "公告不能作为普通消息幂等命中", requestId: "im-announcement-request-0001" })
+      .expect(409);
 
     const memberView = await member.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(memberView.body.data.messages).toHaveLength(2);
