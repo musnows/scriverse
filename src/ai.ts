@@ -521,6 +521,7 @@ type GenerateInput = {
   excludeConversationMessageId?: string;
   assistantMessageRequestId?: string;
   disableTools?: boolean;
+  disableThinking?: boolean;
   agentToolIds?: AgentToolId[];
   agentToolCallLimit?: number;
   imageAttachments?: ChatImageAttachment[];
@@ -897,6 +898,12 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
   }
   if (protocol === "anthropic-messages" && !isLongCatProvider(provider)) return effortParameters;
   return { thinking: { type: thinkingEnabled ? thinkingType : "disabled" }, ...effortParameters };
+}
+
+function disabledThinkingParameters(provider: Row, model: Row): Record<string, unknown> {
+  if (providerProtocol(provider) === "openai-responses") return { reasoning_effort: "none" };
+  if (isGeminiProviderOrModel(provider, model)) return {};
+  return "thinking" in thinkingParameters(provider, model) ? { thinking: { type: "disabled" } } : {};
 }
 
 const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "semantic_search_story", "read_character_sections", "search_drafts", "image", "calculate_time"] as const;
@@ -9882,11 +9889,12 @@ export class AiManager {
       scope: { type: "none", suppressAutomaticContext: true, includeBookSummary: false },
       modelId: input.modelId,
       parameters: input.kind === "judge"
-        ? { temperature: 0, max_tokens: 128 }
+        ? { temperature: 0, max_tokens: 1024 }
         : input.kind === "compact" ? { temperature: 0.1, max_tokens: 2000 } : undefined,
       extraSystemPrompt: taskRules,
       signal: input.signal,
       disableTools: input.kind !== "reply",
+      disableThinking: input.kind === "judge",
       agentToolIds: input.kind === "reply" ? roleplayReadTools : [],
       retryPolicy: { retryCount: input.retryCount, backoffRetryCount: input.retryCount },
       im: {
@@ -9915,7 +9923,7 @@ export class AiManager {
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const requestedParameters = {
       ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) }, stringValue(model, "model_id")),
-      ...thinkingParameters(provider, model)
+      ...(input.disableThinking ? disabledThinkingParameters(provider, model) : thinkingParameters(provider, model))
     };
     const configuredOutputTokens = Number(requestedParameters.max_tokens) || DEFAULT_MAX_TOKENS;
     const contextCompactThreshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));

@@ -238,7 +238,7 @@ describe("IM AI 调度", () => {
     expect(replyEvents.findIndex((event) => event.payload.status === "running")).toBeGreaterThan(1);
   });
 
-  it("主动模式让各角色独立打分并只选择最高分角色", async () => {
+  it("主动模式让所有达到阈值的角色进入回复队列并关闭判断思考", async () => {
     const requestPrompts: string[] = [];
     runtime = createRuntime({
       databasePath: ":memory:",
@@ -250,7 +250,11 @@ describe("IM AI 调度", () => {
         const system = messages[0]?.content ?? "";
         requestPrompts.push(messages.map((message) => message.content).join("\n"));
         const judge = system.includes("只判断当前角色现在是否有必要发送一条新消息");
-        if (judge) return completion(system.indexOf("林舟") < system.indexOf("顾遥") ? '{"score":85}' : '{"score":30}', false);
+        if (judge) {
+          expect(body.max_tokens).toBe(1024);
+          expect(body.thinking).toEqual({ type: "disabled" });
+          return completion(system.indexOf("林舟") < system.indexOf("顾遥") ? '{"score":85}' : '{"score":75}', false);
+        }
         return completion("我来处理这件事。", body.stream === true);
       },
       aiRetrySleep: async () => undefined
@@ -283,7 +287,7 @@ describe("IM AI 调度", () => {
       characterIds: characters.map((character) => String(character.id)),
       replyMode: "proactive",
       responseThreshold: 60,
-      maxAiMessages: 1
+      maxAiMessages: 2
     });
     const announcement = runtime.im.publishAnnouncement(owner, String(group.id), {
       content: "远方的风暴正在逼近，甲板开始剧烈摇晃。",
@@ -302,8 +306,8 @@ describe("IM AI 调度", () => {
     runtime.imOrchestrator.publishMessageResult(sent);
     const chainId = String((sent.chain as Record<string, unknown>).id);
     const chain = await waitForChain(runtime, chainId);
-    expect(chain).toMatchObject({ status: "limit", generated_count: 1 });
-    expect(requestPrompts.length).toBeGreaterThanOrEqual(3);
+    expect(chain).toMatchObject({ status: "limit", generated_count: 2 });
+    expect(requestPrompts.length).toBeGreaterThanOrEqual(4);
     expect(requestPrompts.every((prompt) => prompt.includes("[1] 旁白：远方的风暴正在逼近，甲板开始剧烈摇晃。"))).toBe(true);
     expect(runtime.database.all(
       `SELECT membership.character_id, turn.score, turn.selected FROM im_chain_turns turn
@@ -312,14 +316,17 @@ describe("IM AI 调度", () => {
       chainId
     )).toEqual([
       { character_id: characters[0]?.id, score: 85, selected: 1 },
-      { character_id: characters[1]?.id, score: 30, selected: 0 }
+      { character_id: characters[1]?.id, score: 75, selected: 1 }
     ]);
-    const characterMessage = runtime.database.get(
-      "SELECT sender_character_id, sender_snapshot_json, content FROM im_messages WHERE conversation_id = ? AND sender_kind = 'character'",
+    const characterMessages = runtime.database.all(
+      "SELECT sender_character_id, sender_snapshot_json, content FROM im_messages WHERE conversation_id = ? AND sender_kind = 'character' ORDER BY sequence",
       String(group.id)
     );
-    expect(characterMessage).toMatchObject({ sender_character_id: characters[0]?.id, content: "我来处理这件事。" });
-    expect(JSON.parse(String(characterMessage?.sender_snapshot_json))).toMatchObject({
+    expect(characterMessages.map((message) => ({ sender_character_id: message.sender_character_id, content: message.content }))).toEqual([
+      { sender_character_id: characters[0]?.id, content: "我来处理这件事。" },
+      { sender_character_id: characters[1]?.id, content: "我来处理这件事。" }
+    ]);
+    expect(JSON.parse(String(characterMessages[0]?.sender_snapshot_json))).toMatchObject({
       avatarUrl: `/api/im/conversations/${group.id}/characters/${characters[0]?.id}/avatar?v=${avatarSha256}`
     });
   });

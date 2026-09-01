@@ -863,22 +863,27 @@ export class ImOrchestrator {
           const available = scores.filter((item): item is { membershipId: string; score: number } => item.score !== null)
             .sort((left, right) => right.score - left.score || left.membershipId.localeCompare(right.membershipId));
           if (available.length === 0) throw new AppError(502, "IM_JUDGE_ALL_FAILED", "所有 AI 角色的发言判断都失败了");
-          const selected = available[0];
-          if (!selected || selected.score < Number(chain.threshold)) {
+          const selected = available.filter((item) => item.score >= Number(chain.threshold));
+          if (selected.length === 0) {
             this.finishChain(chainId, "quiet");
             return;
           }
-          plannedReply = this.planReplyTurn(chain, selected.membershipId);
-          this.db.run(
-            `UPDATE im_chain_turns SET selected = 1
-             WHERE id = (
-               SELECT id FROM im_chain_turns
-               WHERE chain_id = ? AND character_membership_id = ? AND kind = 'judge' AND status = 'completed'
-               ORDER BY created_at DESC, id DESC LIMIT 1
-            )`,
-            chainId,
-            plannedReply.membershipId
-          );
+          for (const item of selected) {
+            const selectedReply = this.planReplyTurn(chain, item.membershipId);
+            forcedQueue.push(selectedReply);
+            this.db.run(
+              `UPDATE im_chain_turns SET selected = 1
+               WHERE id = (
+                 SELECT id FROM im_chain_turns
+                 WHERE chain_id = ? AND character_membership_id = ? AND kind = 'judge' AND status = 'completed'
+                 ORDER BY created_at DESC, id DESC LIMIT 1
+              )`,
+              chainId,
+              selectedReply.membershipId
+            );
+          }
+          plannedReply = forcedQueue.shift() ?? null;
+          if (!plannedReply) throw new AppError(500, "IM_REPLY_QUEUE_EMPTY", "主动交流没有生成可执行的角色回复队列");
         }
         sourceMessage = await this.reply(chain, plannedReply.membershipId, plannedReply.turnId, sourceMessage, signal);
         const newMentions = this.mentionedCharacterMembershipIds(
