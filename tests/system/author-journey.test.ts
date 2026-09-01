@@ -1002,7 +1002,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small>');
     expect(application.text).toContain('Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")');
     expect(application.text).toContain('Number(work.wordCount ?? 0).toLocaleString("zh-CN")');
-    expect(application.text).toContain('<span>${Number(volume.chapterCount ?? chapters.length)} 章</span>');
+    expect(application.text).toContain('<span class="volume-chapter-count"><span class="volume-chapter-count-number">${Number(volume.chapterCount ?? chapters.length)}</span><span class="volume-chapter-count-unit"> 章</span></span>');
     expect(application.text).toContain("function renderKnowledgeMarkdownSections()");
     expect(application.text).toContain("data-knowledge-section-create");
     expect(application.text).toContain("function openKnowledgeSectionEditor");
