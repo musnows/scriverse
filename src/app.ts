@@ -2008,6 +2008,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     im.removeHuman(user, request.params.conversationId, request.params.userId);
     imOrchestrator.cancelConversation(request.params.conversationId, "human_member_removed");
     imOrchestrator.publishConversation(request.params.conversationId);
+    imOrchestrator.publishConversationToUser(request.params.userId, request.params.conversationId);
     noContent(response);
   });
   app.post("/api/im/conversations/:conversationId/leave", (request, response) => {
@@ -2016,6 +2017,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     im.leaveGroup(user, request.params.conversationId);
     imOrchestrator.cancelConversation(request.params.conversationId, "human_member_left");
     imOrchestrator.publishConversation(request.params.conversationId);
+    imOrchestrator.publishConversationToUser(user.userId, request.params.conversationId);
     noContent(response);
   });
   app.post("/api/im/conversations/:conversationId/characters", (request, response) => {

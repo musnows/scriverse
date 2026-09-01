@@ -105,6 +105,16 @@ export class ImOrchestrator {
     this.publish(conversationId, "conversation", {});
   }
 
+  publishConversationToUser(userId: string, conversationId: string): void {
+    this.publishToUser(userId, {
+      id: id("imEvent"),
+      type: "conversation",
+      conversationId,
+      payload: { membershipChanged: true },
+      createdAt: now()
+    });
+  }
+
   publishMessageResult(result: Record<string, unknown>): void {
     const message = result.message && typeof result.message === "object" && !Array.isArray(result.message)
       ? result.message as Record<string, unknown>

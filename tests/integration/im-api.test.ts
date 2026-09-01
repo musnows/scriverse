@@ -302,6 +302,16 @@ describe("全局 IM API", () => {
     expect(historicalView.body.data.participants.humans.map((item: { userId: string }) => item.userId)).not.toContain(admin.user.userId);
     expect(historicalView.body.data.avatarMembers.map((item: { participantId: string }) => item.participantId)).not.toContain(admin.user.userId);
     expect(historicalView.body.data.messages.some((item: { content: string }) => item.content.includes("im_admin 加入了群聊"))).toBe(false);
+    const removedMemberEvents: Array<{ type: string; conversationId: string }> = [];
+    const unsubscribeRemovedMember = runtime.imOrchestrator.subscribe(admin.user.userId, (event) => {
+      removedMemberEvents.push({ type: event.type, conversationId: event.conversationId });
+    });
+    await owner.agent.delete(`/api/im/conversations/${groupId}/humans/${admin.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({})
+      .expect(204);
+    unsubscribeRemovedMember();
+    expect(removedMemberEvents).toContainEqual({ type: "conversation", conversationId: groupId });
     await lateMember.agent.post(`/api/im/conversations/${groupId}/messages`)
       .set("X-CSRF-Token", lateMember.csrfToken)
       .send({ content: "不能发送", requestId: "im-message-request-0003" })
