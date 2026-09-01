@@ -240,6 +240,7 @@ describe("IM AI 调度", () => {
 
   it("主动模式让所有达到阈值的角色进入回复队列并关闭判断思考", async () => {
     const requestPrompts: string[] = [];
+    const replyPrompts: string[] = [];
     runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "im-proactive-test-master-secret-with-enough-length",
@@ -255,7 +256,9 @@ describe("IM AI 调度", () => {
           expect(body.thinking).toEqual({ type: "disabled" });
           return completion(system.indexOf("林舟") < system.indexOf("顾遥") ? '{"score":85}' : '{"score":75}', false);
         }
-        return completion("我来处理这件事。", body.stream === true);
+        const replyPrompt = messages.map((message) => message.content).join("\n");
+        replyPrompts.push(replyPrompt);
+        return completion(replyPrompt.includes("林舟：我来处理这件事。") ? "偏离原消息。" : "我来处理这件事。", body.stream === true);
       },
       aiRetrySleep: async () => undefined
     });
@@ -309,6 +312,9 @@ describe("IM AI 调度", () => {
     expect(chain).toMatchObject({ status: "limit", generated_count: 2 });
     expect(requestPrompts.length).toBeGreaterThanOrEqual(4);
     expect(requestPrompts.every((prompt) => prompt.includes("[1] 旁白：远方的风暴正在逼近，甲板开始剧烈摇晃。"))).toBe(true);
+    expect(replyPrompts).toHaveLength(2);
+    expect(replyPrompts.every((prompt) => prompt.includes("谁来安排今天的航线？"))).toBe(true);
+    expect(replyPrompts.every((prompt) => !prompt.includes("林舟：我来处理这件事。"))).toBe(true);
     expect(runtime.database.all(
       `SELECT membership.character_id, turn.score, turn.selected FROM im_chain_turns turn
        JOIN im_character_memberships membership ON membership.id = turn.character_membership_id

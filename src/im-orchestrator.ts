@@ -524,11 +524,11 @@ export class ImOrchestrator {
     );
   }
 
-  private planReplyTurn(chain: Record<string, unknown>, membershipId: string): { membershipId: string; turnId: string } {
+  private planReplyTurn(chain: Record<string, unknown>, membershipId: string, sourceMessageId: string): { membershipId: string; turnId: string; sourceMessageId: string } {
     const membership = this.characterMembership(membershipId);
     const turnId = this.createTurn(requiredString(chain.id), membershipId, "reply", "pending");
     this.publishReplyTurn(chain, membership, turnId, "pending");
-    return { membershipId, turnId };
+    return { membershipId, turnId, sourceMessageId };
   }
 
   private settlePendingReplyTurns(
@@ -832,13 +832,13 @@ export class ImOrchestrator {
       if (requiredString(chain.mode) === "direct") {
         const target = this.activeCharacters(conversationId)[0];
         if (!target) throw new AppError(409, "IM_CHARACTER_UNAVAILABLE", "单聊角色已不可用");
-        const planned = this.planReplyTurn(chain, requiredString(target.id));
+        const planned = this.planReplyTurn(chain, requiredString(target.id), requiredString(sourceMessage.id));
         await this.reply(chain, planned.membershipId, planned.turnId, sourceMessage, signal);
         this.finishChain(chainId, "completed");
         return;
       }
       let forcedQueue = this.mentionedCharacterMembershipIds(requiredString(sourceMessage.id), conversationId)
-        .map((membershipId) => this.planReplyTurn(chain, membershipId));
+        .map((membershipId) => this.planReplyTurn(chain, membershipId, requiredString(sourceMessage.id)));
       for (;;) {
         if (signal.aborted) throw signal.reason;
         chain = this.chainRow(chainId);
@@ -869,7 +869,7 @@ export class ImOrchestrator {
             return;
           }
           for (const item of selected) {
-            const selectedReply = this.planReplyTurn(chain, item.membershipId);
+            const selectedReply = this.planReplyTurn(chain, item.membershipId, requiredString(sourceMessage.id));
             forcedQueue.push(selectedReply);
             this.db.run(
               `UPDATE im_chain_turns SET selected = 1
@@ -885,14 +885,17 @@ export class ImOrchestrator {
           plannedReply = forcedQueue.shift() ?? null;
           if (!plannedReply) throw new AppError(500, "IM_REPLY_QUEUE_EMPTY", "主动交流没有生成可执行的角色回复队列");
         }
-        sourceMessage = await this.reply(chain, plannedReply.membershipId, plannedReply.turnId, sourceMessage, signal);
+        const replySourceMessage = this.messageRow(plannedReply.sourceMessageId);
+        sourceMessage = await this.reply(chain, plannedReply.membershipId, plannedReply.turnId, replySourceMessage, signal);
         const newMentions = this.mentionedCharacterMembershipIds(
           requiredString(sourceMessage.id),
           conversationId,
           optionalString(sourceMessage.sender_character_id)
         );
         for (const membershipId of newMentions) {
-          if (!forcedQueue.some((item) => item.membershipId === membershipId)) forcedQueue.push(this.planReplyTurn(chain, membershipId));
+          if (!forcedQueue.some((item) => item.membershipId === membershipId && item.sourceMessageId === requiredString(sourceMessage.id))) {
+            forcedQueue.push(this.planReplyTurn(chain, membershipId, requiredString(sourceMessage.id)));
+          }
         }
       }
     } catch (error) {
