@@ -1426,12 +1426,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .panel-heading-label-full { display: none; }
   .panel-heading-label-compact { display: inline; }
   .chapter-count-unit, .volume-chapter-count-unit { display: none; }
-  .module-nav > button[data-module="tasks"],
   .module-nav > #ai-assistant-entry,
   .module-nav > #reader-open-button,
   .module-nav > button[data-module="comments"],
   .module-nav > button[data-module="outlines"],
-  .module-nav > button[data-module="ai-settings"],
   .module-nav > button[data-work-settings] {
     display: grid;
     grid-template-columns: auto minmax(0, 2em);
