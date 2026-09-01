@@ -508,6 +508,74 @@ describe("IM AI 调度", () => {
     expect(requestPrompts[0]).not.toContain("只判断当前角色现在是否有必要发送一条新消息");
   });
 
+  it("运行中的 AI mention 插到主动队列最前且不被链路上限跳过", async () => {
+    let firstCharacterId = "";
+    let secondCharacterId = "";
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-runtime-mention-priority-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const system = messages[0]?.content ?? "";
+        const judge = system.includes("只判断当前角色现在是否有必要发送一条新消息");
+        const firstSpeaker = system.indexOf("先发角色") < system.indexOf("被提及角色");
+        if (judge) return completion(firstSpeaker ? '{"score":100}' : '{"score":0}', false);
+        return completion(firstSpeaker
+          ? `请你回应，mention://character/${secondCharacterId}`
+          : "我已收到点名并回应。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "runtime_mention_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const characters = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "运行中 Mention 来源" });
+      return [
+        runtime.store.createCharacter(String(work.id), { name: "先发角色" }),
+        runtime.store.createCharacter(String(work.id), { name: "被提及角色" })
+      ];
+    });
+    firstCharacterId = String(characters[0]?.id);
+    secondCharacterId = String(characters[1]?.id);
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "运行中 Mention 群",
+      characterIds: [firstCharacterId, secondCharacterId],
+      replyMode: "proactive",
+      responseThreshold: 60,
+      maxAiMessages: 1
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "谁先说？",
+      requestId: "im-runtime-mention-priority-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+
+    expect(chain).toMatchObject({ status: "limit", generated_count: 2 });
+    expect(runtime.database.all(
+      "SELECT sender_character_id, content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character' ORDER BY sequence",
+      chainId
+    )).toEqual([
+      { sender_character_id: firstCharacterId, content: `请你回应，mention://character/${secondCharacterId}` },
+      { sender_character_id: secondCharacterId, content: "我已收到点名并回应。" }
+    ]);
+    expect(runtime.database.get(
+      `SELECT COUNT(*) AS count FROM im_chain_turns turn
+       JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
+       WHERE turn.chain_id = ? AND turn.kind = 'judge' AND membership.character_id = ?`,
+      chainId,
+      secondCharacterId
+    )).toEqual({ count: 1 });
+  });
+
   it("允许 AI 互相 mention 并使用最初人类发起人的模型归属", async () => {
     let firstCharacterId = "";
     let secondCharacterId = "";

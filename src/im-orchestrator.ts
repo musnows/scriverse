@@ -524,11 +524,16 @@ export class ImOrchestrator {
     );
   }
 
-  private planReplyTurn(chain: Record<string, unknown>, membershipId: string, sourceMessageId: string): { membershipId: string; turnId: string; sourceMessageId: string } {
+  private planReplyTurn(
+    chain: Record<string, unknown>,
+    membershipId: string,
+    sourceMessageId: string,
+    forcedMention = false
+  ): { membershipId: string; turnId: string; sourceMessageId: string; forcedMention: boolean } {
     const membership = this.characterMembership(membershipId);
     const turnId = this.createTurn(requiredString(chain.id), membershipId, "reply", "pending");
     this.publishReplyTurn(chain, membership, turnId, "pending");
-    return { membershipId, turnId, sourceMessageId };
+    return { membershipId, turnId, sourceMessageId, forcedMention };
   }
 
   private settlePendingReplyTurns(
@@ -832,20 +837,20 @@ export class ImOrchestrator {
       if (requiredString(chain.mode) === "direct") {
         const target = this.activeCharacters(conversationId)[0];
         if (!target) throw new AppError(409, "IM_CHARACTER_UNAVAILABLE", "单聊角色已不可用");
-        const planned = this.planReplyTurn(chain, requiredString(target.id), requiredString(sourceMessage.id));
+        const planned = this.planReplyTurn(chain, requiredString(target.id), requiredString(sourceMessage.id), true);
         await this.reply(chain, planned.membershipId, planned.turnId, sourceMessage, signal);
         this.finishChain(chainId, "completed");
         return;
       }
       let forcedQueue = this.mentionedCharacterMembershipIds(requiredString(sourceMessage.id), conversationId)
-        .map((membershipId) => this.planReplyTurn(chain, membershipId, requiredString(sourceMessage.id)));
+        .map((membershipId) => this.planReplyTurn(chain, membershipId, requiredString(sourceMessage.id), true));
       let lastJudgedSourceMessageId: string | null = null;
       let lastReplyFailure: { code: string; message: string } | null = null;
       for (;;) {
         if (signal.aborted) throw signal.reason;
         chain = this.chainRow(chainId);
         if (requiredString(chain.status) !== "running") return;
-        if (Number(chain.generated_count) >= Number(chain.max_ai_messages)) {
+        if (Number(chain.generated_count) >= Number(chain.max_ai_messages) && forcedQueue[0]?.forcedMention !== true) {
           this.settlePendingReplyTurns(chain, "skipped", { code: "IM_CHAIN_LIMIT", message: "已达到群聊链路上限，未继续生成回答" });
           this.finishChain(chainId, "limit");
           return;
@@ -912,11 +917,13 @@ export class ImOrchestrator {
           conversationId,
           optionalString(sourceMessage.sender_character_id)
         );
+        const prioritizedMentions: typeof forcedQueue = [];
         for (const membershipId of newMentions) {
           if (!forcedQueue.some((item) => item.membershipId === membershipId && item.sourceMessageId === requiredString(sourceMessage.id))) {
-            forcedQueue.push(this.planReplyTurn(chain, membershipId, requiredString(sourceMessage.id)));
+            prioritizedMentions.push(this.planReplyTurn(chain, membershipId, requiredString(sourceMessage.id), true));
           }
         }
+        forcedQueue.unshift(...prioritizedMentions);
       }
     } catch (error) {
       const failure = publicError(error);
