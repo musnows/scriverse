@@ -218,10 +218,16 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const addButton = (kind, label) => canManageMembers
       ? `<button class="im-member-add-button" type="button" data-im-open-member-add="${kind}" aria-label="${label}" title="${label}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>`
       : "";
-    const humanRows = activeHumans().map((item) => `<li><span class="im-member-identity">${imAvatarHtml(item, "user", "im-member-avatar")}<span>${esc(item.displayName)} <small>@${esc(item.username)}</small>${item.role === "owner" ? " · 群主" : ""}</span></span>${owner && item.userId !== currentUserId() ? `<button class="im-button im-button-danger-quiet" type="button" data-im-remove-human="${esc(item.userId)}" aria-label="移除 ${esc(item.displayName)}">移除</button>` : ""}</li>`).join("");
-    const characterRows = activeCharacters().map((item) => `<li><span class="im-member-identity">${imAvatarHtml(item, "character", "im-member-avatar")}<span>${esc(item.name)} <small>${esc(item.workTitle)}</small></span></span>${owner && current.kind === "group" && activeCharacters().length > 1 ? `<button class="im-button im-button-danger-quiet" type="button" data-im-remove-character="${esc(item.characterId)}" aria-label="移除 ${esc(item.name)}">移除</button>` : ""}</li>`).join("");
-    host.innerHTML = `<section><div class="im-member-section-heading"><h3>AI 角色</h3>${addButton("character", "添加 AI 角色")}</div><ul class="im-member-list">${characterRows}</ul></section>
-      <section><div class="im-member-section-heading"><h3>人类成员</h3>${addButton("human", "添加人类成员")}</div><ul class="im-member-list">${humanRows}</ul></section>
+    const editableHumanMembers = canManageMembers && activeHumans().some((item) => item.userId !== currentUserId());
+    const editableCharacterMembers = canManageMembers && activeCharacters().length > 1;
+    const editButton = (kind, label, enabled) => enabled
+      ? `<button class="im-member-edit-button" type="button" data-im-toggle-member-edit="${kind}" aria-label="${label}" aria-pressed="false" title="${label}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="m16.5 3.5 1.4-1.4a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z"></path></svg></button>`
+      : "";
+    const memberActions = (kind, addLabel, editLabel, editable) => `<span class="im-member-section-actions">${editButton(kind, editLabel, editable)}${addButton(kind, addLabel)}</span>`;
+    const humanRows = activeHumans().map((item) => `<li><span class="im-member-identity">${imAvatarHtml(item, "user", "im-member-avatar")}<span>${esc(item.displayName)} <small>@${esc(item.username)}</small>${item.role === "owner" ? " · 群主" : ""}</span></span>${canManageMembers && item.userId !== currentUserId() ? `<button class="im-button im-button-danger-quiet" type="button" data-im-remove-human="${esc(item.userId)}" aria-label="移除 ${esc(item.displayName)}" hidden>移除</button>` : ""}</li>`).join("");
+    const characterRows = activeCharacters().map((item) => `<li><span class="im-member-identity">${imAvatarHtml(item, "character", "im-member-avatar")}<span>${esc(item.name)} <small>${esc(item.workTitle)}</small></span></span>${editableCharacterMembers ? `<button class="im-button im-button-danger-quiet" type="button" data-im-remove-character="${esc(item.characterId)}" aria-label="移除 ${esc(item.name)}" hidden>移除</button>` : ""}</li>`).join("");
+    host.innerHTML = `<section><div class="im-member-section-heading"><h3>AI 角色</h3>${memberActions("character", "添加 AI 角色", "编辑 AI 角色", editableCharacterMembers)}</div><ul class="im-member-list" data-im-member-list="character">${characterRows}</ul></section>
+      <section><div class="im-member-section-heading"><h3>人类成员</h3>${memberActions("human", "添加人类成员", "编辑人类成员", editableHumanMembers)}</div><ul class="im-member-list" data-im-member-list="human">${humanRows}</ul></section>
       ${current.kind === "group" && owner ? `<section class="im-owner-settings"><h3>群设置</h3>
         <label>群名称<input id="im-detail-title" maxlength="80" value="${esc(current.title)}"></label>
         <label>回复模式<select id="im-detail-mode"><option value="mention" ${current.replyMode === "mention" ? "selected" : ""}>Mention 模式</option><option value="proactive" ${current.replyMode === "proactive" ? "selected" : ""}>主动交流</option></select></label>
@@ -263,6 +269,12 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       await openConversation(current.id);
     });
     document.querySelectorAll("[data-im-open-member-add]").forEach((button) => button.addEventListener("click", () => openMemberAddDialog(button.dataset.imOpenMemberAdd)));
+    document.querySelectorAll("[data-im-toggle-member-edit]").forEach((button) => button.addEventListener("click", () => {
+      const editing = button.getAttribute("aria-pressed") !== "true";
+      button.setAttribute("aria-pressed", String(editing));
+      const list = document.querySelector(`[data-im-member-list="${button.dataset.imToggleMemberEdit}"]`);
+      list?.querySelectorAll("[data-im-remove-human], [data-im-remove-character]").forEach((removeButton) => { removeButton.hidden = !editing; });
+    }));
     document.querySelectorAll("[data-im-remove-human]").forEach((button) => button.addEventListener("click", async () => {
       await api(`/api/im/conversations/${encodeURIComponent(current.id)}/humans/${encodeURIComponent(button.dataset.imRemoveHuman)}`, { method: "DELETE", body: {} });
       await openConversation(current.id);

@@ -4771,6 +4771,11 @@ body { font-size: var(--ui-font-size); }
 .im-member-identity > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .im-member-avatar { width: 30px; height: 30px; font-size: 10px; }
 .im-member-section-heading { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 8px; }
+.im-member-section-actions { display: inline-flex; align-items: center; gap: 6px; }
+.im-member-edit-button { display: inline-grid; flex: 0 0 28px; place-items: center; width: 28px; min-width: 28px; height: 28px; min-height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--muted); transition: border-color .15s ease, background-color .15s ease, color .15s ease, transform .15s ease; }
+.im-member-edit-button:hover, .im-member-edit-button:focus-visible, .im-member-edit-button[aria-pressed="true"] { border-color: color-mix(in srgb, var(--accent) 56%, var(--line)); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); color: var(--accent-dark); outline: none; }
+.im-member-edit-button:active { transform: translateY(1px); }
+.im-member-edit-button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 .im-member-add-button { display: inline-grid; flex: 0 0 28px; place-items: center; width: 28px; min-width: 28px; height: 28px; min-height: 28px; padding: 0; border: 1px solid color-mix(in srgb, var(--green) 58%, var(--line)); border-radius: 50%; background: color-mix(in srgb, var(--green) 10%, var(--surface)); color: var(--green); transition: border-color .15s ease, background-color .15s ease, transform .15s ease; }
 .im-member-add-button:hover, .im-member-add-button:focus-visible { border-color: var(--green); background: color-mix(in srgb, var(--green) 20%, var(--surface)); color: color-mix(in srgb, var(--green) 76%, var(--ink)); outline: none; }
 .im-member-add-button:active { transform: translateY(1px); }
