@@ -59,6 +59,7 @@ export class ImOrchestrator {
   private readonly queuedChainSet = new Set<string>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly activeByUser = new Map<string, number>();
+  private readonly streamingReplies = new Map<string, ImRealtimeEvent>();
   private disposed = false;
 
   constructor(
@@ -79,6 +80,15 @@ export class ImOrchestrator {
       this.listeners.set(userId, listeners);
     }
     listeners.add(listener);
+    for (const event of this.streamingReplies.values()) {
+      const membership = this.db.get(
+        `SELECT 1 AS present FROM im_human_memberships
+         WHERE conversation_id = ? AND user_id = ? AND left_at IS NULL`,
+        event.conversationId,
+        userId
+      );
+      if (membership) listener({ ...event, id: id("imEvent"), createdAt: now() });
+    }
     return () => {
       listeners?.delete(listener);
       if (listeners?.size === 0) this.listeners.delete(userId);
@@ -806,6 +816,13 @@ export class ImOrchestrator {
       await this.maybeCompact(chain, membership, sourceMessage, signal);
       this.db.run("UPDATE im_chain_turns SET status = 'running' WHERE id = ?", turnId);
       this.publishReplyTurn(chain, membership, turnId, "running");
+      this.streamingReplies.set(turnId, {
+        id: id("imEvent"),
+        type: "turn",
+        conversationId: requiredString(chain.conversation_id),
+        payload: { ...this.replyTurnPayload(chain, membership, turnId, "running"), content: "" },
+        createdAt: now()
+      });
       const result = await this.invoke(
         chain,
         membership,
@@ -815,6 +832,8 @@ export class ImOrchestrator {
         signal,
         (delta) => {
           streamed += delta;
+          const snapshot = this.streamingReplies.get(turnId);
+          if (snapshot) snapshot.payload.content = `${requiredString(snapshot.payload.content)}${delta}`;
           this.publish(requiredString(chain.conversation_id), "delta", {
             chainId: requiredString(chain.id),
             turnId,
@@ -828,6 +847,7 @@ export class ImOrchestrator {
       const message = this.appendCharacterMessage(chain, membership, result);
       this.publish(requiredString(chain.conversation_id), "message", { message });
       this.publishReplyTurn(chain, membership, turnId, "completed");
+      this.streamingReplies.delete(turnId);
       return this.messageRow(requiredString(message.id));
     } catch (error) {
       if (streamed) this.publish(requiredString(chain.conversation_id), "reset", { chainId: requiredString(chain.id), turnId, reason: "retry" });
@@ -835,6 +855,7 @@ export class ImOrchestrator {
       const cancelled = signal.aborted || failure.code === "IM_CHAIN_CANCELLED" || failure.code === "AI_STREAM_REQUEST_CANCELLED";
       this.failTurn(turnId, error, cancelled ? "cancelled" : "failed");
       this.publishReplyTurn(chain, membership, turnId, cancelled ? "cancelled" : "failed", failure);
+      this.streamingReplies.delete(turnId);
       throw error;
     }
   }
@@ -975,6 +996,7 @@ export class ImOrchestrator {
     this.disposed = true;
     for (const controller of this.controllers.values()) controller.abort(new AppError(499, "IM_CHAIN_CANCELLED", "服务正在关闭"));
     this.controllers.clear();
+    this.streamingReplies.clear();
     this.queuedChainIds.length = 0;
     this.queuedChainSet.clear();
     this.listeners.clear();

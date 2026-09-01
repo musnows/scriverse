@@ -145,6 +145,68 @@ describe("IM AI 调度", () => {
     expect(String(work.id)).toBeTruthy();
   });
 
+  it("SSE 重连时重放正在生成气泡的完整流式快照", async () => {
+    const encoder = new TextEncoder();
+    let releaseStream: (() => void) | null = null;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-stream-replay-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"前半"}}]}\n\n'));
+          releaseStream = () => {
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"后半"},"finish_reason":"stop"}]}\n\n'));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          };
+        }
+      }), { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "stream_replay_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "流快照来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "流式角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const initialEvents: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribeInitial = runtime.imOrchestrator.subscribe(owner.userId, (event) => initialEvents.push({ type: event.type, payload: event.payload }));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "开始流式回复。",
+      requestId: "im-stream-replay-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const deltaDeadline = Date.now() + 2_000;
+    while (!initialEvents.some((event) => event.type === "delta") && Date.now() < deltaDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(initialEvents.some((event) => event.type === "delta")).toBe(true);
+    unsubscribeInitial();
+
+    const replayed: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribeReplay = runtime.imOrchestrator.subscribe(owner.userId, (event) => replayed.push({ type: event.type, payload: event.payload }));
+    expect(replayed).toEqual([
+      expect.objectContaining({ type: "turn", payload: expect.objectContaining({ status: "running", content: "前半" }) })
+    ]);
+    expect(releaseStream).not.toBeNull();
+    releaseStream!();
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+    unsubscribeReplay();
+
+    expect(chain.status).toBe("completed");
+    expect(runtime.database.get(
+      "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      String(chain.id)
+    )).toEqual({ content: "前半后半" });
+  });
+
   it("在角色生成前发布气泡状态并把最终错误保留在角色 turn 中", async () => {
     runtime = createRuntime({
       databasePath: ":memory:",

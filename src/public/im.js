@@ -291,7 +291,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       avatarUrl: eventCharacter.avatarUrl || character?.avatarUrl || previous.avatarUrl || null,
       status: String(payload?.status || previous.status || "pending"),
       error: eventError.message || payload?.failure || previous.error || "",
-      content: previous.content || ""
+      content: payload?.content !== undefined ? String(payload.content) : previous.content || ""
     };
     provisionalReplies.set(turnId, next);
     return next;

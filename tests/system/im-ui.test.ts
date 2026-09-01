@@ -62,14 +62,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v31");
+    expect(page.text).toContain("feature=global-im-v32");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260901-global-im-v31');
+    expect(application.text).toContain('/im.js?v=20260901-global-im-v32');
     expect(application.text).toContain("createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf })");
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');
@@ -130,6 +130,7 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain("const provisionalReplies = new Map()");
     expect(im.text).toContain("syncProvisionalReplies");
     expect(im.text).toContain("upsertProvisionalReply");
+    expect(im.text).toContain('payload?.content !== undefined ? String(payload.content)');
     expect(im.text).toContain("个角色正在生成回答");
     expect(im.text).toContain('data-im-provisional-turn="${esc(reply.turnId)}"');
     expect(im.text).toContain('data-im-provisional-status="${esc(reply.status)}"');
