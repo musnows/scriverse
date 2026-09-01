@@ -5,6 +5,7 @@ import type { AuthUser, UserAuthService } from "./user-auth.js";
 import { runWithRequestActor } from "./request-context.js";
 import { id, json, now } from "./utils.js";
 import { ImService, parseImMentions } from "./im.js";
+import { canReadWorkModule, type WorkModulePermissions } from "./work-permissions.js";
 
 export type ImRealtimeEvent = {
   id: string;
@@ -358,9 +359,17 @@ export class ImOrchestrator {
     }
   }
 
-  private assertCharacterAuthorization(chain: Record<string, unknown>, membership: Record<string, unknown>): { owner: AuthUser; workId: string; characterId: string } {
+  private assertCharacterAuthorization(chain: Record<string, unknown>, membership: Record<string, unknown>): {
+    owner: AuthUser;
+    initiator: AuthUser;
+    initiatorPermissions: WorkModulePermissions | null;
+    workId: string;
+    characterId: string;
+  } {
     const owner = this.auth.getUser(requiredString(chain.authorization_user_id));
     if (owner.status !== "active") throw new AppError(403, "IM_OWNER_DISABLED", "群主账户已停用，角色能力暂停");
+    const initiator = this.auth.getUser(requiredString(chain.initiator_user_id));
+    if (initiator.status !== "active") throw new AppError(403, "IM_INITIATOR_DISABLED", "发起人账户已停用，角色能力暂停");
     const characterId = optionalString(membership.character_id);
     const workId = optionalString(membership.source_work_id);
     if (!characterId || !workId) throw new AppError(409, "IM_CHARACTER_UNAVAILABLE", "来源角色或作品已不可用");
@@ -371,7 +380,26 @@ export class ImOrchestrator {
       this.publishConversation(requiredString(chain.conversation_id));
       throw error;
     }
-    return { owner, workId, characterId };
+    return {
+      owner,
+      initiator,
+      initiatorPermissions: this.auth.workModulePermissions(initiator, workId, true),
+      workId,
+      characterId
+    };
+  }
+
+  private publicCharacterPrompt(membership: Record<string, unknown>): string {
+    const snapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
+    return [
+      "以下 JSON 是群主邀请角色时冻结的公开角色资料。只能依据这些公开字段和当前 IM 历史扮演角色；不得推测、查询或声称知道来源作品中的其他私有内容。",
+      JSON.stringify({
+        name: snapshot.name ?? "角色",
+        code: snapshot.code ?? "",
+        workTitle: snapshot.workTitle ?? "",
+        publicSummary: snapshot.publicSummary ?? ""
+      })
+    ].join("\n");
   }
 
   private shouldFailover(error: unknown): boolean {
@@ -412,6 +440,10 @@ export class ImOrchestrator {
       participantContext: this.participantContext(requiredString(conversation.id), snapshot),
       history: context.history.slice(-maximumHistoryChars),
       summary: context.summary,
+      characterPrompt: authorization.initiatorPermissions && canReadWorkModule(authorization.initiatorPermissions, "characters")
+        ? undefined
+        : this.publicCharacterPrompt(membership),
+      allowRoleplayMemory: Boolean(authorization.initiatorPermissions && canReadWorkModule(authorization.initiatorPermissions, "ai-chat")),
       retryCount: Number(chain.retry_count),
       createdByUserId: requiredString(chain.initiator_user_id),
       signal
@@ -419,10 +451,10 @@ export class ImOrchestrator {
     const invokeModel = async (modelId: string, stage: "primary" | "fallback"): Promise<InvocationResult> => {
       const started = process.hrtime.bigint();
       const result = await runWithRequestActor({
-        userId: authorization.owner.userId,
-        username: authorization.owner.username,
-        displayName: authorization.owner.displayName,
-        role: authorization.owner.role,
+        userId: authorization.initiator.userId,
+        username: authorization.initiator.username,
+        displayName: authorization.initiator.displayName,
+        role: authorization.initiator.role,
         authentication: "session"
       }, () => this.ai.generateIm({ ...common, modelId }, onDelta));
       return {

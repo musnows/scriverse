@@ -133,6 +133,7 @@ describe("IM AI 调度", () => {
     const systemPrompt = bodies.find((body) => body.model === "fallback-model")?.messages as Array<{ role: string; content: string }>;
     expect(systemPrompt[0]?.content).toContain("<im_roleplay_rules>");
     expect(systemPrompt[0]?.content).toContain("舰长");
+    expect(systemPrompt[0]?.content).toContain("北港领航员");
     expect(systemPrompt[0]?.content).toContain("mention://character/{角色ID}");
     expect(systemPrompt[0]?.content).toContain("mention://user/{用户ID}");
     expect(systemPrompt[0]?.content).toContain("被有效提及的 AI 角色会跳过“是否回答”判断并直接生成回答");
@@ -579,12 +580,14 @@ describe("IM AI 调度", () => {
   it("允许 AI 互相 mention 并使用最初人类发起人的模型归属", async () => {
     let firstCharacterId = "";
     let secondCharacterId = "";
+    const requestBodies: Record<string, unknown>[] = [];
     runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "im-mutual-mention-test-master-secret-with-enough-length",
       serveUi: false,
       fetchImpl: async (_url, init) => {
         const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        requestBodies.push(body);
         const messages = body.messages as Array<{ role: string; content: string }>;
         const system = messages[0]?.content ?? "";
         const firstSpeaker = system.indexOf("林舟") < system.indexOf("顾遥");
@@ -600,7 +603,10 @@ describe("IM AI 调度", () => {
     const models = seedModels(runtime);
     const seeded = runWithRequestActor(actor(workOwner), () => {
       const work = runtime.store.createWork({ title: "共享角色来源" });
-      const first = runtime.store.createCharacter(String(work.id), { name: "林舟" });
+      const first = runtime.store.createCharacter(String(work.id), {
+        name: "林舟",
+        attributes: { privateSecret: "PRIVATE_SOURCE_WORK_SECRET" }
+      });
       const second = runtime.store.createCharacter(String(work.id), { name: "顾遥" });
       runtime.auth.addMember(String(work.id), groupOwner.userId, { role: "editor" }, workOwner.userId);
       return { work, first, second };
@@ -639,5 +645,8 @@ describe("IM AI 调度", () => {
       "SELECT DISTINCT created_by_user_id, work_id FROM ai_calls ORDER BY work_id",
     )).toEqual([{ created_by_user_id: member.userId, work_id: String(seeded.work.id) }]);
     expect(runtime.auth.workRole(member, String(seeded.work.id))).toBeNull();
+    expect(JSON.stringify(requestBodies)).not.toContain("PRIVATE_SOURCE_WORK_SECRET");
+    expect(JSON.stringify(requestBodies)).not.toContain("recall_story");
+    expect(JSON.stringify(requestBodies)).toContain("群主邀请角色时冻结的公开角色资料");
   });
 });
