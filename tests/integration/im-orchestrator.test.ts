@@ -133,6 +133,9 @@ describe("IM AI 调度", () => {
     const systemPrompt = bodies.find((body) => body.model === "fallback-model")?.messages as Array<{ role: string; content: string }>;
     expect(systemPrompt[0]?.content).toContain("<im_roleplay_rules>");
     expect(systemPrompt[0]?.content).toContain("舰长");
+    expect(systemPrompt[0]?.content).toContain("mention://character/{角色ID}");
+    expect(systemPrompt[0]?.content).toContain("mention://user/{用户ID}");
+    expect(systemPrompt[0]?.content).toContain("被有效提及的 AI 角色会跳过“是否回答”判断并直接生成回答");
     expect(systemPrompt[0]?.content).not.toContain("remember_roleplay");
     expect(runtime.database.get(
       "SELECT created_by_user_id FROM ai_calls WHERE id = ?",
@@ -319,6 +322,74 @@ describe("IM AI 调度", () => {
     expect(JSON.parse(String(characterMessage?.sender_snapshot_json))).toMatchObject({
       avatarUrl: `/api/im/conversations/${group.id}/characters/${characters[0]?.id}/avatar?v=${avatarSha256}`
     });
+  });
+
+  it("主动模式中的 mention 角色优先回复且完全跳过自身发言判断", async () => {
+    const requestPrompts: string[] = [];
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-proactive-mention-priority-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const prompt = messages.map((message) => message.content).join("\n");
+        requestPrompts.push(prompt);
+        const judge = messages[0]?.content.includes("只判断当前角色现在是否有必要发送一条新消息");
+        return completion(judge ? '{"score":0}' : "我被点名了，马上处理。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "proactive_mention_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const characters = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "Mention 优先级来源" });
+      return [
+        runtime.store.createCharacter(String(work.id), { name: "程霁" }),
+        runtime.store.createCharacter(String(work.id), { name: "陆川" })
+      ];
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "主动 Mention 群",
+      characterIds: characters.map((character) => String(character.id)),
+      replyMode: "proactive",
+      responseThreshold: 100,
+      maxAiMessages: 3
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://character/${characters[1]?.id} 请立刻确认。`,
+      requestId: "im-proactive-mention-priority-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+
+    expect(chain).toMatchObject({ status: "quiet", generated_count: 1 });
+    expect(runtime.database.all(
+      `SELECT membership.character_id, turn.kind, turn.status FROM im_chain_turns turn
+       JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
+       WHERE turn.chain_id = ? ORDER BY turn.rowid`,
+      chainId
+    )).toEqual([
+      { character_id: characters[1]?.id, kind: "reply", status: "completed" },
+      { character_id: characters[0]?.id, kind: "judge", status: "completed" }
+    ]);
+    expect(runtime.database.get(
+      `SELECT COUNT(*) AS count FROM im_chain_turns turn
+       JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
+       WHERE turn.chain_id = ? AND turn.kind = 'judge' AND membership.character_id = ?`,
+      chainId,
+      String(characters[1]?.id)
+    )).toEqual({ count: 0 });
+    expect(requestPrompts[0]).toContain(`mention://character/${characters[1]?.id}`);
+    expect(requestPrompts[0]).toContain("mention://user/{用户ID}");
+    expect(requestPrompts[0]).toContain("无论群聊处于 Mention 模式还是主动交流模式");
+    expect(requestPrompts[0]).not.toContain("只判断当前角色现在是否有必要发送一条新消息");
   });
 
   it("允许 AI 互相 mention 并使用最初人类发起人的模型归属", async () => {
