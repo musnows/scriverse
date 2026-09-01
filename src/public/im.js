@@ -50,6 +50,10 @@ export function normalizeImConversationWidth(value, maximumWidth, minimumWidth =
   return Math.min(maximum, Math.max(minimumWidth, requested));
 }
 
+export function resolveImConversationWidth(preferredWidth, viewportWidth, maximumWidth) {
+  return Number(viewportWidth) <= 620 ? 72 : normalizeImConversationWidth(preferredWidth, maximumWidth);
+}
+
 export function shouldMarkImConversationRead(opened, visibilityState) {
   return opened === true && visibilityState !== "hidden";
 }
@@ -87,24 +91,27 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let opened = false;
   let composerHeight = 68;
   let conversationsWidth = 300;
+  let preferredConversationsWidth = 300;
 
   const conversationsWidthStorageKey = "scriverse.im.conversations-width.v1";
   const conversationsMaximumWidth = () => Math.max(72, Math.min(420, window.innerWidth - (window.innerWidth > 980 ? 680 : 360)));
 
   function applyConversationsWidth(width, persist = false) {
-    conversationsWidth = normalizeImConversationWidth(width, conversationsMaximumWidth());
+    conversationsWidth = resolveImConversationWidth(width, window.innerWidth, conversationsMaximumWidth());
+    if (window.innerWidth > 620) preferredConversationsWidth = conversationsWidth;
     workspace.style.setProperty("--im-conversations-width", `${conversationsWidth}px`);
     conversationsPanel.classList.toggle("is-compact", conversationsWidth <= 180);
     conversationsResize.setAttribute("aria-valuemax", String(conversationsMaximumWidth()));
     conversationsResize.setAttribute("aria-valuenow", String(Math.round(conversationsWidth)));
-    if (persist) {
-      try { localStorage.setItem(conversationsWidthStorageKey, String(Math.round(conversationsWidth))); } catch { /* 浏览器禁用存储时仅保留当前布局。 */ }
+    if (persist && window.innerWidth > 620) {
+      try { localStorage.setItem(conversationsWidthStorageKey, String(Math.round(preferredConversationsWidth))); } catch { /* 浏览器禁用存储时仅保留当前布局。 */ }
     }
   }
 
   function setupConversationsResize() {
     let resize = null;
-    try { conversationsWidth = Number(localStorage.getItem(conversationsWidthStorageKey)) || conversationsWidth; } catch { /* 浏览器禁用存储时使用默认宽度。 */ }
+    try { preferredConversationsWidth = Number(localStorage.getItem(conversationsWidthStorageKey)) || preferredConversationsWidth; } catch { /* 浏览器禁用存储时使用默认宽度。 */ }
+    conversationsWidth = preferredConversationsWidth;
     conversationsResize.addEventListener("pointerdown", (event) => {
       if (event.button !== 0 || window.innerWidth <= 620) return;
       resize = { pointerId: event.pointerId, startX: event.clientX, startWidth: conversationsWidth };
@@ -130,8 +137,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       else if (event.key === "End") applyConversationsWidth(conversationsMaximumWidth(), true);
       else applyConversationsWidth(conversationsWidth + (event.key === "ArrowRight" ? 16 : -16), true);
     });
-    window.addEventListener("resize", () => applyConversationsWidth(conversationsWidth));
-    applyConversationsWidth(conversationsWidth);
+    window.addEventListener("resize", () => applyConversationsWidth(preferredConversationsWidth));
+    applyConversationsWidth(preferredConversationsWidth);
   }
 
   const composerMaximumHeight = () => Math.max(64, Math.min(420, window.innerHeight - 280));
