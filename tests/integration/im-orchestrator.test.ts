@@ -395,6 +395,51 @@ describe("IM AI 调度", () => {
     });
   });
 
+  it("只剩一个活跃角色的主动群在回答后自然结束", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-single-proactive-character-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const judge = messages[0]?.content.includes("只判断当前角色现在是否有必要发送一条新消息");
+        return completion(judge ? '{"score":100}' : "我来回答。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "single_proactive_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "单角色主动群来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "独行者" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "单角色主动群",
+      characterIds: [String(character.id)],
+      replyMode: "proactive",
+      responseThreshold: 60,
+      maxAiMessages: 5
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "你怎么看？",
+      requestId: "im-single-proactive-character-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "quiet", generated_count: 1, error_code: null });
+    expect(runtime.database.get(
+      "SELECT sender_character_id, content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      String(chain.id)
+    )).toEqual({ sender_character_id: character.id, content: "我来回答。" });
+  });
+
   it("主动模式中的 mention 角色优先回复且完全跳过自身发言判断", async () => {
     const requestPrompts: string[] = [];
     runtime = createRuntime({

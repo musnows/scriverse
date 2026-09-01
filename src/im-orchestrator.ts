@@ -865,6 +865,10 @@ export class ImOrchestrator {
           lastJudgedSourceMessageId = requiredString(sourceMessage.id);
           const senderCharacterId = optionalString(sourceMessage.sender_character_id);
           const candidates = this.activeCharacters(conversationId).filter((row) => requiredString(row.character_id) !== senderCharacterId);
+          if (candidates.length === 0) {
+            this.finishChain(chainId, "quiet");
+            return;
+          }
           const scores = await Promise.all(candidates.map(async (candidate) => ({
             membershipId: requiredString(candidate.id),
             score: await this.judge(chain, candidate, sourceMessage, signal)
