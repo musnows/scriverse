@@ -4769,7 +4769,7 @@ body { font-size: var(--ui-font-size); }
 .im-composer:empty::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
 .im-composer:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
 .im-composer[aria-disabled="true"] { opacity: .6; cursor: not-allowed; }
-.im-send-button { position: absolute; z-index: 2; bottom: 25px; left: 26px; display: grid; width: 24px; min-width: 24px; height: 24px; min-height: 24px; place-items: center; padding: 0; border: 0; border-radius: 4px; background: var(--accent); color: #fff; box-shadow: 0 2px 7px color-mix(in srgb, var(--accent) 22%, transparent); }
+.im-send-button { position: absolute; z-index: 2; right: 26px; bottom: 25px; display: grid; width: 24px; min-width: 24px; height: 24px; min-height: 24px; place-items: center; padding: 0; border: 0; border-radius: 4px; background: var(--accent); color: #fff; box-shadow: 0 2px 7px color-mix(in srgb, var(--accent) 22%, transparent); }
 .im-send-button:hover, .im-send-button:focus-visible { background: var(--accent-dark); outline: none; }
 .im-send-button:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent), 0 2px 7px color-mix(in srgb, var(--accent) 22%, transparent); }
 .im-send-button:disabled { cursor: not-allowed; opacity: .52; }
@@ -4910,7 +4910,7 @@ body { font-size: var(--ui-font-size); }
   .im-mobile-back { display: inline-grid; place-items: center; width: 32px; min-width: 32px; height: 32px; padding: 0; }
   .im-composer-shell { padding: 9px; }
   .im-composer { min-height: 64px; }
-  .im-send-button { bottom: 18px; left: 19px; }
+  .im-send-button { right: 19px; bottom: 18px; }
   .im-group-settings-row, .im-option-grid { grid-template-columns: 1fr; }
   .im-create-role-toolbar { grid-template-columns: 1fr; }
   .im-settings-dialog .account-settings-form, .im-group-form, .im-announcement-form, .im-member-add-form { padding: 14px 12px 16px; }
