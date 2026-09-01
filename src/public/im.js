@@ -44,12 +44,20 @@ export function normalizeImComposerHeight(value, maximumHeight, minimumHeight = 
   return Math.min(maximum, Math.max(minimumHeight, Number(value) || minimumHeight));
 }
 
+export function normalizeImConversationWidth(value, maximumWidth, minimumWidth = 72, defaultWidth = 300) {
+  const maximum = Math.max(minimumWidth, Number(maximumWidth) || minimumWidth);
+  const requested = Number.isFinite(Number(value)) ? Number(value) : defaultWidth;
+  return Math.min(maximum, Math.max(minimumWidth, requested));
+}
+
 export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf }) {
   const workspace = document.querySelector("#im-view");
   const listHost = document.querySelector("#im-conversation-list");
   const feed = document.querySelector("#im-message-feed");
   const composer = document.querySelector("#im-composer");
   const composerResize = document.querySelector("#im-composer-resize");
+  const conversationsPanel = workspace.querySelector(".im-conversations");
+  const conversationsResize = document.querySelector("#im-conversations-resize");
   const mentionMenu = document.querySelector("#im-mention-menu");
   const unreadBadge = document.querySelector("#im-unread-count");
   let conversations = [];
@@ -74,6 +82,53 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let mentionCaretState = null;
   let opened = false;
   let composerHeight = 68;
+  let conversationsWidth = 300;
+
+  const conversationsWidthStorageKey = "scriverse.im.conversations-width.v1";
+  const conversationsMaximumWidth = () => Math.max(72, Math.min(420, window.innerWidth - (window.innerWidth > 980 ? 680 : 360)));
+
+  function applyConversationsWidth(width, persist = false) {
+    conversationsWidth = normalizeImConversationWidth(width, conversationsMaximumWidth());
+    workspace.style.setProperty("--im-conversations-width", `${conversationsWidth}px`);
+    conversationsPanel.classList.toggle("is-compact", conversationsWidth <= 92);
+    conversationsResize.setAttribute("aria-valuemax", String(conversationsMaximumWidth()));
+    conversationsResize.setAttribute("aria-valuenow", String(Math.round(conversationsWidth)));
+    if (persist) {
+      try { localStorage.setItem(conversationsWidthStorageKey, String(Math.round(conversationsWidth))); } catch { /* 浏览器禁用存储时仅保留当前布局。 */ }
+    }
+  }
+
+  function setupConversationsResize() {
+    let resize = null;
+    try { conversationsWidth = Number(localStorage.getItem(conversationsWidthStorageKey)) || conversationsWidth; } catch { /* 浏览器禁用存储时使用默认宽度。 */ }
+    conversationsResize.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || window.innerWidth <= 620) return;
+      resize = { pointerId: event.pointerId, startX: event.clientX, startWidth: conversationsWidth };
+      conversationsResize.setPointerCapture(event.pointerId);
+      document.body.classList.add("is-im-conversations-resizing");
+    });
+    conversationsResize.addEventListener("pointermove", (event) => {
+      if (!resize || event.pointerId !== resize.pointerId) return;
+      applyConversationsWidth(resize.startWidth + event.clientX - resize.startX);
+    });
+    const finish = (event) => {
+      if (!resize || event.pointerId !== resize.pointerId) return;
+      resize = null;
+      document.body.classList.remove("is-im-conversations-resizing");
+      applyConversationsWidth(conversationsWidth, true);
+    };
+    conversationsResize.addEventListener("pointerup", finish);
+    conversationsResize.addEventListener("pointercancel", finish);
+    conversationsResize.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || window.innerWidth <= 620) return;
+      event.preventDefault();
+      if (event.key === "Home") applyConversationsWidth(72, true);
+      else if (event.key === "End") applyConversationsWidth(conversationsMaximumWidth(), true);
+      else applyConversationsWidth(conversationsWidth + (event.key === "ArrowRight" ? 16 : -16), true);
+    });
+    window.addEventListener("resize", () => applyConversationsWidth(conversationsWidth));
+    applyConversationsWidth(conversationsWidth);
+  }
 
   const composerMaximumHeight = () => Math.max(64, Math.min(420, window.innerHeight - 280));
 
@@ -811,6 +866,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   function bind() {
+    setupConversationsResize();
     setupComposerResize();
     document.querySelector("#im-open-button").addEventListener("click", () => void open().catch((error) => toast(error.message, "error")));
     document.querySelector("#im-settings-button").addEventListener("click", openSettings);

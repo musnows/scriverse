@@ -45,6 +45,9 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain('id="im-member-add-human-search"');
     expect(page.text).toContain("公告将作为一次性旁白进入所有当前 AI 角色的后续上下文，不会触发 AI 回复");
     expect(page.text).toContain('id="im-new-conversation"');
+    expect(page.text).toContain('class="im-new-conversation-full">新建会话</span><span class="im-new-conversation-compact" aria-hidden="true">+</span>');
+    expect(page.text).toContain('id="im-conversations-resize" class="im-conversations-resize-handle" role="separator"');
+    expect(page.text).toContain('aria-label="调整 IM 会话列表宽度"');
     expect(page.text).toContain('id="im-create-work"');
     expect(page.text).toContain('id="im-create-search"');
     expect(page.text).toContain('id="im-create-selected"');
@@ -57,14 +60,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v26");
+    expect(page.text).toContain("feature=global-im-v27");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260901-global-im-v26');
+    expect(application.text).toContain('/im.js?v=20260901-global-im-v27');
     expect(application.text).toContain("createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf })");
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');
@@ -108,6 +111,11 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain('document.querySelector("#im-detail-threshold")');
     expect(im.text).toContain("serializeImComposer");
     expect(im.text).toContain("normalizeImComposerHeight");
+    expect(im.text).toContain("normalizeImConversationWidth");
+    expect(im.text).toContain("setupConversationsResize");
+    expect(im.text).toContain('conversationsResize.addEventListener("pointermove"');
+    expect(im.text).toContain('conversationsWidth <= 92');
+    expect(im.text).toContain('localStorage.setItem(conversationsWidthStorageKey');
     expect(im.text).toContain("setupComposerResize");
     expect(im.text).toContain('composerResize.addEventListener("pointermove"');
     expect(im.text).toContain('["ArrowUp", "ArrowDown", "Home", "End"]');
@@ -119,6 +127,10 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain('data-im-provisional-status="${esc(reply.status)}"');
     expect(im.text).toContain("角色回答生成失败");
     expect(styles.text).toContain(".im-view { display: grid; grid-template-columns:");
+    expect(styles.text).toContain("var(--im-conversations-width, 300px)");
+    expect(styles.text).toContain(".im-conversations-resize-handle { position: absolute;");
+    expect(styles.text).toContain(".im-conversations.is-compact .im-new-conversation-compact { display: block;");
+    expect(styles.text).toContain(".im-conversations.is-compact .im-conversation-item > span:nth-child(2) { display: none;");
     expect(styles.text).toContain("@media (max-width: 620px)");
     expect(styles.text).toContain(".im-composer-mention");
     expect(styles.text).toContain(".im-generating-summary");
@@ -161,7 +173,7 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain(".im-member-picker-option");
     expect(styles.text).toContain(".im-chat-header .im-button { min-height: 28px;");
     expect(styles.text).toContain(".im-owner-action-buttons { display: grid; grid-template-columns: repeat(2");
-    expect(styles.text).toContain(".im-conversations { display: flex; flex-direction: column;");
+    expect(styles.text).toContain(".im-conversations { position: relative; display: flex; flex-direction: column;");
     expect(styles.text).toContain(".im-create-action-buttons");
     expect(styles.text).toContain(".im-button-secondary { border: 1px solid var(--line); background: var(--surface); color: var(--muted);");
     expect(styles.text).toContain(".im-button-announcement { border: 1px solid var(--im-narration-line); background: var(--im-narration-surface);");
