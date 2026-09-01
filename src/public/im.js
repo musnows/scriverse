@@ -39,11 +39,17 @@ export function serializeImComposer(root) {
   return visit(root).replace(/\u00a0/gu, " ").trim();
 }
 
+export function normalizeImComposerHeight(value, maximumHeight, minimumHeight = 64) {
+  const maximum = Math.max(minimumHeight, Number(maximumHeight) || minimumHeight);
+  return Math.min(maximum, Math.max(minimumHeight, Number(value) || minimumHeight));
+}
+
 export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf }) {
   const workspace = document.querySelector("#im-view");
   const listHost = document.querySelector("#im-conversation-list");
   const feed = document.querySelector("#im-message-feed");
   const composer = document.querySelector("#im-composer");
+  const composerResize = document.querySelector("#im-composer-resize");
   const mentionMenu = document.querySelector("#im-mention-menu");
   const unreadBadge = document.querySelector("#im-unread-count");
   let conversations = [];
@@ -67,6 +73,46 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let mentionIndex = -1;
   let mentionCaretState = null;
   let opened = false;
+  let composerHeight = 68;
+
+  const composerMaximumHeight = () => Math.max(64, Math.min(420, window.innerHeight - 280));
+
+  function applyComposerHeight(height) {
+    composerHeight = normalizeImComposerHeight(height, composerMaximumHeight());
+    composer.style.height = `${composerHeight}px`;
+    composerResize.setAttribute("aria-valuemax", String(composerMaximumHeight()));
+    composerResize.setAttribute("aria-valuenow", String(Math.round(composerHeight)));
+  }
+
+  function setupComposerResize() {
+    let resize = null;
+    composerResize.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      resize = { pointerId: event.pointerId, startY: event.clientY, startHeight: composerHeight };
+      composerResize.setPointerCapture(event.pointerId);
+      document.body.classList.add("is-im-composer-resizing");
+    });
+    composerResize.addEventListener("pointermove", (event) => {
+      if (!resize || event.pointerId !== resize.pointerId) return;
+      applyComposerHeight(resize.startHeight + resize.startY - event.clientY);
+    });
+    const finish = (event) => {
+      if (!resize || event.pointerId !== resize.pointerId) return;
+      resize = null;
+      document.body.classList.remove("is-im-composer-resizing");
+    };
+    composerResize.addEventListener("pointerup", finish);
+    composerResize.addEventListener("pointercancel", finish);
+    composerResize.addEventListener("keydown", (event) => {
+      if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      if (event.key === "Home") applyComposerHeight(64);
+      else if (event.key === "End") applyComposerHeight(composerMaximumHeight());
+      else applyComposerHeight(composerHeight + (event.key === "ArrowUp" ? 24 : -24));
+    });
+    window.addEventListener("resize", () => applyComposerHeight(composerHeight));
+    applyComposerHeight(composerHeight);
+  }
 
   const hideMainViews = () => {
     [
@@ -765,6 +811,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   function bind() {
+    setupComposerResize();
     document.querySelector("#im-open-button").addEventListener("click", () => void open().catch((error) => toast(error.message, "error")));
     document.querySelector("#im-settings-button").addEventListener("click", openSettings);
     document.querySelector("#im-announcement-button").addEventListener("click", openAnnouncementDialog);

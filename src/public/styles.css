@@ -4765,7 +4765,12 @@ body { font-size: var(--ui-font-size); }
 .im-model-details summary { cursor: pointer; }
 .im-inline-mention, .im-composer-mention { display: inline-flex; align-items: center; max-width: 220px; padding: 1px 6px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 9%, var(--surface)); color: var(--accent-dark); font: 500 10px/1.6 var(--font-sans); vertical-align: baseline; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .im-composer-shell { position: relative; padding: 12px 16px 16px; border-top: 1px solid var(--line); background: var(--panel); }
-.im-composer { min-height: 68px; max-height: 180px; overflow-y: auto; padding: 10px 12px 38px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 12px; line-height: 1.55; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; }
+.im-composer-resize-handle { position: absolute; z-index: 4; top: -5px; right: 16px; left: 16px; height: 10px; cursor: ns-resize; touch-action: none; }
+.im-composer-resize-handle::after { content: ""; position: absolute; top: 4px; right: 0; left: 0; height: 1px; background: transparent; transition: background-color .15s ease, box-shadow .15s ease; }
+.im-composer-resize-handle:hover::after, .im-composer-resize-handle:focus-visible::after, body.is-im-composer-resizing .im-composer-resize-handle::after { background: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); }
+.im-composer-resize-handle:focus-visible { outline: none; }
+body.is-im-composer-resizing { cursor: ns-resize; user-select: none; }
+.im-composer { height: 68px; min-height: 64px; max-height: min(420px, calc(100dvh - 280px)); overflow-y: auto; padding: 10px 12px 38px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 12px; line-height: 1.55; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; }
 .im-composer:empty::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
 .im-composer:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
 .im-composer[aria-disabled="true"] { opacity: .6; cursor: not-allowed; }
@@ -4909,6 +4914,7 @@ body { font-size: var(--ui-font-size); }
   .im-chat-header { min-height: 58px; padding: 9px 10px; }
   .im-mobile-back { display: inline-grid; place-items: center; width: 32px; min-width: 32px; height: 32px; padding: 0; }
   .im-composer-shell { padding: 9px; }
+  .im-composer-resize-handle { right: 9px; left: 9px; }
   .im-composer { min-height: 64px; }
   .im-send-button { right: 19px; bottom: 18px; }
   .im-group-settings-row, .im-option-grid { grid-template-columns: 1fr; }
