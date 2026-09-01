@@ -1426,6 +1426,21 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .panel-heading-label-full { display: none; }
   .panel-heading-label-compact { display: inline; }
   .chapter-count-unit, .volume-chapter-count-unit { display: none; }
+  .module-nav > button[data-module="tasks"],
+  .module-nav > #ai-assistant-entry,
+  .module-nav > #reader-open-button,
+  .module-nav > button[data-module="comments"],
+  .module-nav > button[data-module="outlines"],
+  .module-nav > button[data-module="ai-settings"],
+  .module-nav > button[data-work-settings] {
+    display: grid;
+    grid-template-columns: auto minmax(0, 2em);
+    align-items: start;
+    word-break: break-all;
+  }
+  .module-nav > button[data-module="outlines"] {
+    grid-template-columns: auto minmax(0, 3em);
+  }
 }
 .chapter-batch-dialog { width: min(720px, calc(100vw - 32px)); }
 .chapter-batch-dialog form { display: grid; gap: 14px; }
