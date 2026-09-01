@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeImComposerHeight, normalizeImConversationWidth } from "../../src/public/im.js";
+import { normalizeImComposerHeight, normalizeImConversationWidth, shouldMarkImConversationRead } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -16,5 +16,11 @@ describe("IM 编辑区域尺寸", () => {
     expect(normalizeImConversationWidth(320, 420)).toBe(320);
     expect(normalizeImConversationWidth(520, 420)).toBe(420);
     expect(normalizeImConversationWidth(Number.NaN, 420)).toBe(300);
+  });
+
+  it("只在用户正在查看可见 IM 页面时标记会话已读", () => {
+    expect(shouldMarkImConversationRead(true, "visible")).toBe(true);
+    expect(shouldMarkImConversationRead(false, "visible")).toBe(false);
+    expect(shouldMarkImConversationRead(true, "hidden")).toBe(false);
   });
 });

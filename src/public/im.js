@@ -50,6 +50,10 @@ export function normalizeImConversationWidth(value, maximumWidth, minimumWidth =
   return Math.min(maximum, Math.max(minimumWidth, requested));
 }
 
+export function shouldMarkImConversationRead(opened, visibilityState) {
+  return opened === true && visibilityState !== "hidden";
+}
+
 export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf }) {
   const workspace = document.querySelector("#im-view");
   const listHost = document.querySelector("#im-conversation-list");
@@ -477,7 +481,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     syncProvisionalReplies();
     renderConversationList();
     renderConversation();
-    if (current.active && current.latestSequence > 0) {
+    if (current.active && current.latestSequence > 0 && shouldMarkImConversationRead(opened, document.visibilityState)) {
       await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: { sequence: current.latestSequence } });
       await refreshConversations();
     }
@@ -802,6 +806,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   async function handleRealtime(event) {
     const envelope = JSON.parse(event.data);
     const eventConversationId = envelope.conversationId;
+    if (!opened) {
+      await refreshConversations();
+      return;
+    }
     if (envelope.type === "turn" && current?.id === eventConversationId && envelope.payload.kind === "reply") {
       const status = String(envelope.payload.status || "");
       const turnId = String(envelope.payload.turnId || "");
@@ -835,7 +843,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     eventSource?.close();
     eventSource = new EventSource("/api/im/events");
     eventSource.addEventListener("ready", () => {
-      void (current ? openConversation(current.id) : refreshConversations()).catch(() => undefined);
+      void (opened && current ? openConversation(current.id) : refreshConversations()).catch(() => undefined);
     });
     for (const type of ["conversation", "message", "chain", "turn", "delta", "reset"]) {
       eventSource.addEventListener(type, (event) => void handleRealtime(event).catch(() => undefined));
@@ -880,6 +888,12 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         : '<p class="im-empty">选择书籍后显示角色。</p>';
       syncCreateSelection();
       void loadCreateCharacters().catch((error) => toast(error.message, "error"));
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (!current || !shouldMarkImConversationRead(opened, document.visibilityState) || !current.active || current.latestSequence <= 0) return;
+      void api(`/api/im/conversations/${encodeURIComponent(current.id)}/read`, { method: "POST", body: { sequence: current.latestSequence } })
+        .then(refreshConversations)
+        .catch(() => undefined);
     });
     document.querySelector("#im-create-search").addEventListener("input", () => {
       if (createSearchTimer !== null) window.clearTimeout(createSearchTimer);
