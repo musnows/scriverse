@@ -39,7 +39,7 @@ export function serializeImComposer(root) {
   return visit(root).replace(/\u00a0/gu, " ").trim();
 }
 
-export function createImWorkspace({ api, esc, renderMarkdown, toast, state, showShelf }) {
+export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf }) {
   const workspace = document.querySelector("#im-view");
   const listHost = document.querySelector("#im-conversation-list");
   const feed = document.querySelector("#im-message-feed");
@@ -228,10 +228,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
         <label>主动阈值 <output id="im-detail-threshold-output">${Number(current.responseThreshold)}</output><input id="im-detail-threshold" type="range" min="0" max="100" value="${Number(current.responseThreshold)}"></label>
         <label>链路上限<input id="im-detail-limit" type="number" min="1" max="100" value="${Number(current.maxAiMessages)}"></label>
         <button id="im-save-group-settings" class="primary-button" type="button">保存群设置</button>
-      </section>
-      <section><h3>群主操作</h3><label>转让给<select id="im-transfer-select"><option value="">选择成员</option>${activeHumans().filter((item) => item.userId !== currentUserId()).map((item) => `<option value="${esc(item.userId)}">${esc(item.displayName)}</option>`).join("")}</select></label><button id="im-transfer" class="im-button im-button-secondary" type="button">转让群主</button><button id="im-disband" class="danger-button" type="button">解散群聊</button></section>` : ""}
-      ${current.kind === "group" && !owner && current.active ? '<button id="im-leave" class="danger-button" type="button">退出群聊</button>' : ""}
-      ${owner && current.kind === "group" ? '<section><h3>主动判断诊断</h3><div id="im-diagnostics"><p class="im-empty">尚无诊断记录。</p></div></section>' : ""}`;
+      </section>` : ""}
+      ${owner && current.kind === "group" ? '<section><h3>主动判断诊断</h3><div id="im-diagnostics"><p class="im-empty">尚无诊断记录。</p></div></section>' : ""}
+      ${current.kind === "group" && owner ? `<section class="im-owner-actions"><h3>群主操作</h3><label>转让给<select id="im-transfer-select"><option value="">选择成员</option>${activeHumans().filter((item) => item.userId !== currentUserId()).map((item) => `<option value="${esc(item.userId)}">${esc(item.displayName)}</option>`).join("")}</select></label><div class="im-owner-action-buttons"><button id="im-transfer" class="im-button im-button-secondary" type="button">转让群主</button><button id="im-disband" class="danger-button" type="button">解散群聊</button></div></section>` : ""}
+      ${current.kind === "group" && !owner && current.active ? '<button id="im-leave" class="danger-button" type="button">退出群聊</button>' : ""}`;
     bindImAvatarFallbacks(host);
     bindDetailActions(owner);
     if (owner && current.kind === "group") void loadDiagnostics();
@@ -274,13 +274,23 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, state, show
     document.querySelector("#im-transfer")?.addEventListener("click", async () => {
       const userId = document.querySelector("#im-transfer-select").value;
       if (!userId) return;
+      const nextOwner = activeHumans().find((item) => item.userId === userId);
+      if (!await confirmToast(
+        `确认把群聊“${current.title}”的群主转让给“${nextOwner?.displayName || nextOwner?.username || "所选成员"}”吗？转让后你将失去群主专属操作权限。`,
+        { title: "转让群主", confirmLabel: "确认转让" }
+      )) return;
       await api(`/api/im/conversations/${encodeURIComponent(current.id)}/transfer`, { method: "POST", body: { userId } });
       await openConversation(current.id);
+      toast("群主已转让", "success");
     });
     document.querySelector("#im-disband")?.addEventListener("click", async () => {
-      if (!window.confirm("解散后所有成员只能查看各自可见的历史，确认继续？")) return;
+      if (!await confirmToast(
+        `确认解散群聊“${current.title}”吗？解散后所有成员只能查看各自可见的历史，群聊不能恢复。`,
+        { title: "解散群聊", confirmLabel: "确认解散" }
+      )) return;
       await api(`/api/im/conversations/${encodeURIComponent(current.id)}/disband`, { method: "POST", body: {} });
       await openConversation(current.id);
+      toast("群聊已解散", "success");
     });
     document.querySelector("#im-leave")?.addEventListener("click", async () => {
       await api(`/api/im/conversations/${encodeURIComponent(current.id)}/leave`, { method: "POST", body: {} });
