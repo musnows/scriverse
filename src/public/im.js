@@ -774,6 +774,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       nextConversation.messages = mergeImMessagePages(previousConversation.messages, gapMessages, nextConversation.messages);
       nextConversation.hasMoreMessages = previousConversation.hasMoreMessages === true;
     }
+    if (current?.id && current.id !== conversationId) {
+      if (serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
+      else conversationDrafts.delete(current.id);
+    }
     current = nextConversation;
     if (conversationChanged) composer.innerHTML = conversationDrafts.get(conversationId) ?? "";
     if (requestedConversationId === conversationId) requestedConversationId = null;
