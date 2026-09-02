@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldMarkImConversationRead } from "../../src/public/im.js";
+import { normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -24,5 +24,14 @@ describe("IM 编辑区域尺寸", () => {
     expect(shouldMarkImConversationRead(true, "visible")).toBe(true);
     expect(shouldMarkImConversationRead(false, "visible")).toBe(false);
     expect(shouldMarkImConversationRead(true, "hidden")).toBe(false);
+  });
+
+  it("后台只为会影响列表的低频事件刷新会话列表", () => {
+    expect(shouldRefreshImConversationListForEvent("message")).toBe(true);
+    expect(shouldRefreshImConversationListForEvent("conversation")).toBe(true);
+    expect(shouldRefreshImConversationListForEvent("chain")).toBe(true);
+    expect(shouldRefreshImConversationListForEvent("delta")).toBe(false);
+    expect(shouldRefreshImConversationListForEvent("turn")).toBe(false);
+    expect(shouldRefreshImConversationListForEvent("reset")).toBe(false);
   });
 });

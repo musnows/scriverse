@@ -8,6 +8,8 @@ export function resolveImConversationWidth(preferredWidth: number, viewportWidth
 
 export function shouldMarkImConversationRead(opened: boolean, visibilityState: string): boolean;
 
+export function shouldRefreshImConversationListForEvent(type: string): boolean;
+
 export function createImWorkspace(options: Record<string, unknown>): {
   start(): Promise<void>;
   open(): Promise<void>;

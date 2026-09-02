@@ -58,6 +58,10 @@ export function shouldMarkImConversationRead(opened, visibilityState) {
   return opened === true && visibilityState !== "hidden";
 }
 
+export function shouldRefreshImConversationListForEvent(type) {
+  return ["conversation", "message", "chain"].includes(String(type));
+}
+
 export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf }) {
   const workspace = document.querySelector("#im-view");
   const listHost = document.querySelector("#im-conversation-list");
@@ -851,7 +855,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const envelope = JSON.parse(event.data);
     const eventConversationId = envelope.conversationId;
     if (!opened) {
-      await refreshConversations();
+      if (shouldRefreshImConversationListForEvent(envelope.type)) await refreshConversations();
       return;
     }
     if (envelope.type === "turn" && current?.id === eventConversationId && envelope.payload.kind === "reply") {
@@ -885,7 +889,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       return;
     }
     if (current?.id === eventConversationId) await openConversation(eventConversationId);
-    else await refreshConversations();
+    else if (shouldRefreshImConversationListForEvent(envelope.type)) await refreshConversations();
   }
 
   function connectEvents() {
