@@ -668,7 +668,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const host = document.querySelector("#im-diagnostics");
       if (!host) return;
       host.innerHTML = array(result.turns).filter((turn) => turn.kind === "judge").length
-        ? array(result.turns).filter((turn) => turn.kind === "judge").map((turn) => `<div class="im-diagnostic-row"><span>${esc(turn.characterName)}</span><strong>${turn.score ?? "失败"}</strong><small>${turn.selected ? "已发言" : turn.status}</small></div>`).join("")
+        ? array(result.turns).filter((turn) => turn.kind === "judge").map((turn) => `<div class="im-diagnostic-row"><span>${esc(turn.characterName)}</span><strong>${turn.score ?? "失败"}</strong><small>${turn.selected ? "已选择" : turn.status}</small></div>`).join("")
         : '<p class="im-empty">尚无主动判断记录。</p>';
     } catch (error) {
       if (request !== diagnosticsRequest || current?.id !== conversationId) return;
