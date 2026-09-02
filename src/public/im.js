@@ -267,6 +267,12 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#im-open-button")?.setAttribute("aria-label", count ? `打开 IM，${count} 条未读` : "打开 IM");
   }
 
+  async function refreshUnreadTotal() {
+    const totals = await api("/api/im/unread");
+    conversationUnreadTotal = Number(totals.unreadCount ?? 0);
+    renderUnread();
+  }
+
   async function refreshConversations() {
     const request = ++conversationListRequest;
     const page = await api("/api/im/conversations?limit=50");
@@ -723,6 +729,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const summary = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: { sequence: current.latestSequence } });
       if (request !== conversationRequest) return;
       upsertConversationSummary(summary);
+      await refreshUnreadTotal();
     }
   }
 
@@ -1070,6 +1077,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   async function handleRealtime(event) {
     const envelope = JSON.parse(event.data);
     const eventConversationId = envelope.conversationId;
+    if (envelope.type === "message" || envelope.type === "conversation") await refreshUnreadTotal();
     if (!opened) {
       if (shouldRefreshImConversationListForEvent(envelope.type)) await refreshConversationSummary(eventConversationId);
       return;

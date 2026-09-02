@@ -637,6 +637,7 @@ describe("全局 IM API", () => {
     expect(listedConversations.length).toBeGreaterThanOrEqual(4);
     expect(allSpy).toHaveBeenCalledTimes(7);
     expect(getSpy).not.toHaveBeenCalled();
+    const [conversationPageSql, ...conversationPageParams] = allSpy.mock.calls[0] ?? [];
     const scopedListQueries = allSpy.mock.calls.map(([sql]) => String(sql));
     const latestQuery = scopedListQueries.find((sql) => sql.includes("MAX(message.sequence)"));
     const humanQuery = scopedListQueries.find((sql) => sql.includes("JOIN users user"));
@@ -644,6 +645,12 @@ describe("全局 IM API", () => {
     expect([latestQuery, humanQuery, characterQuery].every(Boolean)).toBe(true);
     allSpy.mockRestore();
     getSpy.mockRestore();
+    expect(runtime.database.all(
+      `EXPLAIN QUERY PLAN ${String(conversationPageSql)}`,
+      ...(conversationPageParams as import("node:sqlite").SQLInputValue[])
+    ).map((row) => String(row.detail))).toEqual(expect.arrayContaining([
+      expect.stringContaining("idx_im_human_memberships_user")
+    ]));
     const plans = [latestQuery, humanQuery, characterQuery].map((sql) => runtime.database.all(
       `EXPLAIN QUERY PLAN ${sql}`,
       ...Array.from({ length: (String(sql).match(/\?/gu) ?? []).length }, () => pagedGroup.body.data.id)

@@ -1989,6 +1989,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       ...totals
     });
   });
+  app.get("/api/im/unread", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.conversationUnreadTotals(user.userId));
+  });
   app.get("/api/im/conversations/:conversationId/summary", (request, response) => {
     const user = requireImUser(request);
     data(response, im.getConversationSummary(request.params.conversationId, user.userId));

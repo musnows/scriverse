@@ -62,14 +62,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v55");
+    expect(page.text).toContain("feature=global-im-v56");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260902-global-im-v55');
+    expect(application.text).toContain('/im.js?v=20260902-global-im-v56');
     expect(application.text).toContain("createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf })");
     expect(application.text).toContain("imWorkspace.start();");
     expect(application.text).toContain("imWorkspace.activate()");
@@ -114,6 +114,8 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain('control.setAttribute("aria-busy", "true")');
     expect(im.text).toContain("loadMoreConversations");
     expect(im.text).toContain("data-im-load-more-conversations");
+    expect(im.text).toContain('api("/api/im/unread")');
+    expect(im.text).toContain("conversationPageLoading");
     expect(page.text).toContain('id="im-details-toggle"');
     expect(page.text).toContain('aria-expanded="false" disabled>成员与设置');
     expect(styles.text).toContain("#im-details-toggle, #im-details-close { display: none; }");

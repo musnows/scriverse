@@ -915,18 +915,35 @@ export class ImService {
   ): Record<string, unknown>[] {
     const cursorWhere = cursor
       ? `AND (
-          conversation.updated_at < ?
-          OR (conversation.updated_at = ? AND conversation.created_at < ?)
-          OR (conversation.updated_at = ? AND conversation.created_at = ? AND conversation.id > ?)
+          effective_updated_at < ?
+          OR (effective_updated_at = ? AND created_at < ?)
+          OR (effective_updated_at = ? AND created_at = ? AND id > ?)
         )`
       : "";
     const conversations = this.db.all(
-      `SELECT conversation.* FROM im_conversations conversation
-       WHERE EXISTS (
-         SELECT 1 FROM im_human_memberships membership
-         WHERE membership.conversation_id = conversation.id AND membership.user_id = ?
-       ) ${cursorWhere}
-       ORDER BY conversation.updated_at DESC, conversation.created_at DESC, conversation.id
+      `WITH ranked_viewers AS (
+         SELECT membership.*,
+                ROW_NUMBER() OVER (
+                  PARTITION BY membership.conversation_id
+                  ORDER BY membership.joined_sequence DESC, membership.joined_at DESC
+                ) AS rank
+         FROM im_human_memberships membership
+         WHERE membership.user_id = ?
+       ), visible_conversations AS (
+         SELECT conversation.*,
+                COALESCE(
+                  CASE WHEN viewer.left_at IS NULL THEN conversation.updated_at
+                    ELSE json_extract(viewer.conversation_snapshot_json, '$.updatedAt') END,
+                  viewer.left_at,
+                  conversation.updated_at
+                ) AS effective_updated_at
+         FROM ranked_viewers viewer
+         JOIN im_conversations conversation ON conversation.id = viewer.conversation_id
+         WHERE viewer.rank = 1
+       )
+       SELECT * FROM visible_conversations
+       WHERE 1 = 1 ${cursorWhere}
+       ORDER BY effective_updated_at DESC, created_at DESC, id
        LIMIT ?`,
       userId,
       ...(cursor ? [cursor.updatedAt, cursor.updatedAt, cursor.createdAt, cursor.updatedAt, cursor.createdAt, cursor.id] : []),
