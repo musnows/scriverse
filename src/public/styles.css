@@ -3028,6 +3028,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .card-actions:is(.ai-plan-actions, .ai-question-actions) > button { flex: 0 0 auto; }
 .ai-question-dialog { width: min(540px, 92vw); }
 .ai-question-body { display: grid; gap: 12px; padding: 18px 22px 8px; }
+.ai-question-navigation { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; align-items: center; gap: 8px; }
+.ai-question-navigation output { color: var(--muted); font: 10px/1.4 var(--font-latin), monospace; text-align: center; font-variant-numeric: tabular-nums; }
+.ai-question-navigation button { min-width: 58px; min-height: 28px; padding: 5px 9px; font-size: 10px; }
 .ai-question-text { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 .ai-question-options { display: grid; gap: 6px; }
 .ai-question-option-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 11px; line-height: 1.5; cursor: pointer; }

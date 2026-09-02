@@ -9,7 +9,7 @@ export const INTERACTIVE_AI_TOOL_NAMES = {
 
 export const INTERACTIVE_AI_TOOL_DESCRIPTIONS = {
   propose_write_plan: "AI 只提交修改计划：系统按当前数据库生成字段级明细，作者确认后才会原子执行；任何情况下都不能删除条目或改写正文。",
-  ask_user_question: "一次提问恰好一个问题，附带 2-6 个预设选项；作者未回答前 AI 必须等待，不能编造答案。"
+  ask_user_question: "一次调用可提出 1-5 个问题，每题附带 2-6 个预设选项；作者一次提交全部回答前 AI 必须等待，不能编造答案。"
 };
 
 /** 作品设置页的 AI 可写工具开关清单：与 ai-write-plans.ts 的常量保持一致。 */
@@ -23,7 +23,7 @@ export const AI_WRITE_TOOLS_META = [
   { id: "outlines", label: "大纲/伏笔", description: "允许 AI 编辑章节大纲与创建或编辑伏笔（不能删除）。" },
   { id: "annotations", label: "正文评论/待办", description: "允许 AI 在正文指定位置添加评论或待办批注，不改动正文本身。" },
   { id: "analysis_tasks", label: "分析任务", description: "允许 AI 触发既有类型的分析任务进入现有队列。" },
-  { id: "ask_user_questions", label: "用户提问", description: "允许 AI 通过 AskUserQuestions 向你提出单选问题。" }
+  { id: "ask_user_questions", label: "用户提问", description: "允许 AI 通过 AskUserQuestions 向你批量提出单选问题。" }
 ];
 
 const PLAN_STATUS_LABELS = {
@@ -464,17 +464,20 @@ export function renderApprovalCenterRows(plans, questions = []) {
         <span class="ai-approval-row-open" aria-hidden="true">查看</span>
       </button>
     </li>`).join("");
-  const questionRows = questions.map((question) => `
+  const questionRows = questions.map((question) => {
+    const questionCount = Math.max(1, Number(question.questionCount) || 1);
+    return `
     <li>
       <button type="button" class="ai-approval-row" data-question-id="${esc(question.id)}">
         <span class="ai-status-chip" data-tone="${statusTone(question.status)}">${esc(question.statusLabel)}</span>
         <span class="ai-approval-row-main">
-          <strong>AI 提问 · ${esc(question.question)}</strong>
-          <small>${question.answerText ? `回答：${esc(question.answerText)} · ` : ""}${esc(formatDateTime(question.createdAt))}</small>
+          <strong>AI 提问 · ${esc(question.question)}${questionCount > 1 ? ` 等 ${questionCount} 题` : ""}</strong>
+          <small>${question.answerText ? `${questionCount > 1 ? `已回答 ${questionCount} 题` : `回答：${esc(question.answerText)}`} · ` : ""}${esc(formatDateTime(question.createdAt))}</small>
         </span>
         <span class="ai-approval-row-open">查看</span>
       </button>
-    </li>`).join("");
+    </li>`;
+  }).join("");
   return `<ul class="ai-approval-list">${planRows}${questionRows}</ul>`;
 }
 

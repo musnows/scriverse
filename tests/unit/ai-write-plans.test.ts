@@ -529,6 +529,61 @@ describe("AiWritePlanManager 工具开关与审批流水线", () => {
       .toHaveLength(3000);
   });
 
+  it("单次提问批次持久化多题并要求一次提交全部回答", async () => {
+    const work = await runtime.store.createWork({ title: "批量提问作品", author: "测试作者" });
+    const workId = String(work.id);
+    enableTools(workId, ["ask_user_questions"]);
+    expect(() => manager.createQuestion({
+      workId,
+      conversationId: "conv-too-many",
+      initiator: null,
+      recipientUserId: null,
+      questions: Array.from({ length: 6 }, (_, index) => ({ question: `问题 ${index + 1}？`, options: ["甲", "乙"] }))
+    })).toThrowError(/5/u);
+    const question = manager.createQuestion({
+      workId,
+      conversationId: "conv-batch",
+      initiator: null,
+      recipientUserId: null,
+      questions: [
+        { question: "采用哪个视角？", options: ["第三人称", "第一人称"] },
+        { question: "故事从哪里开始？", options: ["旧港", "北境"] }
+      ],
+      toolCallId: "tool-question-batch"
+    });
+    expect(question).toMatchObject({
+      question: "采用哪个视角？",
+      questionCount: 2,
+      questions: [
+        { index: 0, question: "采用哪个视角？", selectedOption: null },
+        { index: 1, question: "故事从哪里开始？", selectedOption: null }
+      ]
+    });
+    expect(() => manager.answerQuestion(question.id, workId, null, { answers: [{ selectedOption: 0 }] }))
+      .toThrowError(/一次提交全部 2 个问题/u);
+    expect(() => manager.answerQuestion(question.id, workId, null, {
+      answers: [{ selectedOption: 0 }, { selectedOption: 2 }]
+    })).toThrowError(/第 2 个问题的选项编号无效/u);
+
+    const answered = manager.answerQuestion(question.id, workId, null, {
+      answers: [
+        { selectedOption: 0, customAnswer: "叙述保持克制" },
+        { customAnswer: "从旧港钟楼地下开始" }
+      ]
+    });
+    expect(answered).toMatchObject({
+      status: "answered",
+      selectedOptionLabel: "第三人称",
+      questionCount: 2,
+      questions: [
+        { selectedOptionLabel: "第三人称", customAnswer: "叙述保持克制", answerText: "第三人称\n补充信息：叙述保持克制" },
+        { selectedOptionLabel: null, customAnswer: "从旧港钟楼地下开始", answerText: "从旧港钟楼地下开始" }
+      ]
+    });
+    expect(answered.answerText).toContain("问题 1：采用哪个视角？\n回答：第三人称");
+    expect(answered.answerText).toContain("问题 2：故事从哪里开始？\n回答：从旧港钟楼地下开始");
+  });
+
   it("待回答问题阻止写计划且 continuation 只能认领一次", async () => {
     const work = await runtime.store.createWork({ title: "阻塞提问", author: "测试作者" });
     const workId = String(work.id);

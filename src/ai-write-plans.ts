@@ -69,7 +69,7 @@ export const aiWriteToolDescriptions: Record<AiWriteToolId, string> = {
   outlines: "允许侧边栏 AI 编辑章节大纲以及创建或编辑伏笔（不能删除）。",
   annotations: "允许侧边栏 AI 复用现有批注能力，在正文指定位置创建评论或待办。",
   analysis_tasks: "允许侧边栏 AI 触发已有类型的分析任务进入现有队列。",
-  ask_user_questions: "允许侧边栏 AI 通过 AskUserQuestions 向用户提出单选问题。"
+  ask_user_questions: "允许侧边栏 AI 通过 AskUserQuestions 向用户批量提出单选问题。"
 };
 
 /** 全部关闭时的默认开关状态。 */
@@ -453,26 +453,49 @@ export const createAiWritePlanInputSchema = z.object({
 
 export type CreateAiWritePlanInput = z.infer<typeof createAiWritePlanInputSchema>;
 
-/** 提问选项数量限制：一次一个问题和 2-6 个预设选项。 */
+/** 单次工具调用可批量提出 1-5 个问题，每题包含 2-6 个预设选项。 */
+export const MIN_AI_QUESTIONS_PER_CALL = 1;
+export const MAX_AI_QUESTIONS_PER_CALL = 5;
 export const MIN_AI_QUESTION_OPTIONS = 2;
 export const MAX_AI_QUESTION_OPTIONS = 6;
 export const MAX_AI_QUESTION_ANSWER_CHARS = 3000;
 
-export const askAiUserQuestionInputSchema = z.object({
+const aiUserQuestionItemSchema = z.object({
   question: z.string().trim().min(1).max(2000),
   options: z.array(z.string().trim().min(1).max(200))
     .min(MIN_AI_QUESTION_OPTIONS)
     .max(MAX_AI_QUESTION_OPTIONS)
 }).strict();
 
-export const answerAiUserQuestionSchema = z.object({
+export const askAiUserQuestionInputSchema = z.union([
+  z.object({
+    questions: z.array(aiUserQuestionItemSchema)
+      .min(MIN_AI_QUESTIONS_PER_CALL)
+      .max(MAX_AI_QUESTIONS_PER_CALL)
+  }).strict(),
+  aiUserQuestionItemSchema
+]).transform((input) => "questions" in input ? input : { questions: [input] });
+
+const aiUserQuestionAnswerSchema = z.object({
   selectedOption: z.number().int().min(0).optional(),
-  customAnswer: z.string().trim().min(1).max(MAX_AI_QUESTION_ANSWER_CHARS).optional()
+  customAnswer: z.string().trim()
+    .min(1, "自定义回答不能为空")
+    .max(MAX_AI_QUESTION_ANSWER_CHARS, `自定义回答不能超过 ${MAX_AI_QUESTION_ANSWER_CHARS} 个字符`)
+    .optional()
 }).strict().refine(
   // 至少提供一种回答；选择预设项后仍可附带自定义补充信息。
   (input) => input.selectedOption !== undefined || input.customAnswer !== undefined,
   { message: "必须选择预设选项或填写自定义回答" }
 );
+
+export const answerAiUserQuestionSchema = z.union([
+  z.object({
+    answers: z.array(aiUserQuestionAnswerSchema)
+      .min(MIN_AI_QUESTIONS_PER_CALL)
+      .max(MAX_AI_QUESTIONS_PER_CALL)
+  }).strict(),
+  aiUserQuestionAnswerSchema
+]).transform((input) => "answers" in input ? input : { answers: [input] });
 
 // ---------------------------------------------------------------------------
 // 标签与展示辅助
@@ -1083,10 +1106,12 @@ type QuestionRow = {
   recipient_user_id: string | null;
   question: string;
   options_json: string;
+  questions_json: string;
   status: string;
   selected_option: number | null;
   answer_text: string;
   is_custom_answer: number;
+  answers_json: string;
   tool_call_id: string | null;
   continuation_json: string;
   resume_state: string;
@@ -1166,6 +1191,8 @@ export type QuestionView = {
   workId: string;
   conversationId: string | null;
   question: string;
+  questionCount: number;
+  questions: QuestionItemView[];
   status: string;
   statusLabel: string;
   options: Array<{ index: number; label: string; recommended: boolean }>;
@@ -1180,22 +1207,99 @@ export type QuestionView = {
   resumeState: string;
 };
 
-function resolvedQuestionAnswer(row: QuestionRow): {
+export type QuestionItemView = {
+  index: number;
+  question: string;
+  options: Array<{ index: number; label: string; recommended: boolean }>;
+  selectedOption: number | null;
+  selectedOptionLabel: string | null;
+  customAnswer: string;
+  answerText: string;
+  isCustomAnswer: boolean;
+};
+
+type StoredQuestionDefinition = { question: string; options: string[] };
+type StoredQuestionAnswer = { selectedOption: number | null; customAnswer: string };
+
+function storedQuestionDefinitions(row: QuestionRow): StoredQuestionDefinition[] {
+  const stored = json<unknown[]>(row.questions_json, []);
+  const questions = stored.flatMap((value): StoredQuestionDefinition[] => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const record = value as Record<string, unknown>;
+    const question = typeof record.question === "string" ? record.question.trim() : "";
+    const options = Array.isArray(record.options)
+      ? record.options.filter((option): option is string => typeof option === "string" && option.trim().length > 0)
+      : [];
+    return question && options.length >= MIN_AI_QUESTION_OPTIONS ? [{ question, options }] : [];
+  });
+  if (questions.length > 0) return questions;
+  return [{ question: row.question, options: json<Array<string>>(row.options_json, []) }];
+}
+
+function resolveQuestionAnswer(
+  options: string[],
+  selectedOption: number | null,
+  customAnswer: string
+): Omit<QuestionItemView, "index" | "question" | "options"> {
+  const selectedOptionLabel = selectedOption !== null && selectedOption >= 0 && selectedOption < options.length
+    ? options[selectedOption] ?? null
+    : null;
+  const answerText = selectedOptionLabel
+    ? (customAnswer ? `${selectedOptionLabel}\n补充信息：${customAnswer}` : selectedOptionLabel)
+    : customAnswer;
+  return {
+    selectedOption,
+    selectedOptionLabel,
+    customAnswer,
+    answerText,
+    isCustomAnswer: customAnswer.length > 0
+  };
+}
+
+function resolvedQuestionAnswers(row: QuestionRow): QuestionItemView[] {
+  const questions = storedQuestionDefinitions(row);
+  const storedAnswers = json<unknown[]>(row.answers_json, []);
+  return questions.map((definition, index) => {
+    const value = storedAnswers[index];
+    const record = value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+    const storedSelectedOption = record?.selectedOption;
+    const selectedOption = Number.isInteger(storedSelectedOption)
+      ? Number(storedSelectedOption)
+      : index === 0 && row.selected_option !== null ? Number(row.selected_option) : null;
+    const customAnswer = typeof record?.customAnswer === "string"
+      ? record.customAnswer
+      : index === 0 && row.is_custom_answer === 1 ? row.answer_text : "";
+    return {
+      index,
+      question: definition.question,
+      options: definition.options.map((label, optionIndex) => ({ index: optionIndex, label, recommended: optionIndex === 0 })),
+      ...resolveQuestionAnswer(definition.options, selectedOption, customAnswer)
+    };
+  });
+}
+
+function combinedQuestionAnswerText(questions: QuestionItemView[]): string {
+  const answered = questions.filter((question) => question.answerText);
+  if (answered.length === 0) return "";
+  if (questions.length === 1) return questions[0]?.answerText ?? "";
+  return answered.map((question) => `问题 ${question.index + 1}：${question.question}\n回答：${question.answerText}`).join("\n\n");
+}
+
+function firstQuestionAnswer(row: QuestionRow): {
   selectedOption: number | null;
   selectedOptionLabel: string | null;
   customAnswer: string;
   answerText: string;
 } {
-  const options = json<Array<string>>(row.options_json, []);
-  const selectedOption = row.selected_option === null ? null : Number(row.selected_option);
-  const selectedOptionLabel = selectedOption !== null && selectedOption >= 0 && selectedOption < options.length
-    ? options[selectedOption] ?? null
-    : null;
-  const customAnswer = row.is_custom_answer === 1 ? row.answer_text : "";
-  const answerText = selectedOptionLabel
-    ? (customAnswer ? `${selectedOptionLabel}\n补充信息：${customAnswer}` : selectedOptionLabel)
-    : (customAnswer || row.answer_text);
-  return { selectedOption, selectedOptionLabel, customAnswer, answerText };
+  const answer = resolvedQuestionAnswers(row)[0];
+  return {
+    selectedOption: answer?.selectedOption ?? null,
+    selectedOptionLabel: answer?.selectedOptionLabel ?? null,
+    customAnswer: answer?.customAnswer ?? "",
+    answerText: answer?.answerText ?? ""
+  };
 }
 
 export type AiWriteToolsView = Record<AiWriteToolId, boolean>;
@@ -2484,12 +2588,16 @@ export class AiWritePlanManager {
     conversationId: string | null;
     initiator: PlanViewer;
     recipientUserId: string | null;
-    question: unknown;
-    options: unknown;
+    question?: unknown;
+    options?: unknown;
+    questions?: unknown;
     toolCallId?: string;
   }): QuestionView {
     this.assertToolEnabled(input.workId, "ask_user_questions");
-    const parsed = askAiUserQuestionInputSchema.parse({ question: input.question, options: input.options });
+    const parsed = askAiUserQuestionInputSchema.parse(input.questions === undefined
+      ? { question: input.question, options: input.options }
+      : { questions: input.questions });
+    const firstQuestion = parsed.questions[0]!;
     const questionId = randomId("aiQ");
     const timestamp = now();
     const expiresAt = isoFromNow(timestamp, this.questionTtlMs);
@@ -2501,15 +2609,16 @@ export class AiWritePlanManager {
       this.database.run(
         `INSERT INTO ai_user_questions (
           id, work_id, conversation_id, initiator_user_id, recipient_user_id, question,
-          options_json, status, tool_call_id, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+          options_json, questions_json, status, tool_call_id, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
         questionId,
         input.workId,
         input.conversationId,
         input.initiator?.userId ?? null,
         input.recipientUserId,
-        parsed.question,
-        JSON.stringify(parsed.options),
+        firstQuestion.question,
+        JSON.stringify(firstQuestion.options),
+        JSON.stringify(parsed.questions),
         input.toolCallId ?? null,
         timestamp,
         expiresAt
@@ -2517,48 +2626,51 @@ export class AiWritePlanManager {
     });
     this.store.audit(input.workId, "ai.question.asked", "ai_user_question", questionId, {
       conversationId: input.conversationId,
-      askedBy: input.initiator?.userId ?? null
+      askedBy: input.initiator?.userId ?? null,
+      questionCount: parsed.questions.length
     });
     return this.getQuestion(questionId, input.workId, input.initiator);
   }
 
-  answerQuestion(questionId: string, workId: string, respondent: PlanViewer, payload: { selectedOption?: number; customAnswer?: string }): QuestionView {
+  answerQuestion(
+    questionId: string,
+    workId: string,
+    respondent: PlanViewer,
+    payload: z.input<typeof answerAiUserQuestionSchema>
+  ): QuestionView {
     const row = this.assertAnswerable(questionId, workId, respondent);
-    const options = json<Array<string>>(row.options_json, []);
-    const customAnswer = payload.customAnswer?.trim() ?? "";
-    if (payload.customAnswer !== undefined && !customAnswer) {
-      throw new AppError(400, "AI_QUESTION_CUSTOM_ANSWER_INVALID", "自定义回答不能为空");
+    const questions = storedQuestionDefinitions(row);
+    const parsed = answerAiUserQuestionSchema.parse(payload);
+    if (parsed.answers.length !== questions.length) {
+      throw new AppError(400, "AI_QUESTION_ANSWERS_INCOMPLETE", `必须一次提交全部 ${questions.length} 个问题的回答`);
     }
-    if (customAnswer.length > MAX_AI_QUESTION_ANSWER_CHARS) {
-      throw new AppError(400, "AI_QUESTION_CUSTOM_ANSWER_TOO_LONG", `自定义回答不能超过 ${MAX_AI_QUESTION_ANSWER_CHARS} 个字符`);
-    }
-    let selectedOption: number | null = null;
-    let selectedOptionLabel = "";
-    if (payload.selectedOption !== undefined) {
-      if (payload.selectedOption < 0 || payload.selectedOption >= options.length) {
-        throw new AppError(400, "AI_QUESTION_OPTION_INVALID", "选择的选项编号无效");
+    const answers: StoredQuestionAnswer[] = parsed.answers.map((answer, index) => {
+      const options = questions[index]!.options;
+      const selectedOption = answer.selectedOption ?? null;
+      if (selectedOption !== null && selectedOption >= options.length) {
+        throw new AppError(400, "AI_QUESTION_OPTION_INVALID", `第 ${index + 1} 个问题的选项编号无效`);
       }
-      selectedOption = payload.selectedOption;
-      selectedOptionLabel = options[selectedOption] ?? "";
-    }
-    if (selectedOption === null && !customAnswer) throw new AppError(400, "AI_QUESTION_ANSWER_REQUIRED", "必须提供回答");
-    const isCustom = Boolean(customAnswer);
-    const storedAnswerText = customAnswer || selectedOptionLabel;
+      return { selectedOption, customAnswer: answer.customAnswer ?? "" };
+    });
+    const firstAnswer = answers[0]!;
+    const firstResolved = resolveQuestionAnswer(questions[0]!.options, firstAnswer.selectedOption, firstAnswer.customAnswer);
     const updated = this.database.run(
       `UPDATE ai_user_questions
-       SET status = 'answered', selected_option = ?, answer_text = ?, is_custom_answer = ?, decided_at = ?
+       SET status = 'answered', selected_option = ?, answer_text = ?, is_custom_answer = ?, answers_json = ?, decided_at = ?
       WHERE id = ? AND status = 'pending'`,
-      selectedOption,
-      storedAnswerText,
-      isCustom ? 1 : 0,
+      firstAnswer.selectedOption,
+      firstAnswer.customAnswer || firstResolved.selectedOptionLabel || "",
+      firstAnswer.customAnswer ? 1 : 0,
+      JSON.stringify(answers),
       now(),
       questionId
     );
     if (updated.changes !== 1) throw new AppError(409, "AI_QUESTION_ALREADY_DECIDED", "该问题已被处理");
     this.store.audit(row.work_id, "ai.question.answered", "ai_user_question", questionId, {
       answeredBy: respondent?.userId ?? null,
-      isCustomAnswer: isCustom,
-      hasSelectedOption: selectedOption !== null
+      questionCount: questions.length,
+      customAnswerCount: answers.filter((answer) => answer.customAnswer).length,
+      selectedOptionCount: answers.filter((answer) => answer.selectedOption !== null).length
     });
     return this.getQuestion(questionId, workId, respondent);
   }
@@ -2664,7 +2776,8 @@ export class AiWritePlanManager {
       questionId
     );
     if (claimed.changes !== 1) return null;
-    const answer = resolvedQuestionAnswer(row);
+    const questionView = this.toQuestionView(row);
+    const answer = firstQuestionAnswer(row);
     return {
       ...continuation,
       questionId,
@@ -2674,7 +2787,13 @@ export class AiWritePlanManager {
       selectedOptionLabel: answer.selectedOptionLabel,
       customAnswer: answer.customAnswer,
       toolCallId: row.tool_call_id,
-      questionView: this.toQuestionView(row)
+      answers: questionView.questions.map((question) => ({
+        question: question.question,
+        answer: question.answerText,
+        selectedOption: question.selectedOptionLabel,
+        supplementalAnswer: question.customAnswer || null
+      })),
+      questionView
     };
   }
 
@@ -2745,21 +2864,23 @@ export class AiWritePlanManager {
   }
 
   private toQuestionView(row: QuestionRow): QuestionView {
-    const options = json<Array<string>>(row.options_json, []);
-    const answer = resolvedQuestionAnswer(row);
+    const questions = resolvedQuestionAnswers(row);
+    const firstQuestion = questions[0]!;
     return {
       id: row.id,
       workId: row.work_id,
       conversationId: row.conversation_id,
       question: row.question,
+      questionCount: questions.length,
+      questions,
       status: row.status,
       statusLabel: aiQuestionStatusLabels[row.status] ?? row.status,
-      options: options.map((label, index) => ({ index, label, recommended: index === 0 })),
-      selectedOption: answer.selectedOption,
-      selectedOptionLabel: answer.selectedOptionLabel,
-      customAnswer: answer.customAnswer,
-      answerText: answer.answerText,
-      isCustomAnswer: row.is_custom_answer === 1,
+      options: firstQuestion.options,
+      selectedOption: firstQuestion.selectedOption,
+      selectedOptionLabel: firstQuestion.selectedOptionLabel,
+      customAnswer: firstQuestion.customAnswer,
+      answerText: combinedQuestionAnswerText(questions),
+      isCustomAnswer: firstQuestion.isCustomAnswer,
       createdAt: row.created_at,
       expiresAt: row.expires_at,
       decidedAt: row.decided_at,

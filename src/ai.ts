@@ -80,7 +80,7 @@ import {
   type CharacterExtractionSelection
 } from "./character-extraction.js";
 import type { AiWritePlanManager, AiWriteToolId, AnalysisTaskInput, ResolvedAnalysisTaskInput } from "./ai-write-plans.js";
-import { AI_WRITE_TOOL_IDS, aiWritePlanOperationToolSchemas } from "./ai-write-plans.js";
+import { AI_WRITE_TOOL_IDS, aiWritePlanOperationToolSchemas, askAiUserQuestionInputSchema } from "./ai-write-plans.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import {
@@ -1546,10 +1546,7 @@ const proposeWritePlanArguments = z.object({
   aiSummary: z.string().trim().min(1).max(2000),
   operations: z.array(z.record(z.string(), z.unknown())).min(1).max(20)
 }).strict();
-const askUserQuestionArguments = z.object({
-  question: z.string().trim().min(1).max(2000),
-  options: z.array(z.string().trim().min(1).max(200)).min(2).max(6)
-}).strict();
+const askUserQuestionArguments = askAiUserQuestionInputSchema;
 const agentToolCursorParameter = {
   type: "integer",
   minimum: 0,
@@ -1751,8 +1748,29 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "ask_user_question",
-      description: "当你需要在继续之前让作者做一次明确选择时使用：一次调用只允许提出一个问题，并提供 2-6 个互斥的预设选项，作者也可以自行输入回答。把你最推荐的选项放在第一个位置，界面会将它标注为推荐项。问题必须是选择决策类的问题（例如方案取舍、命名确认），不要用它闲聊。若作者未回答、拒绝或提问已过期，绝不允许自己编造答案，也不能把它当作任何已获授权的写入依据。",
-      parameters: { type: "object", properties: { question: { type: "string", minLength: 1, maxLength: 2000, description: "要问作者的完整问题。" }, options: { type: "array", minItems: 2, maxItems: 6, items: { type: "string", minLength: 1, maxLength: 200 }, description: "预设选项列表，最推荐的放第一位。" } }, required: ["question", "options"], additionalProperties: false }
+      description: "当你需要在继续之前让作者做一项或多项明确选择时使用：一次调用可提出 1-5 个问题，每题提供 2-6 个互斥预设选项，作者可逐题切换并一次提交全部回答。每题最推荐的选项放在第一个位置。问题必须是选择决策类问题，不要用它闲聊。若作者未回答、拒绝或提问已过期，绝不允许自行编造答案，也不能视为已获写入授权。",
+      parameters: {
+        type: "object",
+        properties: {
+          questions: {
+            type: "array",
+            minItems: 1,
+            maxItems: 5,
+            description: "要一次提交给作者回答的问题列表。",
+            items: {
+              type: "object",
+              properties: {
+                question: { type: "string", minLength: 1, maxLength: 2000, description: "要问作者的完整问题。" },
+                options: { type: "array", minItems: 2, maxItems: 6, items: { type: "string", minLength: 1, maxLength: 200 }, description: "预设选项列表，最推荐的放第一位。" }
+              },
+              required: ["question", "options"],
+              additionalProperties: false
+            }
+          }
+        },
+        required: ["questions"],
+        additionalProperties: false
+      }
     }
   }
 };
@@ -6340,18 +6358,26 @@ export class AiManager {
     answerText: string;
     selectedOptionLabel?: string | null;
     supplementalAnswer?: string;
+    answers?: Array<Record<string, unknown>>;
     toolCallId?: string;
     assistantMessageRequestId?: string;
     questionView?: Record<string, unknown>;
     round?: number;
     toolMessages?: unknown[];
   }): Promise<Record<string, unknown>> {
+    const answeredItems = (input.answers ?? []).map((answer) => ({
+      question: String(answer.question ?? ""),
+      answer: String(answer.answer ?? ""),
+      selectedOption: typeof answer.selectedOption === "string" ? answer.selectedOption : null,
+      supplementalAnswer: typeof answer.supplementalAnswer === "string" ? answer.supplementalAnswer : null
+    }));
     const controlledResult = input.status === "answered"
       ? {
           status: "answered",
           answer: input.answerText,
           selectedOption: input.selectedOptionLabel ?? null,
-          supplementalAnswer: input.supplementalAnswer || null
+          supplementalAnswer: input.supplementalAnswer || null,
+          ...(answeredItems.length > 0 ? { answers: answeredItems } : {})
         }
       : { status: input.status, answer: null };
     const toolCallId = input.toolCallId?.trim() ?? "";
@@ -7655,7 +7681,7 @@ export class AiManager {
     const askUserQuestionGuidance = enabledToolIds.includes("ask_user_question")
       ? [
           "当前对话已启用 ask_user_question。只要你需要向作者提出任何问题，包括澄清需求、索取缺失信息、确认方案、命名、事实或下一步，就必须调用 ask_user_question；禁止在普通回复正文中直接写出问题、要求作者回答，或使用“请告诉我”“请提供”“请选择”等措辞绕过工具。只有完全不需要作者回答时，才可以直接给出普通回复。",
-          "每次 ask_user_question 调用必须只提出恰好一个问题，并给出 2-6 个互斥选项；把你最推荐的选项放在第一位。提出后停止生成等待作者作答；作者未回答、拒绝或提问过期时绝不允许编造答案，也不能把提问当作任何写入授权。"
+          "每次 ask_user_question 调用可在 questions 中提出 1-5 个彼此相关的问题，每题给出 2-6 个互斥选项，并把该题最推荐的选项放在第一位。能一次确认的相关决策应合并到同一次调用，避免连续弹窗；提出后停止生成等待作者一次提交全部回答。作者未回答、拒绝或提问过期时绝不允许编造答案，也不能把提问当作任何写入授权。"
         ]
       : [];
     const coreRules = [
@@ -7843,9 +7869,11 @@ export class AiManager {
     const pendingQuestion = manager.latestPendingQuestion(conversationId);
     if (pendingQuestion) {
       sections.push([
-        "存在一个等待作者回答的提问：不要重复提问，也不要自行假定答案。",
-        `问题：${pendingQuestion.question}`,
-        ...pendingQuestion.options.map((option) => `${option.index + 1}. ${option.label}${option.recommended ? "（推荐）" : ""}`),
+        `存在一个等待作者回答的提问批次（共 ${pendingQuestion.questionCount} 题）：不要重复提问，也不要自行假定答案。`,
+        ...pendingQuestion.questions.flatMap((question) => [
+          `问题 ${question.index + 1}：${question.question}`,
+          ...question.options.map((option) => `  ${option.index + 1}. ${option.label}${option.recommended ? "（推荐）" : ""}`)
+        ]),
         "在系统把作者的回答作为新消息送达之前，不得推进依赖该答案的工作。"
       ].join("\n"));
     }
@@ -8431,8 +8459,7 @@ export class AiManager {
         conversationId,
         initiator,
         recipientUserId: actor.conversationOwnerUserId,
-        question: parsed.data.question,
-        options: parsed.data.options,
+        questions: parsed.data.questions,
         toolCallId: toolCall.id
       });
       return {
@@ -8443,8 +8470,15 @@ export class AiManager {
         status: "completed",
         result: {
           ok: true,
-          question: { id: question.id, status: question.status, statusLabel: question.statusLabel, expiresAt: question.expiresAt },
-          message: "问题已提交给作者（界面会弹出选择框）。你必须停止等待：在作者回答并通过后续消息返回之前，绝不能编造答案，也不能把任何未获回答的选项当作已确认的决策去提交写入计划。"
+          question: {
+            id: question.id,
+            status: question.status,
+            statusLabel: question.statusLabel,
+            questionCount: question.questionCount,
+            questions: question.questions.map((item) => ({ index: item.index, question: item.question, options: item.options })),
+            expiresAt: question.expiresAt
+          },
+          message: "问题批次已提交给作者（界面会弹出可逐题切换的选择框）。你必须停止等待：在作者一次提交全部回答并通过后续消息返回之前，绝不能编造答案，也不能把任何未获回答的选项当作已确认的决策去提交写入计划。"
         }
       };
     } catch (error) {

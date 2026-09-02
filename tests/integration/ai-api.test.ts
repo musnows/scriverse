@@ -1736,7 +1736,7 @@ describe("AI 供应商、模型与建议 API", () => {
         return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       }
       const body = JSON.parse(String(init?.body)) as {
-        tools?: Array<{ function?: { name?: string } }>;
+        tools?: Array<{ function?: { name?: string; parameters?: Record<string, unknown> } }>;
         messages?: Array<{ role?: string; content?: string }>;
       };
       lockedTools = body.tools?.map((tool) => tool.function?.name).filter((name): name is string => Boolean(name));
@@ -4719,7 +4719,7 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({
       tools: { ask_user_questions: true }
     }).expect(200);
-    const captured: Array<{ systemPrompt: string; toolNames: string[] }> = [];
+    const captured: Array<{ systemPrompt: string; toolNames: string[]; tools: Array<{ function?: { name?: string; parameters?: Record<string, unknown> } }> }> = [];
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       const body = JSON.parse(String(init?.body ?? "{}")) as {
@@ -4728,7 +4728,8 @@ describe("AI 供应商、模型与建议 API", () => {
       };
       captured.push({
         systemPrompt: String(body.messages?.find((message) => message.role === "system")?.content ?? ""),
-        toolNames: (body.tools ?? []).flatMap((tool) => typeof tool.function?.name === "string" ? [tool.function.name] : [])
+        toolNames: (body.tools ?? []).flatMap((tool) => typeof tool.function?.name === "string" ? [tool.function.name] : []),
+        tools: body.tools ?? []
       });
       return new Response(JSON.stringify({ choices: [{ message: { content: "无需向作者提问。" } }] }), { status: 200 });
     });
@@ -4756,6 +4757,11 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(captured[0]?.systemPrompt).toContain(mandatoryGuidance);
     expect(captured[0]?.systemPrompt).toContain("禁止在普通回复正文中直接写出问题");
     expect(captured[0]?.toolNames).toContain("ask_user_question");
+    const askDefinition = captured[0]?.tools.find((tool) => tool.function?.name === "ask_user_question");
+    expect(askDefinition?.function?.parameters).toMatchObject({
+      required: ["questions"],
+      properties: { questions: { minItems: 1, maxItems: 5 } }
+    });
     expect(captured[1]?.systemPrompt).toBe(captured[0]?.systemPrompt);
     expect(captured[1]?.toolNames).toContain("ask_user_question");
     expect(captured[2]?.systemPrompt).not.toContain(mandatoryGuidance);
@@ -4784,7 +4790,10 @@ describe("AI 供应商、模型与建议 API", () => {
       };
       if (completionCount === 1) {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
-          { id: "ask-once", type: "function", function: { name: "ask_user_question", arguments: { question: "采用哪个方向？", options: ["甲", "乙"] } } },
+          { id: "ask-once", type: "function", function: { name: "ask_user_question", arguments: { questions: [
+            { question: "采用哪个方向？", options: ["甲", "乙"] },
+            { question: "采用哪个视角？", options: ["第一人称", "第三人称"] }
+          ] } } },
           { id: "must-not-run", type: "function", function: { name: "propose_write_plan", arguments: { aiSummary: "不应提前执行", operations: [{ opType: "create_entry", entityType: "setting", input: { title: "未确认", category: "地点", content: "内容" } }] } } }
         ] } }] }), { status: 200 });
       }
@@ -4795,6 +4804,7 @@ describe("AI 供应商、模型与建议 API", () => {
       const toolResult = body.messages?.find((message) => message.role === "tool" && message.tool_call_id === "ask-once");
       expect(toolResult?.content).toContain('"selectedOption":"甲"');
       expect(toolResult?.content).toContain('"supplementalAnswer":"补充采用冷色调"');
+      expect(toolResult?.content).toContain('"selectedOption":"第三人称"');
       return new Response(JSON.stringify({ choices: [{ message: { content: "已按真实回答继续。" } }] }), { status: 200 });
     });
 
@@ -4821,18 +4831,26 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(suspendedMetadata).not.toHaveProperty("anthropicContent");
     const questions = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}`).expect(200);
     const questionId = String(questions.body.data.questions[0].id);
-    expect(questions.body.data.questions[0]).toMatchObject({ status: "pending", resumeState: "pending" });
+    expect(questions.body.data.questions[0]).toMatchObject({ status: "pending", resumeState: "pending", questionCount: 2 });
 
     const answered = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
-      .send({ selectedOption: 0, customAnswer: "补充采用冷色调" })
+      .send({ answers: [
+        { selectedOption: 0, customAnswer: "补充采用冷色调" },
+        { selectedOption: 1 }
+      ] })
       .expect(200);
     expect(answered.body.data).toMatchObject({
       status: "answered",
       selectedOptionLabel: "甲",
       customAnswer: "补充采用冷色调",
-      answerText: "甲\n补充信息：补充采用冷色调",
+      questionCount: 2,
+      questions: [
+        { question: "采用哪个方向？", answerText: "甲\n补充信息：补充采用冷色调" },
+        { question: "采用哪个视角？", answerText: "第三人称" }
+      ],
       resumeState: "completed"
     });
+    expect(answered.body.data.answerText).toContain("问题 2：采用哪个视角？\n回答：第三人称");
     expect(completionCount).toBe(2);
     const completedMessages = runtime.database.all<{ role: string; content: string; metadata_json: string }>(
       "SELECT role, content, metadata_json FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
@@ -4842,7 +4860,10 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completedMessages[1]).toMatchObject({ role: "assistant", content: "已按真实回答继续。" });
     const completedMetadata = JSON.parse(String(completedMessages[1]?.metadata_json ?? "{}"));
     expect(completedMetadata.toolCalls).toMatchObject([
-      { id: "ask-once", name: "ask_user_question", result: { question: { status: "answered", answerText: "甲\n补充信息：补充采用冷色调" } } }
+      { id: "ask-once", name: "ask_user_question", result: { question: { status: "answered", questionCount: 2, questions: [
+        { answerText: "甲\n补充信息：补充采用冷色调" },
+        { answerText: "第三人称" }
+      ] } } }
     ]);
     await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`).send({ selectedOption: 0 }).expect(409);
     expect(completionCount).toBe(2);
