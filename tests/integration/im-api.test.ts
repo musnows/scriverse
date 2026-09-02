@@ -888,6 +888,27 @@ describe("全局 IM API", () => {
     const frozenDisbandProfile = await member.agent.get(`/api/im/conversations/${disbandedGroup.body.data.id}`).expect(200);
     expect(frozenDisbandProfile.body.data.participants.humans
       .find((item: { userId: string }) => item.userId === member.user.userId).displayName).toBe(disbandedDisplayName);
+
+    runtime.auth.addMember(work.body.data.id, member.user.userId, { role: "editor" }, owner.user.userId);
+    const permissionDirect = await member.agent.post("/api/im/conversations/direct")
+      .set("X-CSRF-Token", member.csrfToken)
+      .send({ characterId: character.body.data.id })
+      .expect(201);
+    const frozenPermissionAvatarUrl = permissionDirect.body.data.participants.characters[0].avatarUrl;
+    runtime.auth.updateMemberPermissions(work.body.data.id, member.user.userId, { role: "viewer" });
+    await member.agent.get(`/api/im/conversations/${permissionDirect.body.data.id}`).expect(200);
+    const latestCharacterAvatar = await owner.agent.put(`/api/characters/${character.body.data.id}/avatar`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .attach("file", avatarSecondPng, { filename: "avatar.png", contentType: "image/png" })
+      .expect(200);
+    const suspendedView = await member.agent.get(`/api/im/conversations/${permissionDirect.body.data.id}`).expect(200);
+    expect(suspendedView.body.data.participants.characters[0]).toMatchObject({
+      status: "suspended",
+      avatarUrl: frozenPermissionAvatarUrl
+    });
+    expect(Buffer.from((await member.agent.get(frozenPermissionAvatarUrl).expect(200)).body)).toEqual(avatarPng);
+    const leakedAvatarUrl = `/api/im/conversations/${permissionDirect.body.data.id}/characters/${character.body.data.id}/avatar?v=${String(latestCharacterAvatar.body.data.avatarUrl).split("v=")[1]}`;
+    await member.agent.get(leakedAvatarUrl).expect(404);
     expect(runtime.database.get(
       "SELECT COUNT(*) AS count FROM im_avatar_versions WHERE conversation_id IN (?, ?)",
       exitedGroup.body.data.id,

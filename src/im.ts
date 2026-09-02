@@ -631,7 +631,9 @@ export class ImService {
       ...visibilityParams
     ).map((row) => ({ ...this.mapHumanMembership(row), ...(leftSequence === null ? {} : { leftAt: null }) }));
     const characters = this.db.all(
-      `SELECT membership.*, avatar.sha256 AS avatar_sha256
+      `SELECT membership.*,
+              CASE WHEN membership.status = 'active' THEN avatar.sha256
+                ELSE json_extract(membership.snapshot_json, '$.avatarSha256') END AS avatar_sha256
        FROM im_character_memberships membership
        LEFT JOIN character_avatars avatar ON avatar.character_id = membership.character_id
        WHERE membership.conversation_id = ? AND ${characterVisibility}
@@ -1010,7 +1012,9 @@ export class ImService {
       ...conversationIds
     );
     const characterRows = this.db.all(
-      `SELECT membership.*, avatar.sha256 AS avatar_sha256
+      `SELECT membership.*,
+              CASE WHEN membership.status = 'active' THEN avatar.sha256
+                ELSE json_extract(membership.snapshot_json, '$.avatarSha256') END AS avatar_sha256
        FROM im_character_memberships membership
        LEFT JOIN character_avatars avatar ON avatar.character_id = membership.character_id
        WHERE membership.conversation_id IN (${placeholders})
@@ -1306,7 +1310,20 @@ export class ImService {
     const visibleInMessage = requestedSha256
       ? this.messageAvatarVersionVisible(userId, conversationId, "character", characterId, requestedSha256)
       : false;
-    if (!requestedSha256 || (requestedSha256 !== visibleSha256 && !visibleInMessage)) {
+    const visibleAsCurrent = requiredString(visibleCharacter?.status) === "active" && requestedSha256 === visibleSha256;
+    const visibleDuringMembership = Boolean(requestedSha256) && requestedSha256 === visibleSha256 && Boolean(this.db.get(
+      `SELECT 1 AS present FROM im_avatar_versions avatar
+       JOIN im_human_memberships membership ON membership.conversation_id = avatar.conversation_id
+         AND membership.user_id = ? AND membership.joined_at <= avatar.created_at
+         AND (membership.left_at IS NULL OR membership.left_at >= avatar.created_at)
+       WHERE avatar.conversation_id = ? AND avatar.participant_kind = 'character'
+         AND avatar.participant_id = ? AND avatar.sha256 = ? LIMIT 1`,
+      userId,
+      conversationId,
+      characterId,
+      requestedSha256 ?? ""
+    ));
+    if (!requestedSha256 || (!visibleAsCurrent && !visibleDuringMembership && !visibleInMessage)) {
       throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "该角色头像版本不在你的 IM 可见任期内");
     }
     if (requestedSha256) {
