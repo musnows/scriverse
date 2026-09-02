@@ -509,6 +509,9 @@ export class ImOrchestrator {
     workId: string;
     characterId: string;
   } {
+    if (optionalString(membership.left_at) || requiredString(membership.status) !== "active") {
+      throw new AppError(409, "IM_CHARACTER_UNAVAILABLE", "IM 角色已经离开或暂停使用");
+    }
     const owner = this.auth.getUser(requiredString(chain.authorization_user_id));
     if (owner.status !== "active") throw new AppError(403, "IM_OWNER_DISABLED", "群主账户已停用，角色能力暂停");
     const initiator = this.auth.getUser(requiredString(chain.initiator_user_id));
@@ -1187,8 +1190,10 @@ export class ImOrchestrator {
       if (Array.from(result.content).length > IM_MESSAGE_MAX_CHARACTERS) {
         throw new AppError(502, "IM_AI_REPLY_TOO_LONG", `AI 回复超过 ${IM_MESSAGE_MAX_CHARACTERS} 字符，未写入会话`);
       }
+      const currentMembership = this.characterMembership(membershipId);
+      this.assertCharacterAuthorization(chain, currentMembership);
       this.finishTurn(turnId, result, undefined, true);
-      const message = this.appendCharacterMessage(chain, membership, result);
+      const message = this.appendCharacterMessage(chain, currentMembership, result);
       this.publish(requiredString(chain.conversation_id), "message", { message });
       this.publishReplyTurn(chain, membership, turnId, "completed");
       this.streamingReplies.delete(turnId);

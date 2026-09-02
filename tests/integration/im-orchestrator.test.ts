@@ -238,6 +238,58 @@ describe("IM AI 调度", () => {
     });
   });
 
+  it("角色权限在模型请求期间失效时不写入迟到回复", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-mid-request-authorization-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        markStarted?.();
+        await responseGate;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return completion("这条迟到回复不能写入。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const workOwner = runtime.auth.register({ username: "mid_request_work_owner", password: "secure-password-123" }).session.user;
+    const owner = runtime.auth.register({ username: "mid_request_auth_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const { work, character } = runWithRequestActor(actor(workOwner), () => {
+      const work = runtime.store.createWork({ title: "请求中失效作品" });
+      return { work, character: runtime.store.createCharacter(String(work.id), { name: "请求中失效角色" }) };
+    });
+    runtime.auth.addMember(String(work.id), owner.userId, { role: "editor" }, workOwner.userId);
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "等待角色请求返回。",
+      requestId: "im-mid-request-authorization-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    runtime.auth.updateMemberPermissions(String(work.id), owner.userId, { role: "viewer" });
+    responseControl.release?.();
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "failed", error_code: "IM_CHARACTER_ACCESS_DENIED", generated_count: 0 });
+    expect(runtime.database.all(
+      "SELECT sender_kind, content FROM im_messages WHERE conversation_id = ? ORDER BY sequence",
+      String(direct.id)
+    )).toEqual([{ sender_kind: "human", content: "等待角色请求返回。" }]);
+    expect(runtime.database.get(
+      "SELECT status FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
+      String((sent.chain as Record<string, unknown>).id)
+    )).toEqual({ status: "failed" });
+  });
+
   it("流式响应中断后按配置次数重试并只重置当前 turn", async () => {
     const encoder = new TextEncoder();
     let primaryCalls = 0;
