@@ -918,19 +918,65 @@ export class ImService {
   }
 
   getCharacterAvatarAccess(userId: string, conversationId: string, characterId: string): Record<string, unknown> {
+    return this.getCharacterAvatarVersionAccess(userId, conversationId, characterId);
+  }
+
+  getCharacterAvatarVersionAccess(userId: string, conversationId: string, characterId: string, sha256?: string): Record<string, unknown> {
     this.assertReadableConversation(conversationId, userId);
     const visibleCharacter = this.conversationParticipants(conversationId, userId).characters
       .find((membership) => requiredString(membership.characterId) === characterId);
     if (!visibleCharacter) throw notFound("IM 群角色");
+    const requestedSha256 = optionalString(sha256) ?? avatarVersionFromUrl(visibleCharacter.avatarUrl);
+    if (requestedSha256) {
+      const version = this.db.get(
+        `SELECT mime_type, byte_length, sha256, storage_key, width, height, created_at
+         FROM im_avatar_versions
+         WHERE conversation_id = ? AND participant_kind = 'character' AND participant_id = ? AND sha256 = ?`,
+        conversationId,
+        characterId,
+        requestedSha256
+      );
+      if (version) return {
+        mimeType: requiredString(version.mime_type),
+        byteLength: Number(version.byte_length),
+        sha256: requiredString(version.sha256),
+        storageKey: requiredString(version.storage_key),
+        width: Number(version.width),
+        height: Number(version.height),
+        updatedAt: requiredString(version.created_at)
+      };
+    }
     const avatar = this.store.getCharacterAvatar(characterId);
     if (!avatar) throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "角色头像不存在");
     if (!this.activeMembership(conversationId, userId)) {
-      const frozenAvatarSha256 = avatarVersionFromUrl(visibleCharacter.avatarUrl);
-      if (!frozenAvatarSha256 || frozenAvatarSha256 !== avatar.sha256) {
-        throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "离开群聊后更新的角色头像不可见");
-      }
+      throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "离开群聊后的角色头像版本不存在");
     }
     return avatar;
+  }
+
+  getHumanAvatarVersionAccess(userId: string, conversationId: string, targetUserId: string, sha256: string): Record<string, unknown> {
+    this.assertReadableConversation(conversationId, userId);
+    const visibleHuman = this.conversationParticipants(conversationId, userId).humans
+      .some((membership) => requiredString(membership.userId) === targetUserId);
+    if (!visibleHuman) throw notFound("IM 群成员");
+    const version = this.db.get(
+      `SELECT mime_type, content, byte_length, sha256, width, height, created_at
+       FROM im_avatar_versions
+       WHERE conversation_id = ? AND participant_kind = 'user' AND participant_id = ? AND sha256 = ?`,
+      conversationId,
+      targetUserId,
+      sha256
+    );
+    if (!version) throw new AppError(404, "USER_AVATAR_NOT_FOUND", "IM 成员头像版本不存在");
+    return {
+      mimeType: requiredString(version.mime_type),
+      content: Buffer.from(version.content as Uint8Array),
+      byteLength: Number(version.byte_length),
+      sha256: requiredString(version.sha256),
+      width: Number(version.width),
+      height: Number(version.height),
+      updatedAt: requiredString(version.created_at)
+    };
   }
 
   updateGroup(owner: AuthUser, conversationId: string, input: Partial<Pick<ImGroupInput, "title" | "replyMode" | "responseThreshold" | "maxAiMessages">>): Record<string, unknown> {
@@ -976,6 +1022,54 @@ export class ImService {
     return this.getConversation(conversationId, owner.userId);
   }
 
+  private captureConversationAvatarVersions(conversationId: string, timestamp: string): void {
+    this.db.run(
+      `INSERT OR IGNORE INTO im_avatar_versions (
+         conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+         storage_key, content, width, height, created_at
+       )
+       SELECT membership.conversation_id, 'character', membership.character_id, avatar.sha256,
+              avatar.mime_type, avatar.byte_length, avatar.storage_key, NULL, avatar.width, avatar.height, ?
+       FROM im_character_memberships membership
+       JOIN character_avatars avatar ON avatar.character_id = membership.character_id
+       WHERE membership.conversation_id = ? AND membership.left_at IS NULL AND membership.character_id IS NOT NULL`,
+      timestamp,
+      conversationId
+    );
+    this.db.run(
+      `INSERT OR IGNORE INTO im_avatar_versions (
+         conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+         storage_key, content, width, height, created_at
+       )
+       SELECT membership.conversation_id, 'user', membership.user_id, avatar.sha256,
+              avatar.mime_type, avatar.byte_length, NULL, avatar.content, avatar.width, avatar.height, ?
+       FROM im_human_memberships membership
+       JOIN user_avatars avatar ON avatar.user_id = membership.user_id
+       WHERE membership.conversation_id = ? AND membership.left_at IS NULL`,
+      timestamp,
+      conversationId
+    );
+  }
+
+  private frozenParticipantSnapshot(conversationId: string, userId: string): {
+    humans: Record<string, unknown>[];
+    characters: Record<string, unknown>[];
+  } {
+    const participants = this.conversationParticipants(conversationId, userId);
+    return {
+      humans: participants.humans.map((human) => {
+        const sha256 = avatarVersionFromUrl(human.avatarUrl);
+        return {
+          ...human,
+          avatarUrl: sha256
+            ? `/api/im/conversations/${encodeURIComponent(conversationId)}/users/${encodeURIComponent(requiredString(human.userId))}/avatar?v=${encodeURIComponent(sha256)}`
+            : null
+        };
+      }),
+      characters: participants.characters
+    };
+  }
+
   private finishMembership(conversationId: string, userId: string, actorUserId: string, action: "left" | "removed"): void {
     const membership = this.activeMembership(conversationId, userId);
     if (!membership) throw notFound("IM 群成员");
@@ -983,6 +1077,7 @@ export class ImService {
     if (!conversation) throw notFound("IM 会话");
     const sequence = this.nextSequence(conversationId) - 1;
     const timestamp = now();
+    this.captureConversationAvatarVersions(conversationId, timestamp);
     const conversationSnapshot = {
       ownerUserId: requiredString(conversation.owner_user_id),
       title: requiredString(conversation.title),
@@ -991,7 +1086,7 @@ export class ImService {
       maxAiMessages: Number(conversation.max_ai_messages),
       contextEpoch: Number(conversation.context_epoch),
       status: requiredString(conversation.status),
-      participants: this.conversationParticipants(conversationId, userId),
+      participants: this.frozenParticipantSnapshot(conversationId, userId),
       updatedAt: timestamp
     };
     this.db.run(
@@ -1108,8 +1203,32 @@ export class ImService {
     const timestamp = now();
     this.db.transaction(() => {
       this.cancelActiveChain(conversationId, "group_disbanded");
+      this.captureConversationAvatarVersions(conversationId, timestamp);
+      const participants = this.frozenParticipantSnapshot(conversationId, owner.userId);
+      const sequence = this.nextSequence(conversationId) - 1;
+      const conversationSnapshot = JSON.stringify({
+        ownerUserId: requiredString(conversation.owner_user_id),
+        title: requiredString(conversation.title),
+        replyMode: requiredString(conversation.reply_mode),
+        responseThreshold: Number(conversation.response_threshold),
+        maxAiMessages: Number(conversation.max_ai_messages),
+        contextEpoch: Number(conversation.context_epoch),
+        status: "disbanded",
+        participants,
+        updatedAt: timestamp
+      });
       this.db.run(
-        "UPDATE im_conversations SET status = 'disbanded', disbanded_at = ?, updated_at = ? WHERE id = ?",
+        `UPDATE im_human_memberships
+         SET left_sequence = ?, left_at = ?, conversation_snapshot_json = ?
+         WHERE conversation_id = ? AND left_at IS NULL`,
+        sequence,
+        timestamp,
+        conversationSnapshot,
+        conversationId
+      );
+      this.db.run(
+        `UPDATE im_conversations SET status = 'disbanded', context_epoch = context_epoch + 1,
+         disbanded_at = ?, updated_at = ? WHERE id = ?`,
         timestamp,
         timestamp,
         conversationId

@@ -2083,7 +2083,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/im/conversations/:conversationId/characters/:characterId/avatar", async (request, response) => {
     const user = requireImUser(request);
-    const avatar = im.getCharacterAvatarAccess(user.userId, request.params.conversationId, request.params.characterId);
+    const query = parse(z.object({ v: z.string().regex(/^[a-f0-9]{64}$/u).optional() }).strict(), request.query);
+    const avatar = im.getCharacterAvatarVersionAccess(user.userId, request.params.conversationId, request.params.characterId, query.v);
     const content = await characterAvatarStorage.read(String(avatar.storageKey));
     response.setHeader("Content-Type", String(avatar.mimeType));
     response.setHeader("Content-Length", String(content.byteLength));
@@ -2091,6 +2092,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.send(content);
+  });
+  app.get("/api/im/conversations/:conversationId/users/:userId/avatar", (request, response) => {
+    const user = requireImUser(request);
+    const query = parse(z.object({ v: z.string().regex(/^[a-f0-9]{64}$/u) }).strict(), request.query);
+    const avatar = im.getHumanAvatarVersionAccess(user.userId, request.params.conversationId, request.params.userId, query.v);
+    response.setHeader("Content-Type", String(avatar.mimeType));
+    response.setHeader("Content-Length", String(avatar.byteLength));
+    response.setHeader("ETag", `\"${String(avatar.sha256)}\"`);
+    response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.send(avatar.content);
   });
   app.post("/api/im/conversations/:conversationId/transfer", (request, response) => {
     const user = requireImUser(request);

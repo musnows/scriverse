@@ -10,6 +10,15 @@ type RegisteredUser = {
 };
 
 const setupToken = "im-api-test-setup-token-with-at-least-32-characters";
+const avatarPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=",
+  "base64"
+);
+const avatarGif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+const avatarSecondPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8z8BQDwAFgwJ/lPObWQAAAABJRU5ErkJggg==",
+  "base64"
+);
 
 async function register(runtime: Runtime, username: string): Promise<RegisteredUser> {
   const agent = request.agent(runtime.app);
@@ -403,7 +412,7 @@ describe("全局 IM API", () => {
         expect.objectContaining({ character: expect.objectContaining({ avatarUrl: expect.stringContaining(preExitAvatarSha256) }) })
       )))
     );
-    await lateMember.agent.get(`/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar`).expect(404);
+    await lateMember.agent.get(`/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar?v=${updatedExistingAvatarSha256}`).expect(404);
     runtime.database.run("UPDATE users SET display_name = '退出后新显示名' WHERE id = ?", member.user.userId);
     const ownerProfileView = await owner.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(ownerProfileView.body.data.participants.humans.find((item: { userId: string }) => item.userId === member.user.userId)?.displayName)
@@ -545,6 +554,91 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ userId: member.user.userId })
       .expect(403);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("为退出与解散历史保留可读取的角色和人类头像版本", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-avatar-version-master-secret-with-enough-length",
+      serveUi: false,
+      revealCaptchaAnswer: true,
+      security: { allowRegistration: true, enforceSameOrigin: true, setupToken }
+    });
+    const owner = await register(runtime, "im_avatar_owner");
+    const member = await register(runtime, "im_avatar_member");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "IM 头像版本作品" })
+      .expect(201);
+    const character = await owner.agent.post(`/api/works/${work.body.data.id}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "头像版本角色" })
+      .expect(201);
+    await owner.agent.put(`/api/characters/${character.body.data.id}/avatar`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .attach("file", avatarPng, { filename: "avatar.png", contentType: "image/png" })
+      .expect(200);
+    await member.agent.put("/api/auth/avatar")
+      .set("X-CSRF-Token", member.csrfToken)
+      .attach("file", avatarPng, { filename: "avatar.png", contentType: "image/png" })
+      .expect(200);
+    const exitedGroup = await owner.agent.post("/api/im/conversations/group")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "退出头像群", characterIds: [character.body.data.id], humanUserIds: [member.user.userId] })
+      .expect(201);
+    await member.agent.post(`/api/im/conversations/${exitedGroup.body.data.id}/leave`)
+      .set("X-CSRF-Token", member.csrfToken)
+      .send({})
+      .expect(204);
+    const exitedView = await member.agent.get(`/api/im/conversations/${exitedGroup.body.data.id}`).expect(200);
+    const exitedCharacterUrl = exitedView.body.data.participants.characters[0].avatarUrl;
+    const exitedHumanUrl = exitedView.body.data.participants.humans
+      .find((item: { userId: string }) => item.userId === member.user.userId).avatarUrl;
+    expect(Buffer.from((await member.agent.get(exitedCharacterUrl).expect(200)).body)).toEqual(avatarPng);
+    expect(Buffer.from((await member.agent.get(exitedHumanUrl).expect(200)).body)).toEqual(avatarPng);
+
+    const secondCharacterAvatar = await owner.agent.put(`/api/characters/${character.body.data.id}/avatar`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .attach("file", avatarSecondPng, { filename: "avatar.png", contentType: "image/png" })
+      .expect(200);
+    const secondCharacterContent = Buffer.from((await owner.agent.get(secondCharacterAvatar.body.data.avatarUrl).expect(200)).body);
+    await member.agent.put("/api/auth/avatar")
+      .set("X-CSRF-Token", member.csrfToken)
+      .attach("file", avatarGif, { filename: "avatar.gif", contentType: "image/gif" })
+      .expect(200);
+    expect(Buffer.from((await member.agent.get(exitedCharacterUrl).expect(200)).body)).toEqual(avatarPng);
+    expect(Buffer.from((await member.agent.get(exitedHumanUrl).expect(200)).body)).toEqual(avatarPng);
+
+    const disbandedGroup = await owner.agent.post("/api/im/conversations/group")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "解散头像群", characterIds: [character.body.data.id], humanUserIds: [member.user.userId] })
+      .expect(201);
+    await owner.agent.post(`/api/im/conversations/${disbandedGroup.body.data.id}/disband`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({})
+      .expect(204);
+    const disbandedView = await member.agent.get(`/api/im/conversations/${disbandedGroup.body.data.id}`).expect(200);
+    expect(disbandedView.body.data).toMatchObject({ active: false, status: "disbanded" });
+    const disbandedCharacterUrl = disbandedView.body.data.participants.characters[0].avatarUrl;
+    const disbandedHumanUrl = disbandedView.body.data.participants.humans
+      .find((item: { userId: string }) => item.userId === member.user.userId).avatarUrl;
+    await owner.agent.put(`/api/characters/${character.body.data.id}/avatar`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .attach("file", avatarPng, { filename: "avatar.png", contentType: "image/png" })
+      .expect(200);
+    await member.agent.put("/api/auth/avatar")
+      .set("X-CSRF-Token", member.csrfToken)
+      .attach("file", avatarPng, { filename: "avatar.png", contentType: "image/png" })
+      .expect(200);
+    const disbandedCharacterContent = Buffer.from((await member.agent.get(disbandedCharacterUrl).expect(200)).body);
+    expect(disbandedCharacterContent).toEqual(secondCharacterContent);
+    expect(Buffer.from((await member.agent.get(disbandedHumanUrl).expect(200)).body)).toEqual(avatarGif);
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_avatar_versions WHERE conversation_id IN (?, ?)",
+      exitedGroup.body.data.id,
+      disbandedGroup.body.data.id
+    )).toEqual({ count: 4 });
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });

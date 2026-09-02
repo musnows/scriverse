@@ -130,12 +130,16 @@ describe("数据库版本化迁移", () => {
     );
     current.run("ALTER TABLE im_human_memberships DROP COLUMN conversation_snapshot_json");
     current.run("DELETE FROM schema_migrations WHERE version = 128");
+    current.run("DROP TABLE im_avatar_versions");
+    current.run("DELETE FROM schema_migrations WHERE version = 129");
     current.close();
 
     const migrated = new Database(filename);
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 127")).toEqual({ count: 1 });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 128")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 129")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA table_info(im_human_memberships)").map((column) => column.name)).toContain("conversation_snapshot_json");
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'im_avatar_versions'")).toEqual({ name: "im_avatar_versions" });
     expect(migrated.all("PRAGMA table_info(im_user_settings)").map((column) => column.name)).toEqual([
       "user_id",
       "preferred_name",
