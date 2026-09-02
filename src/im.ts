@@ -301,11 +301,13 @@ export class ImService {
 
   private characterSnapshot(character: Record<string, unknown>): Record<string, unknown> {
     const work = this.store.getWork(requiredString(character.workId));
+    const avatar = this.store.getCharacterAvatar(requiredString(character.id));
     return {
       id: requiredString(character.id),
       name: requiredString(character.name),
       code: requiredString(character.code),
       avatarUrl: character.avatarUrl ?? null,
+      avatarSha256: avatar?.sha256 ?? null,
       workId: requiredString(work.id),
       workTitle: requiredString(work.title),
       publicSummary: publicCharacterSummary(character)
@@ -539,10 +541,18 @@ export class ImService {
        ORDER BY membership.joined_at, membership.id`,
       conversationId,
       ...visibilityParams
-    ).map((row) => ({
-      ...this.mapCharacterMembership(row),
-      ...(leftSequence === null ? {} : { leftAt: null, status: "active" })
-    }));
+    ).map((row) => {
+      const snapshot = json<Record<string, unknown>>(requiredString(row.snapshot_json), {});
+      const currentAvatarSha256 = optionalString(row.avatar_sha256);
+      const frozenAvatarSha256 = optionalString(snapshot.avatarSha256);
+      const visibleRow = leftSequence === null || (currentAvatarSha256 && currentAvatarSha256 === frozenAvatarSha256)
+        ? row
+        : { ...row, avatar_sha256: null };
+      return {
+        ...this.mapCharacterMembership(visibleRow),
+        ...(leftSequence === null ? {} : { leftAt: null, status: "active" })
+      };
+    });
     return { humans, characters };
   }
 
@@ -570,15 +580,16 @@ export class ImService {
     ).reverse();
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(rows.length - limit) : rows;
-    return { messages: pageRows.map((row) => this.mapMessage(row)), hasMore };
+    const showCurrentCharacterAvatars = Boolean(this.activeMembership(conversationId, userId));
+    return { messages: pageRows.map((row) => this.mapMessage(row, showCurrentCharacterAvatars)), hasMore };
   }
 
-  private mapMessage(row: Record<string, unknown>): Record<string, unknown> {
+  private mapMessage(row: Record<string, unknown>, showCurrentCharacterAvatar = true): Record<string, unknown> {
     const messageId = requiredString(row.id);
     const conversationId = requiredString(row.conversation_id);
     const senderCharacterId = optionalString(row.sender_character_id);
     const sender = json<Record<string, unknown>>(requiredString(row.sender_snapshot_json), {});
-    if (requiredString(row.sender_kind) === "character" && senderCharacterId) {
+    if (showCurrentCharacterAvatar && requiredString(row.sender_kind) === "character" && senderCharacterId) {
       const avatar = this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", senderCharacterId);
       const avatarSha256 = optionalString(avatar?.sha256);
       sender.avatarUrl = avatarSha256
@@ -825,10 +836,13 @@ export class ImService {
   getCharacterAvatarAccess(userId: string, conversationId: string, characterId: string): Record<string, unknown> {
     this.assertReadableConversation(conversationId, userId);
     const visibleCharacter = this.conversationParticipants(conversationId, userId).characters
-      .some((membership) => requiredString(membership.characterId) === characterId);
+      .find((membership) => requiredString(membership.characterId) === characterId);
     if (!visibleCharacter) throw notFound("IM 群角色");
     const avatar = this.store.getCharacterAvatar(characterId);
     if (!avatar) throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "角色头像不存在");
+    if (!this.activeMembership(conversationId, userId) && !optionalString(visibleCharacter.avatarUrl)) {
+      throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "离开群聊后更新的角色头像不可见");
+    }
     return avatar;
   }
 

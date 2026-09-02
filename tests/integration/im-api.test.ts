@@ -331,6 +331,20 @@ describe("全局 IM API", () => {
     expect(ownerRetryView.body.data.activeChain?.id).toBe(firstMessage.body.data.chain.id);
     const departedRetryView = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(departedRetryView.body.data.activeChain).toBeNull();
+    const updatedExistingAvatarSha256 = "e".repeat(64);
+    runtime.store.setCharacterAvatar(character.body.data.id, {
+      mimeType: "image/png",
+      byteLength: 96,
+      sha256: updatedExistingAvatarSha256,
+      storageKey: "updated-existing-avatar.png",
+      width: 48,
+      height: 48
+    });
+    const ownerAvatarView = await owner.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(ownerAvatarView.body.data.participants.characters[0].avatarUrl).toContain(updatedExistingAvatarSha256);
+    const departedAvatarView = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(departedAvatarView.body.data.participants.characters[0].avatarUrl).toBeNull();
+    await lateMember.agent.get(`/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar`).expect(404);
     const postDepartureAvatarSha256 = "d".repeat(64);
     runtime.store.setCharacterAvatar(pinnedCharacter.body.data.id, {
       mimeType: "image/png",

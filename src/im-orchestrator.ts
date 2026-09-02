@@ -867,6 +867,7 @@ export class ImOrchestrator {
     snapshot.avatarUrl = senderCharacterId && avatarSha256
       ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(senderCharacterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
       : null;
+    snapshot.avatarSha256 = avatarSha256;
     const metadata = {
       modelId: requiredString(invocation.model.id),
       modelDisplayName: requiredString(invocation.model.displayName),
