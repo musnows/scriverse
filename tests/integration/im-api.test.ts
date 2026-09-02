@@ -728,7 +728,6 @@ describe("全局 IM API", () => {
       .send({ title: "删除角色头像群", characterIds: [deletedCharacter.body.data.id], humanUserIds: [member.user.userId] })
       .expect(201);
     const deletedCharacterAvatarUrl = deletedCharacterGroup.body.data.participants.characters[0].avatarUrl;
-    runtime.im.captureCharacterAvatarVersion(deletedCharacterGroup.body.data.id, deletedCharacter.body.data.id, "2026-09-02T00:00:00.000Z");
     runtime.database.run(
       `INSERT INTO im_messages (
          id, conversation_id, sequence, context_epoch, sender_kind, sender_character_id,
@@ -835,6 +834,12 @@ describe("全局 IM API", () => {
       .toBe(exitedCharacterUrl);
     expect(rejoinedView.body.data.messages.find((message: { senderUserId: string }) => message.senderUserId === member.user.userId).sender.avatarUrl)
       .toBe(exitedHumanUrl);
+    expect(runtime.database.get(
+      `SELECT COUNT(*) AS count FROM im_avatar_versions
+       WHERE conversation_id = ? AND participant_kind = 'character' AND participant_id = ?`,
+      exitedGroup.body.data.id,
+      character.body.data.id
+    )).toEqual({ count: 1 });
     expect(Buffer.from((await member.agent.get(exitedCharacterUrl).expect(200)).body)).toEqual(avatarPng);
     expect(Buffer.from((await member.agent.get(exitedHumanUrl).expect(200)).body)).toEqual(avatarPng);
     await owner.agent.post(`/api/im/conversations/${exitedGroup.body.data.id}/humans`)

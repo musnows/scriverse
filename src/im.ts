@@ -458,6 +458,7 @@ export class ImService {
   }
 
   private insertCharacterMembership(conversationId: string, character: Record<string, unknown>, joinedSequence: number): void {
+    const timestamp = now();
     this.db.run(
       `INSERT INTO im_character_memberships (
          id, conversation_id, character_id, source_work_id, snapshot_json, joined_sequence, joined_at
@@ -468,8 +469,9 @@ export class ImService {
       requiredString(character.workId),
       JSON.stringify(this.characterSnapshot(character)),
       joinedSequence,
-      now()
+      timestamp
     );
+    this.captureCharacterAvatarVersion(conversationId, requiredString(character.id), timestamp);
   }
 
   createDirect(user: AuthUser, characterId: string): Record<string, unknown> {
