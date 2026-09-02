@@ -284,6 +284,7 @@ describe("story_index 目录读取", () => {
       }
       expect(execution.result.data.nextChapterOffset).toBeNull();
       expect(execution.result.data.continuationRule).toContain("pagination.nextCursor");
+      expect(nextCursor).toBeGreaterThan(100_000);
       expect(nextCursor).toBeGreaterThan(cursor);
       cursor = nextCursor;
     }
@@ -301,6 +302,7 @@ describe("story_index 目录读取", () => {
       secondChapterIds.push(...execution.result.data.chapters.map((chapter) => chapter.id));
       const nextCursor = execution.result.pagination.nextCursor;
       if (nextCursor === null) break;
+      expect(nextCursor).toBeGreaterThan(100_000);
       expect(nextCursor).toBeGreaterThan(cursor);
       cursor = nextCursor;
     }
