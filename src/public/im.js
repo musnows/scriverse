@@ -146,6 +146,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let conversationRequest = 0;
   let diagnosticsRequest = 0;
   let ownerConfirmationPending = false;
+  let pendingMessageRequest = null;
+  let pendingAnnouncementRequest = null;
   let requestedConversationId = null;
   let models = [];
   let settings = null;
@@ -1142,6 +1144,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const conversationId = current.id;
     const content = serializeImComposer(composer);
     if (!content) return;
+    const messageRequestId = pendingMessageRequest?.content === content ? pendingMessageRequest.id : requestId();
+    pendingMessageRequest = { content, id: messageRequestId };
     composer.replaceChildren();
     conversationDrafts.delete(conversationId);
     closeMentionMenu();
@@ -1150,9 +1154,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     try {
       const result = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/messages`, {
         method: "POST",
-        body: { content, requestId: requestId() }
+        body: { content, requestId: messageRequestId }
       });
       committed = true;
+      pendingMessageRequest = null;
       if (current?.id !== conversationId) {
         await refreshConversationSummary(conversationId);
         return;
@@ -1480,12 +1485,15 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const content = document.querySelector("#im-announcement-content").value.trim();
       if (!content || !current?.id || submit.disabled) return;
       const conversationId = current.id;
+      const announcementRequestId = pendingAnnouncementRequest?.content === content ? pendingAnnouncementRequest.id : requestId();
+      pendingAnnouncementRequest = { content, id: announcementRequestId };
       submit.disabled = true;
       try {
         await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/announcements`, {
           method: "POST",
-          body: { content, requestId: requestId() }
+          body: { content, requestId: announcementRequestId }
         });
+        pendingAnnouncementRequest = null;
         document.querySelector("#im-announcement-dialog").close();
         if (current?.id === conversationId) await refreshAfterMutation("旁白公告发布", () => openConversation(conversationId));
         toast("旁白公告已发布", "success");
