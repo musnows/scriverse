@@ -364,6 +364,16 @@ describe("全局 IM API", () => {
       content: "海面升起了白雾。",
       metadata: { type: "announcement" }
     });
+    const readEvents: string[] = [];
+    const unsubscribeRead = runtime.imOrchestrator.subscribe(member.user.userId, (event) => {
+      if (event.type === "conversation") readEvents.push(event.conversationId);
+    });
+    await member.agent.post(`/api/im/conversations/${groupId}/read`)
+      .set("X-CSRF-Token", member.csrfToken)
+      .send({ sequence: memberView.body.data.latestSequence })
+      .expect(200);
+    unsubscribeRead();
+    expect(readEvents).toContain(groupId);
     expect(memberView.body.data.messages[1].content).toContain("mention://character/");
     expect(memberView.body.data.participants.characters[0].avatarUrl).toBe(
       `/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar?v=${characterAvatarSha256}`

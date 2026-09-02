@@ -2193,7 +2193,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/im/conversations/:conversationId/read", (request, response) => {
     const user = requireImUser(request);
     const input = parse(z.object({ sequence: z.number().int().min(0) }).strict(), request.body);
-    data(response, im.markRead(user.userId, request.params.conversationId, input.sequence));
+    const summary = im.markRead(user.userId, request.params.conversationId, input.sequence);
+    imOrchestrator.publishConversationToUser(user.userId, request.params.conversationId);
+    data(response, summary);
   });
   app.post("/api/im/conversations/:conversationId/stop", (request, response) => {
     const user = requireImUser(request);
