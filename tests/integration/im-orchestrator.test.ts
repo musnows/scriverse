@@ -721,6 +721,35 @@ describe("IM AI 调度", () => {
     expect(runtime.store.getWork(String(work.id))).toMatchObject({ id: work.id });
   });
 
+  it("三个 IM 写入口都拒绝已合并角色", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-merged-character-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "merged_character_owner", password: "secure-password-123" }).session.user;
+    const { source, target } = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "已合并角色作品" });
+      return {
+        source: runtime.store.createCharacter(String(work.id), { name: "已合并来源角色" }),
+        target: runtime.store.createCharacter(String(work.id), { name: "合并目标角色" })
+      };
+    });
+    runtime.database.run("UPDATE characters SET merged_into_character_id = ? WHERE id = ?", String(target.id), String(source.id));
+
+    expect(() => runtime.im.createDirect(owner, String(source.id))).toThrowError("已合并角色不能加入 IM 会话");
+    expect(() => runtime.im.createGroup(owner, {
+      title: "错误合并角色群",
+      characterIds: [String(source.id)]
+    })).toThrowError("已合并角色不能加入 IM 会话");
+    const group = runtime.im.createGroup(owner, {
+      title: "有效角色群",
+      characterIds: [String(target.id)]
+    });
+    expect(() => runtime.im.addCharacter(owner, String(group.id), String(source.id)))
+      .toThrowError("已合并角色不能加入 IM 会话");
+  });
+
   it("重新打开会话时恢复重新获得权限的角色", () => {
     runtime = createRuntime({
       databasePath: ":memory:",

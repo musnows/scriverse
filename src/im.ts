@@ -150,6 +150,9 @@ export class ImService {
 
   assertCharacterAvailable(user: AuthUser, characterId: string): Record<string, unknown> {
     const character = this.store.getCharacter(characterId);
+    if (optionalString(character.mergedIntoCharacterId)) {
+      throw new AppError(409, "IM_CHARACTER_UNAVAILABLE", "已合并角色不能加入 IM 会话");
+    }
     const workId = requiredString(character.workId);
     this.assertWorkMembership(user, workId);
     const permissions = this.auth.workModulePermissions(user, workId, true);
