@@ -85,6 +85,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let memberAddSearchTimer = null;
   let memberAddRequest = 0;
   let conversationRequest = 0;
+  let diagnosticsRequest = 0;
   let requestedConversationId = null;
   let users = [];
   let models = [];
@@ -445,14 +446,19 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   async function loadDiagnostics() {
+    const conversationId = current?.id;
+    const request = ++diagnosticsRequest;
+    if (!conversationId) return;
     try {
-      const result = await api(`/api/im/conversations/${encodeURIComponent(current.id)}/diagnostics`);
+      const result = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/diagnostics`);
+      if (request !== diagnosticsRequest || current?.id !== conversationId) return;
       const host = document.querySelector("#im-diagnostics");
       if (!host) return;
       host.innerHTML = array(result.turns).filter((turn) => turn.kind === "judge").length
         ? array(result.turns).filter((turn) => turn.kind === "judge").map((turn) => `<div class="im-diagnostic-row"><span>${esc(turn.characterName)}</span><strong>${turn.score ?? "失败"}</strong><small>${turn.selected ? "已发言" : turn.status}</small></div>`).join("")
         : '<p class="im-empty">尚无主动判断记录。</p>';
     } catch (error) {
+      if (request !== diagnosticsRequest || current?.id !== conversationId) return;
       toast(error.message, "error");
     }
   }
