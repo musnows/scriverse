@@ -2119,9 +2119,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/im/conversations/:conversationId/disband", (request, response) => {
     const user = requireImUser(request);
     parse(z.object({}).strict(), request.body ?? {});
-    im.disbandGroup(user, request.params.conversationId);
+    const memberUserIds = im.disbandGroup(user, request.params.conversationId);
     imOrchestrator.cancelConversation(request.params.conversationId, "group_disbanded");
-    imOrchestrator.publishConversation(request.params.conversationId);
+    for (const userId of memberUserIds) imOrchestrator.publishConversationToUser(userId, request.params.conversationId);
     noContent(response);
   });
   app.post("/api/im/conversations/:conversationId/messages", (request, response) => {

@@ -622,8 +622,10 @@ export class ImService {
         limit + 1
       );
       const hasMoreAfter = rows.length > limit;
+      const activeMembership = this.activeMembership(conversationId, userId);
+      const historicalParticipants = activeMembership ? undefined : this.conversationParticipants(conversationId, userId);
       return {
-        messages: rows.slice(0, limit).map((row) => this.mapMessage(row, Boolean(this.activeMembership(conversationId, userId)))),
+        messages: rows.slice(0, limit).map((row) => this.mapMessage(row, Boolean(activeMembership), historicalParticipants)),
         hasMore: false,
         hasMoreAfter
       };
@@ -646,11 +648,20 @@ export class ImService {
     ).reverse();
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(rows.length - limit) : rows;
-    const showCurrentCharacterAvatars = Boolean(this.activeMembership(conversationId, userId));
-    return { messages: pageRows.map((row) => this.mapMessage(row, showCurrentCharacterAvatars)), hasMore, hasMoreAfter: false };
+    const activeMembership = this.activeMembership(conversationId, userId);
+    const historicalParticipants = activeMembership ? undefined : this.conversationParticipants(conversationId, userId);
+    return {
+      messages: pageRows.map((row) => this.mapMessage(row, Boolean(activeMembership), historicalParticipants)),
+      hasMore,
+      hasMoreAfter: false
+    };
   }
 
-  private mapMessage(row: Record<string, unknown>, showCurrentCharacterAvatar = true): Record<string, unknown> {
+  private mapMessage(
+    row: Record<string, unknown>,
+    showCurrentCharacterAvatar = true,
+    historicalParticipants?: { humans: Record<string, unknown>[]; characters: Record<string, unknown>[] }
+  ): Record<string, unknown> {
     const messageId = requiredString(row.id);
     const conversationId = requiredString(row.conversation_id);
     const senderCharacterId = optionalString(row.sender_character_id);
@@ -661,6 +672,13 @@ export class ImService {
       sender.avatarUrl = avatarSha256
         ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(senderCharacterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
         : null;
+    } else if (!showCurrentCharacterAvatar && requiredString(row.sender_kind) === "character" && senderCharacterId) {
+      sender.avatarUrl = optionalString(historicalParticipants?.characters
+        .find((character) => optionalString(character.characterId) === senderCharacterId)?.avatarUrl);
+    } else if (!showCurrentCharacterAvatar && requiredString(row.sender_kind) === "human") {
+      const senderUserId = optionalString(row.sender_user_id);
+      sender.avatarUrl = optionalString(historicalParticipants?.humans
+        .find((human) => optionalString(human.userId) === senderUserId)?.avatarUrl);
     }
     const mentions = this.db.all(
       "SELECT * FROM im_mentions WHERE message_id = ? ORDER BY position",
@@ -1058,7 +1076,11 @@ export class ImService {
     const visibleCharacter = this.conversationParticipants(conversationId, userId).characters
       .find((membership) => requiredString(membership.characterId) === characterId);
     if (!visibleCharacter) throw notFound("IM 群角色");
-    const requestedSha256 = optionalString(sha256) ?? avatarVersionFromUrl(visibleCharacter.avatarUrl);
+    const visibleSha256 = avatarVersionFromUrl(visibleCharacter.avatarUrl);
+    const requestedSha256 = optionalString(sha256) ?? visibleSha256;
+    if (!requestedSha256 || requestedSha256 !== visibleSha256) {
+      throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "该角色头像版本不在你的 IM 可见任期内");
+    }
     if (requestedSha256) {
       const version = this.db.get(
         `SELECT mime_type, byte_length, sha256, storage_key, width, height, created_at
@@ -1089,8 +1111,11 @@ export class ImService {
   getHumanAvatarVersionAccess(userId: string, conversationId: string, targetUserId: string, sha256: string): Record<string, unknown> {
     this.assertReadableConversation(conversationId, userId);
     const visibleHuman = this.conversationParticipants(conversationId, userId).humans
-      .some((membership) => requiredString(membership.userId) === targetUserId);
+      .find((membership) => requiredString(membership.userId) === targetUserId);
     if (!visibleHuman) throw notFound("IM 群成员");
+    if (avatarVersionFromUrl(visibleHuman.avatarUrl) !== sha256) {
+      throw new AppError(404, "USER_AVATAR_NOT_FOUND", "该成员头像版本不在你的 IM 可见任期内");
+    }
     const version = this.db.get(
       `SELECT mime_type, content, byte_length, sha256, width, height, created_at
        FROM im_avatar_versions
@@ -1329,10 +1354,14 @@ export class ImService {
     return this.getConversation(conversationId, owner.userId);
   }
 
-  disbandGroup(owner: AuthUser, conversationId: string): void {
+  disbandGroup(owner: AuthUser, conversationId: string): string[] {
     const conversation = this.assertOwner(conversationId, owner.userId);
     if (requiredString(conversation.kind) !== "group") throw new AppError(400, "IM_GROUP_REQUIRED", "单聊不能解散");
     const timestamp = now();
+    const memberUserIds = this.db.all(
+      "SELECT user_id FROM im_human_memberships WHERE conversation_id = ? AND left_at IS NULL",
+      conversationId
+    ).map((membership) => requiredString(membership.user_id));
     this.db.transaction(() => {
       this.cancelActiveChain(conversationId, "group_disbanded");
       this.captureConversationAvatarVersions(conversationId, timestamp);
@@ -1367,6 +1396,7 @@ export class ImService {
       );
       this.store.audit(null, "im.group-disbanded", "im-conversation", conversationId);
     });
+    return memberUserIds;
   }
 
   private insertSystemMessage(conversationId: string, content: string, metadata: Record<string, unknown>): void {

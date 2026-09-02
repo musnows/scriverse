@@ -595,6 +595,23 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ title: "退出头像群", characterIds: [character.body.data.id], humanUserIds: [member.user.userId] })
       .expect(201);
+    runtime.database.run(
+      `INSERT INTO im_messages (
+         id, conversation_id, sequence, context_epoch, sender_kind, sender_character_id,
+         sender_snapshot_json, content, created_at
+       ) VALUES ('im-avatar-character-message', ?, 1, 1, 'character', ?, ?, '角色头像历史消息', ?)`,
+      exitedGroup.body.data.id,
+      character.body.data.id,
+      JSON.stringify({
+        name: "头像版本角色",
+        avatarUrl: exitedGroup.body.data.participants.characters[0].avatarUrl
+      }),
+      "2026-09-02T00:00:00.000Z"
+    );
+    await member.agent.post(`/api/im/conversations/${exitedGroup.body.data.id}/messages`)
+      .set("X-CSRF-Token", member.csrfToken)
+      .send({ content: "人类头像历史消息", requestId: "im-avatar-human-message" })
+      .expect(201);
     await member.agent.post(`/api/im/conversations/${exitedGroup.body.data.id}/leave`)
       .set("X-CSRF-Token", member.csrfToken)
       .send({})
@@ -603,8 +620,16 @@ describe("全局 IM API", () => {
     const exitedCharacterUrl = exitedView.body.data.participants.characters[0].avatarUrl;
     const exitedHumanUrl = exitedView.body.data.participants.humans
       .find((item: { userId: string }) => item.userId === member.user.userId).avatarUrl;
+    const exitedCharacterMessageUrl = exitedView.body.data.messages
+      .find((message: { senderKind: string }) => message.senderKind === "character").sender.avatarUrl;
+    const exitedHumanMessageUrl = exitedView.body.data.messages
+      .find((message: { senderUserId: string }) => message.senderUserId === member.user.userId).sender.avatarUrl;
+    expect(exitedCharacterMessageUrl).toBe(exitedCharacterUrl);
+    expect(exitedHumanMessageUrl).toBe(exitedHumanUrl);
     expect(Buffer.from((await member.agent.get(exitedCharacterUrl).expect(200)).body)).toEqual(avatarPng);
     expect(Buffer.from((await member.agent.get(exitedHumanUrl).expect(200)).body)).toEqual(avatarPng);
+    expect(Buffer.from((await member.agent.get(exitedCharacterMessageUrl).expect(200)).body)).toEqual(avatarPng);
+    expect(Buffer.from((await member.agent.get(exitedHumanMessageUrl).expect(200)).body)).toEqual(avatarPng);
 
     const secondCharacterAvatar = await owner.agent.put(`/api/characters/${character.body.data.id}/avatar`)
       .set("X-CSRF-Token", owner.csrfToken)
@@ -617,20 +642,34 @@ describe("全局 IM API", () => {
       .expect(200);
     expect(Buffer.from((await member.agent.get(exitedCharacterUrl).expect(200)).body)).toEqual(avatarPng);
     expect(Buffer.from((await member.agent.get(exitedHumanUrl).expect(200)).body)).toEqual(avatarPng);
+    await owner.agent.post(`/api/im/conversations/${exitedGroup.body.data.id}/humans`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: member.user.userId })
+      .expect(201);
+    await member.agent.get(exitedCharacterUrl).expect(404);
+    await member.agent.get(exitedHumanUrl).expect(404);
 
     const disbandedGroup = await owner.agent.post("/api/im/conversations/group")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ title: "解散头像群", characterIds: [character.body.data.id], humanUserIds: [member.user.userId] })
       .expect(201);
+    const disbandEvents: string[] = [];
+    const unsubscribeDisband = runtime.imOrchestrator.subscribe(member.user.userId, (event) => {
+      if (event.conversationId === disbandedGroup.body.data.id) disbandEvents.push(event.type);
+    });
     await owner.agent.post(`/api/im/conversations/${disbandedGroup.body.data.id}/disband`)
       .set("X-CSRF-Token", owner.csrfToken)
       .send({})
       .expect(204);
+    unsubscribeDisband();
+    expect(disbandEvents).toContain("conversation");
     const disbandedView = await member.agent.get(`/api/im/conversations/${disbandedGroup.body.data.id}`).expect(200);
     expect(disbandedView.body.data).toMatchObject({ active: false, status: "disbanded" });
     const disbandedCharacterUrl = disbandedView.body.data.participants.characters[0].avatarUrl;
     const disbandedHumanUrl = disbandedView.body.data.participants.humans
       .find((item: { userId: string }) => item.userId === member.user.userId).avatarUrl;
+    const disbandedDisplayName = disbandedView.body.data.participants.humans
+      .find((item: { userId: string }) => item.userId === member.user.userId).displayName;
     await owner.agent.put(`/api/characters/${character.body.data.id}/avatar`)
       .set("X-CSRF-Token", owner.csrfToken)
       .attach("file", avatarPng, { filename: "avatar.png", contentType: "image/png" })
@@ -639,9 +678,16 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", member.csrfToken)
       .attach("file", avatarPng, { filename: "avatar.png", contentType: "image/png" })
       .expect(200);
+    await member.agent.patch("/api/auth/profile")
+      .set("X-CSRF-Token", member.csrfToken)
+      .send({ displayName: "解散后新名字" })
+      .expect(200);
     const disbandedCharacterContent = Buffer.from((await member.agent.get(disbandedCharacterUrl).expect(200)).body);
     expect(disbandedCharacterContent).toEqual(secondCharacterContent);
     expect(Buffer.from((await member.agent.get(disbandedHumanUrl).expect(200)).body)).toEqual(avatarGif);
+    const frozenDisbandProfile = await member.agent.get(`/api/im/conversations/${disbandedGroup.body.data.id}`).expect(200);
+    expect(frozenDisbandProfile.body.data.participants.humans
+      .find((item: { userId: string }) => item.userId === member.user.userId).displayName).toBe(disbandedDisplayName);
     expect(runtime.database.get(
       "SELECT COUNT(*) AS count FROM im_avatar_versions WHERE conversation_id IN (?, ?)",
       exitedGroup.body.data.id,
