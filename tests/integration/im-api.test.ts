@@ -633,6 +633,44 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", member.csrfToken)
       .attach("file", avatarPng, { filename: "avatar.png", contentType: "image/png" })
       .expect(200);
+    const deletedCharacter = await owner.agent.post(`/api/works/${work.body.data.id}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "删除后头像角色" })
+      .expect(201);
+    await owner.agent.put(`/api/characters/${deletedCharacter.body.data.id}/avatar`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .attach("file", avatarSecondPng, { filename: "avatar.png", contentType: "image/png" })
+      .expect(200);
+    const deletedCharacterGroup = await owner.agent.post("/api/im/conversations/group")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "删除角色头像群", characterIds: [deletedCharacter.body.data.id], humanUserIds: [member.user.userId] })
+      .expect(201);
+    const deletedCharacterAvatarUrl = deletedCharacterGroup.body.data.participants.characters[0].avatarUrl;
+    runtime.im.captureCharacterAvatarVersion(deletedCharacterGroup.body.data.id, deletedCharacter.body.data.id, "2026-09-02T00:00:00.000Z");
+    runtime.database.run(
+      `INSERT INTO im_messages (
+         id, conversation_id, sequence, context_epoch, sender_kind, sender_character_id,
+         sender_snapshot_json, content, created_at
+       ) VALUES ('im-deleted-avatar-character-message', ?, 1, 1, 'character', ?, ?, '删除后角色头像历史消息', ?)`,
+      deletedCharacterGroup.body.data.id,
+      deletedCharacter.body.data.id,
+      JSON.stringify({
+        id: deletedCharacter.body.data.id,
+        name: "删除后头像角色",
+        avatarUrl: deletedCharacterAvatarUrl
+      }),
+      "2026-09-02T00:00:00.000Z"
+    );
+    runtime.store.deleteCharacter(deletedCharacter.body.data.id);
+    const deletedCharacterView = await member.agent.get(`/api/im/conversations/${deletedCharacterGroup.body.data.id}`).expect(200);
+    const deletedCharacterMessageUrl = deletedCharacterView.body.data.messages[0].sender.avatarUrl;
+    expect(deletedCharacterMessageUrl).toBe(deletedCharacterAvatarUrl);
+    expect(Buffer.from((await member.agent.get(deletedCharacterMessageUrl).expect(200)).body)).toEqual(avatarSecondPng);
+    await owner.agent.post(`/api/im/conversations/${deletedCharacterGroup.body.data.id}/humans`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: lateMember.user.userId })
+      .expect(201);
+    await lateMember.agent.get(deletedCharacterMessageUrl).expect(404);
     const exitedGroup = await owner.agent.post("/api/im/conversations/group")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ title: "退出头像群", characterIds: [character.body.data.id], humanUserIds: [member.user.userId] })

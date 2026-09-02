@@ -690,8 +690,8 @@ export class ImService {
   ): Record<string, unknown> {
     const messageId = requiredString(row.id);
     const conversationId = requiredString(row.conversation_id);
-    const senderCharacterId = optionalString(row.sender_character_id);
     const sender = json<Record<string, unknown>>(requiredString(row.sender_snapshot_json), {});
+    const senderCharacterId = optionalString(row.sender_character_id) ?? optionalString(sender.id);
     if (requiredString(row.sender_kind) === "character" && senderCharacterId) {
       const snapshotAvatarSha256 = optionalString(sender.avatarSha256) ?? avatarVersionFromUrl(sender.avatarUrl);
       const avatarSha256 = snapshotAvatarSha256 ?? (showCurrentCharacterAvatar
@@ -1247,10 +1247,12 @@ export class ImService {
     senderId: string,
     sha256: string
   ): boolean {
-    const senderColumn = senderKind === "character" ? "message.sender_character_id" : "message.sender_user_id";
+    const senderCondition = senderKind === "character"
+      ? "(message.sender_character_id = ? OR (message.sender_character_id IS NULL AND json_extract(message.sender_snapshot_json, '$.id') = ?))"
+      : "message.sender_user_id = ?";
     return this.db.all(
       `SELECT message.sender_snapshot_json FROM im_messages message
-       WHERE message.conversation_id = ? AND message.sender_kind = ? AND ${senderColumn} = ?
+       WHERE message.conversation_id = ? AND message.sender_kind = ? AND ${senderCondition}
          AND EXISTS (
            SELECT 1 FROM im_human_memberships membership
            WHERE membership.conversation_id = message.conversation_id AND membership.user_id = ?
@@ -1260,6 +1262,7 @@ export class ImService {
       conversationId,
       senderKind,
       senderId,
+      ...(senderKind === "character" ? [senderId] : []),
       userId
     ).some((message) => {
       const snapshot = json<Record<string, unknown>>(requiredString(message.sender_snapshot_json), {});
