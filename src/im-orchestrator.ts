@@ -435,6 +435,13 @@ export class ImOrchestrator {
     ].includes(error.code);
   }
 
+  private resetStreamingReply(chainId: string, characterId: string): void {
+    for (const snapshot of this.streamingReplies.values()) {
+      if (requiredString(snapshot.payload.chainId) !== chainId || requiredString(snapshot.payload.characterId) !== characterId) continue;
+      snapshot.payload.content = "";
+    }
+  }
+
   private async invoke(
     chain: Record<string, unknown>,
     membership: Record<string, unknown>,
@@ -499,6 +506,7 @@ export class ImOrchestrator {
       if (!this.shouldFailover(error) || signal.aborted) throw error;
       const fallbackModelId = optionalString(chain.fallback_model_id);
       if (!fallbackModelId) throw error;
+      this.resetStreamingReply(requiredString(chain.id), requiredString(membership.character_id));
       this.publish(requiredString(chain.conversation_id), "reset", {
         chainId: requiredString(chain.id),
         reason: "fallback",
