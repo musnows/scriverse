@@ -429,6 +429,28 @@ describe("IM AI 调度", () => {
     expect(runtime.database.get("SELECT context_epoch FROM im_conversations WHERE id = ?", String(group.id))).toEqual({ context_epoch: 4 });
   });
 
+  it("会话没有可用 AI 角色时拒绝写入无回复消息", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-unavailable-character-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "unavailable_character_owner", password: "secure-password-123" }).session.user;
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "失效角色来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "失效角色" });
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    runtime.store.deleteCharacter(String(character.id));
+
+    expect(() => runtime.im.sendMessage(owner, String(direct.id), {
+      content: "这条消息不应写入。",
+      requestId: "im-unavailable-character-message-0001"
+    })).toThrowError("当前 IM 会话没有可用的 AI 角色");
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM im_messages WHERE conversation_id = ?", String(direct.id)))
+      .toEqual({ count: 0 });
+  });
+
   it("SSE 重连时重放正在生成气泡的完整流式快照", async () => {
     const encoder = new TextEncoder();
     let releaseStream: (() => void) | null = null;

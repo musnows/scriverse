@@ -1049,6 +1049,11 @@ export class ImService {
     } catch {
       owner = null;
     }
+    this.db.run(
+      `UPDATE im_character_memberships SET status = 'suspended'
+       WHERE conversation_id = ? AND left_at IS NULL AND character_id IS NULL`,
+      conversationId
+    );
     for (const membership of this.db.all(
       `SELECT id, character_id FROM im_character_memberships
        WHERE conversation_id = ? AND left_at IS NULL AND character_id IS NOT NULL`,
@@ -1499,6 +1504,14 @@ export class ImService {
       const chain = existingChainId ? this.db.get("SELECT * FROM im_chains WHERE id = ?", existingChainId) ?? null : null;
       return { message: this.mapMessage(existing), chain, duplicate: true };
     }
+    const activeCharacters = this.db.all(
+      `SELECT * FROM im_character_memberships
+       WHERE conversation_id = ? AND left_at IS NULL AND status = 'active' AND character_id IS NOT NULL`,
+      conversationId
+    );
+    if (activeCharacters.length === 0) {
+      throw new AppError(409, "IM_CHARACTER_UNAVAILABLE", "当前 IM 会话没有可用的 AI 角色，无法发送消息");
+    }
     beforeCreate?.();
     const mentions = this.validatedMentions(conversationId, input.content);
     const settings = this.getSettings(user.userId);
@@ -1533,11 +1546,6 @@ export class ImService {
         mention.id,
         JSON.stringify(mention.snapshot)
       ));
-      const activeCharacters = this.db.all(
-        `SELECT * FROM im_character_memberships
-         WHERE conversation_id = ? AND left_at IS NULL AND status = 'active'`,
-        conversationId
-      );
       const mode = requiredString(conversation.kind) === "direct"
         ? "direct"
         : requiredString(conversation.reply_mode) === "proactive" ? "proactive" : "mention";
@@ -1633,7 +1641,7 @@ export class ImService {
       );
       const activeCharacters = this.db.all(
         `SELECT id FROM im_character_memberships
-         WHERE conversation_id = ? AND left_at IS NULL AND status = 'active'`,
+         WHERE conversation_id = ? AND left_at IS NULL AND status = 'active' AND character_id IS NOT NULL`,
         conversationId
       );
       for (const membership of activeCharacters) {

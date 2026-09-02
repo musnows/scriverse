@@ -501,7 +501,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   function syncComposer() {
-    const writable = current?.active === true && current?.status === "active";
+    const writable = current?.active === true && current?.status === "active" && activeCharacters().length > 0;
     const canAnnounce = writable && current?.kind === "group" && current?.ownerUserId === currentUserId();
     composer.contentEditable = String(writable);
     composer.setAttribute("aria-disabled", String(!writable));
