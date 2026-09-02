@@ -788,12 +788,17 @@ export class ImOrchestrator {
       throw new AppError(502, "IM_JUDGE_INVALID_SCORE", "AI 没有返回有效的发言意愿分数");
     };
     const primaryModelId = optionalString(chain.primary_model_id);
-    if (!primaryModelId) throw new AppError(409, "IM_MODEL_NOT_CONFIGURED", "主模型未配置");
+    const fallbackModelId = optionalString(chain.fallback_model_id);
+    if (!primaryModelId) {
+      if (!fallbackModelId) throw new AppError(409, "IM_MODEL_NOT_CONFIGURED", "主模型和 fallback 模型均不可用");
+      this.db.run("UPDATE im_chains SET model_stage = 'fallback', updated_at = ? WHERE id = ?", now(), requiredString(chain.id));
+      const fallback = await invokeValidatedModel(fallbackModelId, "fallback");
+      return { ...fallback, primaryAttemptCount: 0 };
+    }
     try {
       return await invokeValidatedModel(primaryModelId, "primary");
     } catch (error) {
       if (!this.shouldFailover(error) || signal.aborted) throw error;
-      const fallbackModelId = optionalString(chain.fallback_model_id);
       if (!fallbackModelId) throw error;
       if (streamTurnId) {
         this.resetStreamingReply(streamTurnId);

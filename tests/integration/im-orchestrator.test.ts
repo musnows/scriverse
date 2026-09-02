@@ -212,6 +212,54 @@ describe("IM AI 调度", () => {
     expect(String(work.id)).toBeTruthy();
   });
 
+  it("链创建后主模型被删除时直接使用 fallback", async () => {
+    let fallbackCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-deleted-primary-fallback-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (body.model !== "fallback-model") throw new Error("deleted primary model must not be invoked");
+        fallbackCalls += 1;
+        return completion("主模型删除后由 fallback 回复。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "deleted_primary_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "主模型删除来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "主模型删除角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 2
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "删除主模型后继续。",
+      requestId: "im-deleted-primary-fallback-0001"
+    });
+    runtime.database.run("DELETE FROM models WHERE id = ?", models.primaryModelId);
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "completed", model_stage: "fallback", generated_count: 1 });
+    expect(fallbackCalls).toBe(1);
+    const reply = runtime.database.get(
+      "SELECT content, metadata_json FROM im_messages WHERE conversation_id = ? AND sender_kind = 'character'",
+      String(direct.id)
+    );
+    expect(reply?.content).toBe("主模型删除后由 fallback 回复。");
+    expect(JSON.parse(String(reply?.metadata_json))).toMatchObject({
+      modelStage: "fallback",
+      primaryAttemptCount: 0,
+      fallbackAttemptCount: 1
+    });
+  });
+
   it("工具轮次共享一次角色调用的模型失败预算", async () => {
     let primaryCalls = 0;
     let fallbackCalls = 0;
