@@ -91,6 +91,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let memberAddSelectedId = "";
   let memberAddSearchTimer = null;
   let memberAddRequest = 0;
+  let conversationListRequest = 0;
   let conversationRequest = 0;
   let diagnosticsRequest = 0;
   let requestedConversationId = null;
@@ -220,7 +221,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   async function refreshConversations() {
-    conversations = array(await api("/api/im/conversations"));
+    const request = ++conversationListRequest;
+    const nextConversations = array(await api("/api/im/conversations"));
+    if (request !== conversationListRequest) return;
+    conversations = nextConversations;
     renderUnread();
     renderConversationList();
   }
