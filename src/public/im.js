@@ -167,6 +167,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   const mentionMenu = document.querySelector("#im-mention-menu");
   const unreadBadge = document.querySelector("#im-unread-count");
   const detailsDrawerMedia = window.matchMedia("(max-width: 980px)");
+  const mobileConversationMedia = window.matchMedia("(max-width: 620px)");
   let conversations = [];
   let conversationNextCursor = null;
   let conversationUnreadTotal = 0;
@@ -915,6 +916,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     renderConversationList();
     renderConversation(conversationChanged);
     if (shouldRestoreDetailsFocus) restoreGroupSettingsFocus(detailsFocus);
+    if (userInitiated && mobileConversationMedia.matches) document.querySelector("#im-mobile-back").focus();
     if (current.active && current.latestSequence > 0 && shouldMarkImConversationRead(opened, document.visibilityState)) {
       if (request !== conversationRequest) return;
       const summary = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: { sequence: current.latestSequence } });
