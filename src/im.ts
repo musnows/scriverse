@@ -54,6 +54,16 @@ function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function avatarVersionFromUrl(value: unknown): string | null {
+  const match = optionalString(value)?.match(/[?&]v=([^&]+)/u);
+  if (!match?.[1]) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+}
+
 function booleanValue(value: unknown): boolean {
   return Number(value) === 1;
 }
@@ -514,7 +524,7 @@ export class ImService {
 
   private conversationParticipants(conversationId: string, viewerUserId: string): { humans: Record<string, unknown>[]; characters: Record<string, unknown>[] } {
     const viewerMembership = this.db.get(
-      `SELECT joined_sequence, left_sequence, left_at FROM im_human_memberships
+      `SELECT joined_sequence, left_sequence, left_at, conversation_snapshot_json FROM im_human_memberships
        WHERE conversation_id = ? AND user_id = ?
        ORDER BY joined_sequence DESC, joined_at DESC LIMIT 1`,
       conversationId,
@@ -525,6 +535,19 @@ export class ImService {
       ? null
       : Number(viewerMembership.left_sequence);
     const viewerLeftAt = optionalString(viewerMembership.left_at);
+    if (leftSequence !== null) {
+      const snapshot = json<Record<string, unknown>>(requiredString(viewerMembership.conversation_snapshot_json), {});
+      const frozenParticipants = snapshot.participants;
+      if (frozenParticipants && typeof frozenParticipants === "object" && !Array.isArray(frozenParticipants)) {
+        const record = frozenParticipants as Record<string, unknown>;
+        if (Array.isArray(record.humans) && Array.isArray(record.characters)) {
+          return {
+            humans: record.humans.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item))),
+            characters: record.characters.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+          };
+        }
+      }
+    }
     const humanVisibility = leftSequence === null
       ? "membership.left_at IS NULL"
       : `(membership.joined_sequence < ? OR (membership.joined_sequence = ? AND membership.joined_at <= ?))
@@ -776,7 +799,7 @@ export class ImService {
   getConversation(conversationId: string, userId: string, beforeSequence?: number, afterSequence?: number): Record<string, unknown> {
     const row = this.assertReadableConversation(conversationId, userId);
     const viewerMembership = this.db.get(
-      `SELECT joined_sequence, left_sequence, joined_at, left_at FROM im_human_memberships
+      `SELECT joined_sequence, left_sequence, joined_at, left_at, conversation_snapshot_json FROM im_human_memberships
        WHERE conversation_id = ? AND user_id = ?
        ORDER BY joined_sequence DESC, joined_at DESC LIMIT 1`,
       conversationId,
@@ -817,10 +840,19 @@ export class ImService {
       const characterId = optionalString(turn.character_id) ?? requiredString(snapshot.id);
       const avatar = characterId ? this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", characterId) : null;
       const currentAvatarSha256 = optionalString(avatar?.sha256);
-      const frozenAvatarSha256 = optionalString(snapshot.avatarSha256);
-      const avatarSha256 = viewerLeftSequence === null || currentAvatarSha256 === frozenAvatarSha256
-        ? currentAvatarSha256
-        : null;
+      const conversationSnapshot = json<Record<string, unknown>>(requiredString(viewerMembership.conversation_snapshot_json), {});
+      const frozenParticipants = conversationSnapshot.participants && typeof conversationSnapshot.participants === "object"
+        ? conversationSnapshot.participants as Record<string, unknown>
+        : {};
+      const frozenCharacter = Array.isArray(frozenParticipants.characters)
+        ? frozenParticipants.characters.find((item) => item && typeof item === "object" && !Array.isArray(item)
+          && optionalString((item as Record<string, unknown>).characterId) === characterId) as Record<string, unknown> | undefined
+        : undefined;
+      const avatarUrl = viewerLeftSequence === null
+        ? characterId && currentAvatarSha256
+          ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(currentAvatarSha256)}`
+          : null
+        : optionalString(frozenCharacter?.avatarUrl);
       return {
         id: requiredString(turn.id),
         chainId: requiredString(activeChain.id),
@@ -828,9 +860,7 @@ export class ImService {
         character: {
           characterId,
           name: snapshot.name ?? "角色",
-          avatarUrl: characterId && avatarSha256
-            ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
-            : null
+          avatarUrl
         },
         kind: "reply",
         status: requiredString(turn.status),
@@ -894,8 +924,11 @@ export class ImService {
     if (!visibleCharacter) throw notFound("IM 群角色");
     const avatar = this.store.getCharacterAvatar(characterId);
     if (!avatar) throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "角色头像不存在");
-    if (!this.activeMembership(conversationId, userId) && !optionalString(visibleCharacter.avatarUrl)) {
-      throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "离开群聊后更新的角色头像不可见");
+    if (!this.activeMembership(conversationId, userId)) {
+      const frozenAvatarSha256 = avatarVersionFromUrl(visibleCharacter.avatarUrl);
+      if (!frozenAvatarSha256 || frozenAvatarSha256 !== avatar.sha256) {
+        throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "离开群聊后更新的角色头像不可见");
+      }
     }
     return avatar;
   }
@@ -958,6 +991,7 @@ export class ImService {
       maxAiMessages: Number(conversation.max_ai_messages),
       contextEpoch: Number(conversation.context_epoch),
       status: requiredString(conversation.status),
+      participants: this.conversationParticipants(conversationId, userId),
       updatedAt: timestamp
     };
     this.db.run(

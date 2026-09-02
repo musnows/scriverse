@@ -327,12 +327,22 @@ describe("全局 IM API", () => {
       "我已登舰。"
     ]);
 
+    const preExitAvatarSha256 = "b".repeat(64);
+    runtime.store.setCharacterAvatar(character.body.data.id, {
+      mimeType: "image/png",
+      byteLength: 80,
+      sha256: preExitAvatarSha256,
+      storageKey: "pre-exit-avatar.png",
+      width: 40,
+      height: 40
+    });
     await lateMember.agent.post(`/api/im/conversations/${groupId}/leave`)
       .set("X-CSRF-Token", lateMember.csrfToken)
       .send({})
       .expect(204);
     const readOnly = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(readOnly.body.data.active).toBe(false);
+    expect(readOnly.body.data.participants.characters[0].avatarUrl).toContain(preExitAvatarSha256);
     const originalCharacterMembership = runtime.database.get(
       "SELECT id FROM im_character_memberships WHERE conversation_id = ? AND character_id = ? ORDER BY joined_at LIMIT 1",
       groupId,
@@ -373,14 +383,21 @@ describe("全局 IM API", () => {
     const ownerAvatarView = await owner.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(ownerAvatarView.body.data.participants.characters[0].avatarUrl).toContain(updatedExistingAvatarSha256);
     const departedAvatarView = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
-    expect(departedAvatarView.body.data.participants.characters[0].avatarUrl).toBeNull();
+    expect(departedAvatarView.body.data.participants.characters[0].avatarUrl).toContain(preExitAvatarSha256);
     expect(departedAvatarView.body.data.activeChain?.turns?.length ?? 0).toBeGreaterThan(0);
     expect(departedAvatarView.body.data.activeChain?.turns ?? []).toEqual(
       expect.arrayContaining((departedAvatarView.body.data.activeChain?.turns ?? []).map(() => (
-        expect.objectContaining({ character: expect.objectContaining({ avatarUrl: null }) })
+        expect.objectContaining({ character: expect.objectContaining({ avatarUrl: expect.stringContaining(preExitAvatarSha256) }) })
       )))
     );
     await lateMember.agent.get(`/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar`).expect(404);
+    runtime.database.run("UPDATE users SET display_name = '退出后新显示名' WHERE id = ?", member.user.userId);
+    const ownerProfileView = await owner.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(ownerProfileView.body.data.participants.humans.find((item: { userId: string }) => item.userId === member.user.userId)?.displayName)
+      .toBe("退出后新显示名");
+    const departedProfileView = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(departedProfileView.body.data.participants.humans.find((item: { userId: string }) => item.userId === member.user.userId)?.displayName)
+      .toBe("im_member");
     runtime.database.run(
       "UPDATE im_chains SET status = 'waiting_config', created_at = ?, updated_at = ? WHERE id = ?",
       "9999-12-31T23:59:59.999Z",
