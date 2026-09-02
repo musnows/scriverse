@@ -1120,6 +1120,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     requestedConversationId = null;
     workspace.classList.add("hidden");
     workspace.classList.remove("has-conversation");
+    document.querySelector("#im-details").classList.remove("is-open");
+    document.querySelector("#im-details-toggle").setAttribute("aria-expanded", "false");
     document.querySelector("#app").classList.remove("im-mode");
     provisionalReplies.clear();
     closeMentionMenu();
@@ -1229,13 +1231,21 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const result = await performMutation(button, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/chains/${encodeURIComponent(chainId)}/retry`, { method: "POST", body: {} }));
       if (result.ok && current?.id === conversationId) await openConversation(conversationId);
     });
-    document.querySelector("#im-details-toggle").addEventListener("click", () => document.querySelector("#im-details").classList.toggle("is-open"));
-    document.querySelector("#im-details-close").addEventListener("click", () => document.querySelector("#im-details").classList.remove("is-open"));
+    document.querySelector("#im-details-toggle").addEventListener("click", (event) => {
+      const expanded = document.querySelector("#im-details").classList.toggle("is-open");
+      event.currentTarget.setAttribute("aria-expanded", String(expanded));
+    });
+    document.querySelector("#im-details-close").addEventListener("click", () => {
+      document.querySelector("#im-details").classList.remove("is-open");
+      document.querySelector("#im-details-toggle").setAttribute("aria-expanded", "false");
+    });
     document.querySelector("#im-mobile-back").addEventListener("click", () => {
       conversationRequest += 1;
       requestedConversationId = null;
       current = null;
       workspace.classList.remove("has-conversation");
+      document.querySelector("#im-details").classList.remove("is-open");
+      document.querySelector("#im-details-toggle").setAttribute("aria-expanded", "false");
       provisionalReplies.clear();
       renderConversationList();
       renderConversation();
