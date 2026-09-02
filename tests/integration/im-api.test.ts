@@ -290,6 +290,7 @@ describe("全局 IM API", () => {
 
     const lateView = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(lateView.body.data.messages).toHaveLength(1);
+    expect(lateView.body.data.activeChain).toBeNull();
     expect(lateView.body.data.messages[0].metadata).toMatchObject({ type: "human-joined" });
     expect(lateView.body.data.messages[0].content).not.toContain("我们出发");
 
@@ -320,6 +321,20 @@ describe("全局 IM API", () => {
       .expect(204);
     const readOnly = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(readOnly.body.data.active).toBe(false);
+    const postDepartureAvatarSha256 = "d".repeat(64);
+    runtime.store.setCharacterAvatar(pinnedCharacter.body.data.id, {
+      mimeType: "image/png",
+      byteLength: 64,
+      sha256: postDepartureAvatarSha256,
+      storageKey: "post-departure-avatar.png",
+      width: 32,
+      height: 32
+    });
+    await owner.agent.post(`/api/im/conversations/${groupId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ characterId: pinnedCharacter.body.data.id })
+      .expect(201);
+    await lateMember.agent.get(`/api/im/conversations/${groupId}/characters/${pinnedCharacter.body.data.id}/avatar`).expect(404);
     await owner.agent.post(`/api/im/conversations/${groupId}/humans`)
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ userId: admin.user.userId })
@@ -344,6 +359,28 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", lateMember.csrfToken)
       .send({ content: "不能发送", requestId: "im-message-request-0003" })
       .expect(403);
+
+    const zeroMessageGroup = await owner.agent.post("/api/im/conversations/group")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        title: "零消息群",
+        characterIds: [character.body.data.id],
+        humanUserIds: [lateMember.user.userId],
+        replyMode: "mention",
+        responseThreshold: 60,
+        maxAiMessages: 20
+      })
+      .expect(201);
+    await lateMember.agent.post(`/api/im/conversations/${zeroMessageGroup.body.data.id}/leave`)
+      .set("X-CSRF-Token", lateMember.csrfToken)
+      .send({})
+      .expect(204);
+    const zeroMessageHistory = await lateMember.agent.get(`/api/im/conversations/${zeroMessageGroup.body.data.id}`).expect(200);
+    expect(zeroMessageHistory.body.data.participants.humans.map((item: { userId: string }) => item.userId)).toEqual(expect.arrayContaining([
+      owner.user.userId,
+      lateMember.user.userId
+    ]));
+    expect(zeroMessageHistory.body.data.participants.characters.map((item: { characterId: string }) => item.characterId)).toContain(character.body.data.id);
 
     await owner.agent.post(`/api/im/conversations/${groupId}/transfer`)
       .set("X-CSRF-Token", owner.csrfToken)

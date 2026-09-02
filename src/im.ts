@@ -502,7 +502,7 @@ export class ImService {
 
   private conversationParticipants(conversationId: string, viewerUserId: string): { humans: Record<string, unknown>[]; characters: Record<string, unknown>[] } {
     const viewerMembership = this.db.get(
-      `SELECT joined_sequence, left_sequence FROM im_human_memberships
+      `SELECT joined_sequence, left_sequence, left_at FROM im_human_memberships
        WHERE conversation_id = ? AND user_id = ?
        ORDER BY joined_sequence DESC, joined_at DESC LIMIT 1`,
       conversationId,
@@ -512,13 +512,16 @@ export class ImService {
     const leftSequence = viewerMembership.left_sequence === null || viewerMembership.left_sequence === undefined
       ? null
       : Number(viewerMembership.left_sequence);
+    const viewerLeftAt = optionalString(viewerMembership.left_at);
     const humanVisibility = leftSequence === null
       ? "membership.left_at IS NULL"
-      : "membership.joined_sequence < ? AND (membership.left_sequence IS NULL OR membership.left_sequence >= ?)";
+      : `(membership.joined_sequence < ? OR (membership.joined_sequence = ? AND membership.joined_at <= ?))
+         AND (membership.left_sequence IS NULL OR membership.left_sequence > ? OR (membership.left_sequence = ? AND membership.left_at >= ?))`;
     const characterVisibility = leftSequence === null
       ? "membership.left_at IS NULL"
-      : "membership.joined_sequence < ? AND (membership.left_sequence IS NULL OR membership.left_sequence >= ?)";
-    const visibilityParams = leftSequence === null ? [] : [leftSequence, leftSequence];
+      : `(membership.joined_sequence < ? OR (membership.joined_sequence = ? AND membership.joined_at <= ?))
+         AND (membership.left_sequence IS NULL OR membership.left_sequence > ? OR (membership.left_sequence = ? AND membership.left_at >= ?))`;
+    const visibilityParams = leftSequence === null ? [] : [leftSequence, leftSequence, viewerLeftAt, leftSequence, leftSequence, viewerLeftAt];
     const humans = this.db.all(
       `SELECT membership.id AS membership_id, membership.user_id, membership.role, membership.joined_at, membership.left_at,
               user.username, user.display_name, user.avatar_sha256
@@ -705,18 +708,38 @@ export class ImService {
 
   getConversation(conversationId: string, userId: string, beforeSequence?: number): Record<string, unknown> {
     const row = this.assertReadableConversation(conversationId, userId);
+    const viewerMembership = this.db.get(
+      `SELECT joined_sequence, left_sequence FROM im_human_memberships
+       WHERE conversation_id = ? AND user_id = ?
+       ORDER BY joined_sequence DESC, joined_at DESC LIMIT 1`,
+      conversationId,
+      userId
+    );
+    if (!viewerMembership) throw new AppError(403, "IM_CONVERSATION_ACCESS_DENIED", "你不是这个 IM 会话的成员");
+    const viewerLeftSequence = viewerMembership.left_sequence === null || viewerMembership.left_sequence === undefined
+      ? null
+      : Number(viewerMembership.left_sequence);
     const activeChain = this.db.get(
-      `SELECT id, status, model_stage, generated_count, error_code, error_message, created_at, updated_at
-       FROM im_chains WHERE conversation_id = ?
-       ORDER BY created_at DESC LIMIT 1`,
-      conversationId
+      `SELECT chain.id, chain.status, chain.model_stage, chain.generated_count, chain.error_code, chain.error_message,
+              chain.created_at, chain.updated_at, trigger.sequence AS trigger_sequence
+       FROM im_chains chain JOIN im_messages trigger ON trigger.id = chain.trigger_message_id
+       WHERE chain.conversation_id = ? AND trigger.sequence > ?
+         AND (? IS NULL OR trigger.sequence <= ?)
+       ORDER BY chain.created_at DESC LIMIT 1`,
+      conversationId,
+      Number(viewerMembership.joined_sequence),
+      viewerLeftSequence,
+      viewerLeftSequence
     );
     const replyTurns = activeChain ? this.db.all(
       `SELECT turn.*, membership.character_id, membership.snapshot_json
        FROM im_chain_turns turn JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
-       WHERE turn.chain_id = ? AND turn.kind = 'reply'
+       WHERE turn.chain_id = ? AND turn.kind = 'reply' AND membership.joined_sequence <= ?
+         AND (membership.left_sequence IS NULL OR membership.left_sequence >= ?)
        ORDER BY turn.created_at, turn.id`,
-      requiredString(activeChain.id)
+      requiredString(activeChain.id),
+      Number(activeChain.trigger_sequence),
+      Number(activeChain.trigger_sequence)
     ).map((turn) => {
       const snapshot = json<Record<string, unknown>>(requiredString(turn.snapshot_json), {});
       const characterId = optionalString(turn.character_id) ?? requiredString(snapshot.id);
@@ -744,7 +767,17 @@ export class ImService {
       ...this.mapConversation(row, userId),
       participants: this.conversationParticipants(conversationId, userId),
       messages: this.visibleMessages(conversationId, userId, 50, beforeSequence),
-      activeChain: activeChain ? { ...activeChain, turns: replyTurns } : null
+      activeChain: activeChain ? {
+        id: activeChain.id,
+        status: activeChain.status,
+        model_stage: activeChain.model_stage,
+        generated_count: activeChain.generated_count,
+        error_code: activeChain.error_code,
+        error_message: activeChain.error_message,
+        created_at: activeChain.created_at,
+        updated_at: activeChain.updated_at,
+        turns: replyTurns
+      } : null
     };
   }
 
@@ -777,13 +810,9 @@ export class ImService {
 
   getCharacterAvatarAccess(userId: string, conversationId: string, characterId: string): Record<string, unknown> {
     this.assertReadableConversation(conversationId, userId);
-    const membership = this.db.get(
-      `SELECT 1 AS present FROM im_character_memberships
-       WHERE conversation_id = ? AND character_id = ? LIMIT 1`,
-      conversationId,
-      characterId
-    );
-    if (!membership) throw notFound("IM 群角色");
+    const visibleCharacter = this.conversationParticipants(conversationId, userId).characters
+      .some((membership) => requiredString(membership.characterId) === characterId);
+    if (!visibleCharacter) throw notFound("IM 群角色");
     const avatar = this.store.getCharacterAvatar(characterId);
     if (!avatar) throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "角色头像不存在");
     return avatar;
