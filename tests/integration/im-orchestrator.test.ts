@@ -533,6 +533,35 @@ describe("IM AI 调度", () => {
     expect(runtime.store.getWork(String(work.id))).toMatchObject({ id: work.id });
   });
 
+  it("重新打开会话时恢复重新获得权限的角色", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-character-permission-refresh-secret-with-enough-length",
+      serveUi: false
+    });
+    const workOwner = runtime.auth.register({ username: "permission_refresh_work_owner", password: "secure-password-123" }).session.user;
+    const chatOwner = runtime.auth.register({ username: "permission_refresh_chat_owner", password: "secure-password-123" }).session.user;
+    const { work, character } = runWithRequestActor(actor(workOwner), () => {
+      const createdWork = runtime.store.createWork({ title: "权限恢复作品" });
+      return {
+        work: createdWork,
+        character: runtime.store.createCharacter(String(createdWork.id), { name: "权限恢复角色" })
+      };
+    });
+    runtime.auth.addMember(String(work.id), chatOwner.userId, { role: "editor" }, workOwner.userId);
+    const direct = runtime.im.createDirect(chatOwner, String(character.id));
+
+    runtime.auth.updateMemberPermissions(String(work.id), chatOwner.userId, { role: "viewer" });
+    expect(runtime.im.getConversation(String(direct.id), chatOwner.userId).participants).toMatchObject({
+      characters: [expect.objectContaining({ characterId: character.id, status: "suspended" })]
+    });
+
+    runtime.auth.updateMemberPermissions(String(work.id), chatOwner.userId, { role: "editor" });
+    expect(runtime.im.getConversation(String(direct.id), chatOwner.userId).participants).toMatchObject({
+      characters: [expect.objectContaining({ characterId: character.id, status: "active" })]
+    });
+  });
+
   it("SSE 重连时重放正在生成气泡的完整流式快照", async () => {
     const encoder = new TextEncoder();
     let releaseStream: (() => void) | null = null;

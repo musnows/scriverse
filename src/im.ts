@@ -1034,6 +1034,9 @@ export class ImService {
 
   getConversation(conversationId: string, userId: string, beforeSequence?: number, afterSequence?: number): Record<string, unknown> {
     const row = this.assertReadableConversation(conversationId, userId);
+    if (requiredString(row.status) === "active" && this.activeMembership(conversationId, userId)) {
+      this.refreshCharacterAvailability(conversationId);
+    }
     const viewerMembership = this.db.get(
       `SELECT joined_sequence, left_sequence, joined_at, left_at, conversation_snapshot_json FROM im_human_memberships
        WHERE conversation_id = ? AND user_id = ?
