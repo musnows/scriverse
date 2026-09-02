@@ -250,6 +250,51 @@ describe("数据库版本化迁移", () => {
     repaired.close();
   });
 
+  it("schema 131 在头像版本表修复后重新执行可恢复数据回填", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-im-avatar-repair-"));
+    roots.push(root);
+    const filename = join(root, "im-avatar-repair.db");
+    const current = new Database(filename);
+    insertSystemOwnedWork(current, "work-im-avatar-repair", "IM 头像修复作品", "2026-09-02T00:00:00.000Z");
+    current.run(
+      `INSERT INTO characters (id, work_id, name, created_at, updated_at)
+       VALUES ('character-im-avatar-repair', 'work-im-avatar-repair', '头像修复角色', '2026-09-02T00:00:00.000Z', '2026-09-02T00:00:00.000Z')`
+    );
+    current.run(
+      `INSERT INTO character_avatars (
+         character_id, mime_type, byte_length, sha256, storage_key, width, height, updated_at
+       ) VALUES ('character-im-avatar-repair', 'image/png', 4, ?, 'avatars/character-im-avatar-repair.png', 1, 1, '2026-09-02T00:00:00.000Z')`,
+      "a".repeat(64)
+    );
+    current.run(
+      `INSERT INTO im_conversations (
+         id, kind, owner_user_id, direct_character_id, title, created_at, updated_at
+       ) VALUES ('im-avatar-repair-conversation', 'direct', ?, 'character-im-avatar-repair', '头像修复角色', '2026-09-02T00:00:00.000Z', '2026-09-02T00:00:00.000Z')`,
+      SYSTEM_USER_ID
+    );
+    current.run(
+      `INSERT INTO im_character_memberships (
+         id, conversation_id, character_id, source_work_id, snapshot_json, joined_at
+       ) VALUES (
+         'im-avatar-repair-membership', 'im-avatar-repair-conversation', 'character-im-avatar-repair',
+         'work-im-avatar-repair', '{}', '2026-09-02T00:00:00.000Z'
+       )`
+    );
+    current.run("DROP TABLE im_avatar_versions");
+    expect(current.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 131")).toEqual({ count: 1 });
+    current.close();
+
+    const repaired = new Database(filename);
+    expect(repaired.get(
+      `SELECT storage_key FROM im_avatar_versions
+       WHERE conversation_id = 'im-avatar-repair-conversation' AND participant_kind = 'character'
+         AND participant_id = 'character-im-avatar-repair' AND sha256 = ?`,
+      "a".repeat(64)
+    )).toEqual({ storage_key: "avatars/character-im-avatar-repair.png" });
+    expect(repaired.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 131")).toEqual({ count: 1 });
+    repaired.close();
+  });
+
   it("迁移 126 创建按作品级联清理的加密远程 MCP 配置表", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-remote-mcp-"));
     roots.push(root);

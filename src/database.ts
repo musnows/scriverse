@@ -5341,7 +5341,22 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
-    if (!applied.has(131)) {
+    const imAvatarVersionsEmpty = Number(this.get(
+      "SELECT COUNT(*) AS count FROM im_avatar_versions"
+    )?.count ?? 0) === 0;
+    const imAvatarVersionRecoverySourcePresent = imAvatarVersionsEmpty && this.get(
+      `SELECT 1 AS present
+       WHERE EXISTS (
+         SELECT 1 FROM im_character_memberships membership
+         JOIN character_avatars avatar ON avatar.character_id = membership.character_id
+         WHERE membership.left_at IS NULL
+       ) OR EXISTS (
+         SELECT 1 FROM im_human_memberships membership
+         JOIN user_avatars avatar ON avatar.user_id = membership.user_id
+         WHERE membership.left_at IS NULL
+       )`
+    ) !== undefined;
+    if (!applied.has(131) || !imAvatarVersionsPresent || imAvatarVersionRecoverySourcePresent) {
       this.transaction(() => {
           this.run(`INSERT OR IGNORE INTO im_avatar_versions (
             conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
