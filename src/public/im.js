@@ -93,6 +93,24 @@ export function hasImMessageSequenceGap(previousMessages, nextMessages) {
   return Boolean(previous && next && previous.maximum + 1 < next.minimum);
 }
 
+export async function collectImMessageGap(previousMessages, nextMessages, loadPage) {
+  const gapMessages = [];
+  const nextBounds = imMessageSequenceBounds(nextMessages);
+  let cursor = imMessageSequenceBounds(previousMessages)?.maximum ?? 0;
+  while (nextBounds && cursor + 1 < nextBounds.minimum) {
+    const page = await loadPage(cursor);
+    const messages = array(page?.messages);
+    const pageBounds = imMessageSequenceBounds(messages);
+    if (!pageBounds || pageBounds.maximum <= cursor) throw new Error("IM 历史消息补齐失败，请重试");
+    gapMessages.push(...messages);
+    cursor = pageBounds.maximum;
+    if (page?.hasMoreMessagesAfter !== true && cursor + 1 < nextBounds.minimum) {
+      throw new Error("IM 历史消息存在缺口，请重新打开会话");
+    }
+  }
+  return gapMessages;
+}
+
 export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf }) {
   const workspace = document.querySelector("#im-view");
   const listHost = document.querySelector("#im-conversation-list");
@@ -609,21 +627,14 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const previousConversation = current?.id === conversationId ? current : null;
     const conversationChanged = !previousConversation;
     if (previousConversation) {
-      const gapMessages = [];
-      const nextBounds = imMessageSequenceBounds(nextConversation.messages);
-      let cursor = imMessageSequenceBounds(previousConversation.messages)?.maximum ?? 0;
-      while (nextBounds && cursor + 1 < nextBounds.minimum) {
+      const gapMessages = await collectImMessageGap(previousConversation.messages, nextConversation.messages, async (cursor) => {
         const page = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}?afterSequence=${encodeURIComponent(cursor)}`);
-        if (request !== conversationRequest || (requestedConversationId && requestedConversationId !== conversationId)) return;
-        const messages = array(page.messages);
-        const pageBounds = imMessageSequenceBounds(messages);
-        if (!pageBounds || pageBounds.maximum <= cursor) throw new Error("IM 历史消息补齐失败，请重试");
-        gapMessages.push(...messages);
-        cursor = pageBounds.maximum;
-        if (page.hasMoreMessagesAfter !== true && cursor + 1 < nextBounds.minimum) {
-          throw new Error("IM 历史消息存在缺口，请重新打开会话");
+        if (request !== conversationRequest || (requestedConversationId && requestedConversationId !== conversationId)) {
+          throw new Error("IM 会话请求已失效");
         }
-      }
+        return page;
+      });
+      if (request !== conversationRequest || (requestedConversationId && requestedConversationId !== conversationId)) return;
       nextConversation.messages = mergeImMessagePages(previousConversation.messages, gapMessages, nextConversation.messages);
       nextConversation.hasMoreMessages = previousConversation.hasMoreMessages === true;
     }

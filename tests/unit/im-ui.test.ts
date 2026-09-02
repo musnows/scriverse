@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findImMentionQuery, hasImMessageSequenceGap, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
+import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -61,5 +61,24 @@ describe("IM 编辑区域尺寸", () => {
     const gap = Array.from({ length: 51 }, (_, index) => ({ id: `gap-${index + 51}`, sequence: index + 51 }));
     expect(hasImMessageSequenceGap(previous, latest)).toBe(true);
     expect(hasImMessageSequenceGap(mergeImMessagePages(previous, gap), latest)).toBe(false);
+  });
+
+  it("通过多轮 afterSequence 请求补齐超过 100 条的断线缺口", async () => {
+    const previous = Array.from({ length: 34 }, (_, index) => ({ id: `old-${index + 1}`, sequence: index + 1 }));
+    const latest = Array.from({ length: 50 }, (_, index) => ({ id: `latest-${index + 135}`, sequence: index + 135 }));
+    const cursors: number[] = [];
+    const gap = await collectImMessageGap(previous, latest, async (afterSequence) => {
+      cursors.push(afterSequence);
+      return {
+        messages: Array.from({ length: 50 }, (_, index) => ({
+          id: `gap-${afterSequence + index + 1}`,
+          sequence: afterSequence + index + 1
+        })),
+        hasMoreMessagesAfter: true
+      };
+    });
+    expect(cursors).toEqual([34, 84]);
+    expect(gap).toHaveLength(100);
+    expect(mergeImMessagePages(previous, gap, latest)).toHaveLength(184);
   });
 });

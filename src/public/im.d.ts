@@ -33,6 +33,15 @@ export function hasImMessageSequenceGap(
   nextMessages: Array<Record<string, unknown>>
 ): boolean;
 
+export function collectImMessageGap(
+  previousMessages: Array<Record<string, unknown>>,
+  nextMessages: Array<Record<string, unknown>>,
+  loadPage: (afterSequence: number) => Promise<{
+    messages: Array<Record<string, unknown>>;
+    hasMoreMessagesAfter?: boolean;
+  }>
+): Promise<Array<Record<string, unknown>>>;
+
 export function createImWorkspace(options: Record<string, unknown>): {
   start(): Promise<void>;
   open(): Promise<void>;
