@@ -4719,13 +4719,15 @@ body { font-size: var(--ui-font-size); }
 .im-conversations-resize-handle:hover::after, .im-conversations-resize-handle:focus-visible::after, body.is-im-conversations-resizing .im-conversations-resize-handle::after { background: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); }
 .im-conversations-resize-handle:focus-visible { outline: none; }
 body.is-im-conversations-resizing { cursor: ew-resize; user-select: none; }
-.im-chat-header, .im-details > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 72px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.im-chat-header, .im-details > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 54px; padding: 9px 16px; border-bottom: 1px solid var(--line); }
+.im-chat-header { height: 54px; min-height: 0; padding-block: 7px; overflow: hidden; }
 .im-chat-header h2, .im-details h2 { margin: 0; font-size: 18px; }
+.im-chat-header h2 { font-size: 16px; line-height: 1.2; }
 #im-details-toggle { display: none; }
 #im-details-close { display: inline-grid; }
 .im-view.is-details-hidden #im-details-toggle { display: inline-grid; }
 .im-view.is-details-hidden .im-details { display: none; }
-.im-create-actions { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+.im-create-actions { display: flex; min-height: 54px; align-items: center; justify-content: space-between; gap: 9px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
 .im-create-actions p { min-width: 0; margin: 0; color: var(--muted); font-size: 9px; line-height: 1.4; }
 .im-create-actions .primary-button { flex: 0 0 auto; min-height: 32px; padding: 6px 10px; font-size: 10px; white-space: nowrap; }
 .im-create-action-buttons { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; }
@@ -4751,7 +4753,7 @@ body.is-im-conversations-resizing { cursor: ew-resize; user-select: none; }
 .im-mention-unread { background: var(--green); }
 .im-empty, .im-feed-empty { margin: 0; padding: 18px; color: var(--muted); font-size: 11px; line-height: 1.6; text-align: center; }
 .im-chat { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; background: var(--paper); }
-.im-chat-header p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+.im-chat-header p { margin: 2px 0 0; color: var(--muted); font-size: 9px; line-height: 1.25; }
 .im-chat-header > div:last-child { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .im-chat-header .im-button { min-height: 28px; padding: 4px 8px; border-radius: 5px; font-size: 9px; }
 .im-chat-header-icon-button svg { width: 16px; height: 16px; overflow: visible; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
@@ -4921,10 +4923,11 @@ body.is-im-details-resizing { cursor: ew-resize; user-select: none; }
 .im-character-preference.is-favorite { background: color-mix(in srgb, var(--green) 18%, var(--surface)); color: color-mix(in srgb, var(--green) 80%, var(--ink)); }
 
 @media (min-width: 621px) {
-  .im-conversations.is-compact .im-create-actions { display: grid; justify-content: center; gap: 7px; padding: 8px 6px; }
+  .im-conversations.is-compact .im-create-actions { display: flex; justify-content: center; gap: 0; padding: 8px 6px; }
   .im-conversations.is-compact .im-create-actions p { display: none; }
-  .im-conversations.is-compact .im-create-action-buttons { flex-direction: column; gap: 6px; }
-  .im-conversations.is-compact #im-new-conversation { display: grid; width: 32px; min-width: 32px; height: 32px; min-height: 32px; place-items: center; padding: 0; font-size: 18px; line-height: 1; }
+  .im-conversations.is-compact .im-create-action-buttons { flex-direction: row; gap: 4px; }
+  .im-conversations.is-compact :is(#im-new-conversation, #im-settings-button) { display: grid; width: 28px; min-width: 28px; height: 28px; min-height: 28px; place-items: center; padding: 0; line-height: 1; }
+  .im-conversations.is-compact #im-new-conversation { font-size: 16px; }
   .im-conversations.is-compact .im-new-conversation-full { display: none; }
   .im-conversations.is-compact .im-new-conversation-compact { display: block; }
   .im-conversations.is-compact .im-conversation-list { padding: 7px 5px; }

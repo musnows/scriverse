@@ -68,14 +68,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v101");
+    expect(page.text).toContain("feature=global-im-v103");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260903-global-im-v101');
+    expect(application.text).toContain('/im.js?v=20260903-global-im-v103');
     expect(application.text).toContain("onRouteChange: schedulePresenceHeartbeat");
     expect(application.text).toContain('confirmDiscardChanges("当前章节有未保存修改，进入 IM 将放弃本地修改。是否继续？")');
     expect(application.text).toMatch(/beforeOpen: async \(\) => \{[\s\S]*?cancelChapterAutoSave\(\);[\s\S]*?state\.dirty = false;/);
@@ -174,6 +174,9 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain("#im-details-close { display: inline-grid; }");
     expect(styles.text).toContain("#im-details-toggle { display: inline-grid; }");
     expect(styles.text).toContain(".im-chat-header-icon-button svg { width: 16px; height: 16px;");
+    expect(styles.text).toContain(".im-chat-header, .im-details > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 54px;");
+    expect(styles.text).toContain(".im-chat-header { height: 54px; min-height: 0; padding-block: 7px; overflow: hidden; }");
+    expect(styles.text).toContain(".im-create-actions { display: flex; min-height: 54px;");
     expect(styles.text).toContain(".im-group-form fieldset > label");
     expect(styles.text).toContain("min-height: 0; overflow: hidden; background: var(--paper)");
     expect(im.text).toContain('title: "转让群主", confirmLabel: "确认转让"');
@@ -249,6 +252,8 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain("setupDetailsResize");
     expect(im.text).toContain("localStorage.setItem(detailsWidthStorageKey");
     expect(styles.text).toContain(".im-conversations.is-compact .im-new-conversation-compact { display: block;");
+    expect(styles.text).toContain(".im-conversations.is-compact .im-create-action-buttons { flex-direction: row; gap: 4px;");
+    expect(styles.text).toContain(".im-conversations.is-compact :is(#im-new-conversation, #im-settings-button) { display: grid; width: 28px;");
     expect(styles.text).toContain(".im-conversations.is-compact .im-conversation-item > span:nth-child(2) { display: none;");
     expect(styles.text).toContain("@media (max-width: 620px)");
     expect(styles.text).toContain(".im-composer-mention");
