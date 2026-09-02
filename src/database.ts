@@ -5316,6 +5316,60 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    this.transaction(() => {
+      this.run(`INSERT OR IGNORE INTO im_avatar_versions (
+        conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+        storage_key, content, width, height, created_at
+      )
+      SELECT membership.conversation_id, 'character', avatar.character_id, avatar.sha256,
+             avatar.mime_type, avatar.byte_length, avatar.storage_key, NULL,
+             avatar.width, avatar.height, avatar.updated_at
+      FROM im_character_memberships membership
+      JOIN character_avatars avatar ON avatar.character_id = membership.character_id`);
+      this.run(`INSERT OR IGNORE INTO im_avatar_versions (
+        conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+        storage_key, content, width, height, created_at
+      )
+      SELECT membership.conversation_id, 'user', avatar.user_id, avatar.sha256,
+             avatar.mime_type, avatar.byte_length, NULL, avatar.content,
+             avatar.width, avatar.height, avatar.updated_at
+      FROM im_human_memberships membership
+      JOIN user_avatars avatar ON avatar.user_id = membership.user_id`);
+      this.run(`INSERT OR IGNORE INTO im_avatar_versions (
+        conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+        storage_key, content, width, height, created_at
+      )
+      SELECT message.conversation_id, 'character', avatar.character_id, avatar.sha256,
+             avatar.mime_type, avatar.byte_length, avatar.storage_key, NULL,
+             avatar.width, avatar.height, message.created_at
+      FROM im_messages message
+      JOIN character_avatars avatar
+        ON avatar.character_id = COALESCE(message.sender_character_id, json_extract(message.sender_snapshot_json, '$.id'))
+       AND avatar.sha256 = COALESCE(
+         NULLIF(json_extract(message.sender_snapshot_json, '$.avatarSha256'), ''),
+         CASE WHEN instr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), '?v=') > 0
+           THEN substr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), instr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), '?v=') + 3)
+         END
+       )
+      WHERE message.sender_kind = 'character'`);
+      this.run(`INSERT OR IGNORE INTO im_avatar_versions (
+        conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+        storage_key, content, width, height, created_at
+      )
+      SELECT message.conversation_id, 'user', avatar.user_id, avatar.sha256,
+             avatar.mime_type, avatar.byte_length, NULL, avatar.content,
+             avatar.width, avatar.height, message.created_at
+      FROM im_messages message
+      JOIN user_avatars avatar
+        ON avatar.user_id = COALESCE(message.sender_user_id, json_extract(message.sender_snapshot_json, '$.userId'))
+       AND avatar.sha256 = COALESCE(
+         NULLIF(json_extract(message.sender_snapshot_json, '$.avatarSha256'), ''),
+         CASE WHEN instr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), '?v=') > 0
+           THEN substr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), instr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), '?v=') + 3)
+         END
+       )
+      WHERE message.sender_kind = 'human'`);
+    });
     const imChainRetrySourcePresent = this.all<{ name: string }>("PRAGMA table_info(im_chains)")
       .some((column) => column.name === "retry_source_chain_id");
     if (!applied.has(130) || !imChainRetrySourcePresent) {

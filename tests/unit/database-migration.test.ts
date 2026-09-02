@@ -128,6 +128,31 @@ describe("数据库版本化迁移", () => {
          id, chain_id, character_membership_id, kind, status, created_at
       ) VALUES ('im-turn', 'im-chain', 'im-character-membership', 'reply', 'running', '2026-08-31T00:00:00.000Z')`
     );
+    const characterAvatarSha256 = "c".repeat(64);
+    const userAvatarSha256 = "d".repeat(64);
+    current.run(
+      `INSERT INTO character_avatars (
+         character_id, mime_type, byte_length, sha256, storage_key, width, height, updated_at
+       ) VALUES ('character-im', 'image/png', 4, ?, 'avatars/character-im.png', 1, 1, '2026-08-31T00:00:00.000Z')`,
+      characterAvatarSha256
+    );
+    current.run(
+      `INSERT INTO user_avatars (
+         user_id, mime_type, content, byte_length, sha256, width, height, updated_at
+       ) VALUES (?, 'image/png', ?, 4, ?, 1, 1, '2026-08-31T00:00:00.000Z')`,
+      SYSTEM_USER_ID,
+      Buffer.from("user"),
+      userAvatarSha256
+    );
+    current.run("UPDATE users SET avatar_sha256 = ? WHERE id = ?", userAvatarSha256, SYSTEM_USER_ID);
+    current.run(
+      "UPDATE im_character_memberships SET snapshot_json = ? WHERE id = 'im-character-membership'",
+      JSON.stringify({ id: "character-im", avatarSha256: characterAvatarSha256 })
+    );
+    current.run(
+      "UPDATE im_messages SET sender_snapshot_json = ? WHERE id = 'im-message'",
+      JSON.stringify({ userId: SYSTEM_USER_ID, avatarSha256: userAvatarSha256 })
+    );
     current.run("ALTER TABLE im_human_memberships DROP COLUMN conversation_snapshot_json");
     current.run("DELETE FROM schema_migrations WHERE version = 128");
     current.run("DROP TABLE im_avatar_versions");
@@ -144,6 +169,19 @@ describe("数据库版本化迁移", () => {
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 130")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA table_info(im_human_memberships)").map((column) => column.name)).toContain("conversation_snapshot_json");
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'im_avatar_versions'")).toEqual({ name: "im_avatar_versions" });
+    expect(migrated.get(
+      `SELECT storage_key FROM im_avatar_versions
+       WHERE conversation_id = 'im-conversation' AND participant_kind = 'character'
+         AND participant_id = 'character-im' AND sha256 = ?`,
+      characterAvatarSha256
+    )).toEqual({ storage_key: "avatars/character-im.png" });
+    expect(Buffer.from(migrated.get(
+      `SELECT content FROM im_avatar_versions
+       WHERE conversation_id = 'im-conversation' AND participant_kind = 'user'
+         AND participant_id = ? AND sha256 = ?`,
+      SYSTEM_USER_ID,
+      userAvatarSha256
+    )?.content as Uint8Array)).toEqual(Buffer.from("user"));
     expect(migrated.all("PRAGMA table_info(im_chains)").map((column) => column.name)).toContain("retry_source_chain_id");
     expect(migrated.all("PRAGMA table_info(im_user_settings)").map((column) => column.name)).toEqual([
       "user_id",
