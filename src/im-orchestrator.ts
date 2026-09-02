@@ -634,6 +634,7 @@ export class ImOrchestrator {
             callId: result.callId,
             callIds: [result.callId],
             attemptCount: result.attemptCount,
+            failureCount: result.failureCount + 1,
             modelRecordId: result.model.id,
             modelStage: stage
           });
@@ -667,12 +668,18 @@ export class ImOrchestrator {
         ? Math.max(0, Number(details.attemptCount))
         : fallback
     );
+    const recordedFailureCount = (details: Record<string, unknown>, fallback: number): number => (
+      Object.prototype.hasOwnProperty.call(details, "failureCount") && Number.isFinite(Number(details.failureCount))
+        ? Math.max(0, Number(details.failureCount))
+        : fallback
+    );
     const enrichedError = (
       error: unknown,
       stage: "primary" | "fallback",
       callIds: string[],
       attemptCount: number,
       primaryAttemptCount: number,
+      failureCount: number,
       modelRecordId: string
     ): AppError => {
       const details = errorDetails(error);
@@ -684,6 +691,7 @@ export class ImOrchestrator {
         callId: callIds.at(-1) ?? details.callId,
         callIds,
         attemptCount,
+        failureCount,
         primaryAttemptCount,
         fallbackAttemptCount: stage === "fallback" ? Math.max(0, attemptCount - primaryAttemptCount) : 0,
         modelRecordId,
@@ -703,9 +711,10 @@ export class ImOrchestrator {
       const started = process.hrtime.bigint();
       const callIds: string[] = [];
       let attemptCount = 0;
-      while (attemptCount < semanticAttemptLimit) {
+      let failureCount = 0;
+      while (failureCount < semanticAttemptLimit) {
         try {
-          const result = await invokeModel(modelId, stage, semanticAttemptLimit - attemptCount);
+          const result = await invokeModel(modelId, stage, semanticAttemptLimit - failureCount);
           return {
             ...result,
             callIds: [...callIds, ...result.callIds],
@@ -716,9 +725,14 @@ export class ImOrchestrator {
           const details = errorDetails(error);
           for (const callId of errorCallIds(error)) if (!callIds.includes(callId)) callIds.push(callId);
           const consumedAttempts = Math.max(0, Number(details.attemptCount) || 0);
+          const consumedFailures = Object.prototype.hasOwnProperty.call(details, "failureCount")
+            && Number.isFinite(Number(details.failureCount))
+            ? Math.max(0, Number(details.failureCount))
+            : consumedAttempts;
           attemptCount += consumedAttempts;
+          failureCount += consumedFailures;
           if (error instanceof AppError && retryableOutputCodes.has(error.code)
-            && consumedAttempts > 0 && attemptCount < semanticAttemptLimit) {
+            && consumedFailures > 0 && failureCount < semanticAttemptLimit) {
             if (streamTurnId) {
               this.resetStreamingReply(streamTurnId);
               this.publish(requiredString(chain.conversation_id), "reset", {
@@ -732,7 +746,7 @@ export class ImOrchestrator {
             }
             continue;
           }
-          throw enrichedError(error, stage, callIds, attemptCount, 0, modelId);
+          throw enrichedError(error, stage, callIds, attemptCount, 0, failureCount, modelId);
         }
       }
       throw new AppError(502, "IM_JUDGE_INVALID_SCORE", "AI 没有返回有效的发言意愿分数");
@@ -760,6 +774,7 @@ export class ImOrchestrator {
       const primaryDetails = errorDetails(error);
       const primaryCallIds = errorCallIds(error);
       const primaryAttemptCount = recordedAttemptCount(primaryDetails, Number(chain.retry_count));
+      const primaryFailureCount = recordedFailureCount(primaryDetails, Number(chain.retry_count));
       try {
         const fallback = await invokeValidatedModel(fallbackModelId, "fallback");
         return {
@@ -771,12 +786,14 @@ export class ImOrchestrator {
         const fallbackDetails = errorDetails(fallbackError);
         const fallbackCallIds = errorCallIds(fallbackError);
         const fallbackAttemptCount = recordedAttemptCount(fallbackDetails, Number(chain.retry_count));
+        const fallbackFailureCount = recordedFailureCount(fallbackDetails, fallbackAttemptCount);
         throw enrichedError(
           fallbackError,
           "fallback",
           [...primaryCallIds, ...fallbackCallIds],
           primaryAttemptCount + fallbackAttemptCount,
           primaryAttemptCount,
+          primaryFailureCount + fallbackFailureCount,
           fallbackModelId
         );
       }

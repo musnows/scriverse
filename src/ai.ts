@@ -542,6 +542,7 @@ type GenerateInput = {
 type GenerateResult = {
   callId: string;
   attemptCount: number;
+  failureCount: number;
   content: string;
   outputTokens: number;
   cacheHitPercent?: number;
@@ -10062,6 +10063,7 @@ export class AiManager {
     let streamedContent = "";
     let streamedPartialContent = "";
     let totalAttemptCount = 0;
+    let requestFailureCount = 0;
     let trackedInputTokens = 0;
     let trackedOutputTokens = 0;
     let trackedCachedInputTokens = 0;
@@ -10109,7 +10111,6 @@ export class AiManager {
       const processSteps: AiProcessStep[] = [];
       const completionDelivery = new WeakMap<CompletionPayload, "json" | "sse">();
       let streamingGenerationRound = 0;
-      let requestFailureCount = 0;
       type CompletionRequestOptions = {
         messages?: CompletionMessage[];
         parameters?: Record<string, unknown>;
@@ -10684,6 +10685,7 @@ export class AiManager {
       if (!suspendedQuestionId) recordChoiceProcess(payload, toolRound + 1, false);
       const finalContent = suspendedQuestionId ? "" : choice?.message?.content ?? "";
       if (!suspendedQuestionId && !finalContent.trim()) {
+        if (requestAttemptLimit !== null) requestFailureCount += 1;
         const reasoningLength = choice?.message?.reasoning_content?.length ?? 0;
         const suffix = choice?.finish_reason === "length" || reasoningLength > 0
           ? `；模型已生成 ${reasoningLength} 个推理字符，请提高 max_tokens 输出预算`
@@ -10736,6 +10738,7 @@ export class AiManager {
       return {
         callId,
         attemptCount: totalAttemptCount,
+        failureCount: requestFailureCount,
         content,
         outputTokens,
         ...(typeof choice?.message?.reasoning_content === "string" && choice.message.reasoning_content.length > 0
@@ -10792,11 +10795,18 @@ export class AiManager {
         throw new AppError(error.status, error.code, error.message, {
           callId,
           attemptCount: totalAttemptCount,
+          failureCount: requestFailureCount,
           ...(error.details && typeof error.details === "object" ? error.details : {}),
           ...failureTarget
         });
       }
-      throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", { callId, attemptCount: totalAttemptCount, failure: message, ...failureTarget });
+      throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", {
+        callId,
+        attemptCount: totalAttemptCount,
+        failureCount: requestFailureCount,
+        failure: message,
+        ...failureTarget
+      });
     }
   }
 
