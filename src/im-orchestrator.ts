@@ -33,7 +33,6 @@ const IM_USER_CHAIN_CONCURRENCY = 3;
 const IM_MESSAGE_MAX_CHARACTERS = 20_000;
 const IM_EVENT_CONNECTION_LIMIT_PER_USER = 5;
 const IM_RECIPIENT_CACHE_LIMIT = 1_000;
-const IM_PARTICIPANT_CONTEXT_MAX_TOKENS = 2_048;
 const IM_CONTEXT_FIXED_RESERVE_TOKENS = 8_192;
 
 function requiredString(value: unknown): string {
@@ -404,14 +403,15 @@ export class ImOrchestrator {
 
   private maximumHistoryTokens(chain: Record<string, unknown>, participantContext: string): number {
     const participantTokens = estimateAiTokens(participantContext);
-    if (participantTokens > IM_PARTICIPANT_CONTEXT_MAX_TOKENS) {
+    const availableHistoryTokens = this.minimumContextWindow(chain) - IM_CONTEXT_FIXED_RESERVE_TOKENS - participantTokens;
+    if (availableHistoryTokens < 1) {
       throw new AppError(
         409,
         "IM_PARTICIPANT_CONTEXT_TOO_LARGE",
         "当前群成员身份信息过长，无法在所选模型上下文内完整暴露；请减少成员或缩短身份信息"
       );
     }
-    return Math.max(1, this.minimumContextWindow(chain) - IM_CONTEXT_FIXED_RESERVE_TOKENS - participantTokens);
+    return availableHistoryTokens;
   }
 
   private historyLine(row: Record<string, unknown>): string {

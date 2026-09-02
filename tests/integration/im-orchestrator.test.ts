@@ -1096,15 +1096,16 @@ describe("IM AI 调度", () => {
     )).toEqual({ summarized_through_sequence: 2 });
   });
 
-  it("成员身份上下文超出最小模型预算时在调用模型前明确失败", async () => {
+  it("合法最大身份卡可用且多人身份总量超过模型预算时明确失败", async () => {
     let fetchCalls = 0;
     runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "im-participant-budget-secret-with-enough-length",
       serveUi: false,
-      fetchImpl: async () => {
+      fetchImpl: async (_url, init) => {
         fetchCalls += 1;
-        return completion("不应调用", true);
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return completion("身份预算内回复。", body.stream === true);
       },
       aiRetrySleep: async () => undefined
     });
@@ -1116,7 +1117,8 @@ describe("IM AI 调度", () => {
       return runtime.store.createCharacter(String(work.id), { name: "身份预算角色" });
     });
     runtime.im.updateSettings(owner.userId, {
-      additionalNotes: "身份".repeat(2000),
+      identitySummary: "身份".repeat(1000),
+      additionalNotes: "说明".repeat(2000),
       primaryModelId: models.primaryModelId,
       fallbackModelId: models.fallbackModelId,
       retryCount: 1
@@ -1129,11 +1131,34 @@ describe("IM AI 调度", () => {
     runtime.imOrchestrator.publishMessageResult(sent);
     const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
 
-    expect(chain).toMatchObject({ status: "failed", error_code: "IM_PARTICIPANT_CONTEXT_TOO_LARGE" });
-    expect(fetchCalls).toBe(0);
+    expect(chain).toMatchObject({ status: "completed", generated_count: 1 });
+    expect(fetchCalls).toBe(1);
+    const members = Array.from({ length: 4 }, (_, index) => runtime.auth.register({
+      username: `participant_budget_member_${index + 1}`,
+      password: "secure-password-123"
+    }).session.user);
+    for (const member of members) {
+      runtime.im.updateSettings(member.userId, {
+        identitySummary: "身份".repeat(1000),
+        additionalNotes: "说明".repeat(2000)
+      });
+    }
+    const group = runtime.im.createGroup(owner, {
+      title: "多人身份预算群",
+      characterIds: [String(character.id)],
+      humanUserIds: members.map((member) => member.userId)
+    });
+    const oversized = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://character/${character.id} 验证多人身份预算。`,
+      requestId: "im-participant-budget-oversized-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(oversized);
+    const oversizedChain = await waitForChain(runtime, String((oversized.chain as Record<string, unknown>).id));
+    expect(oversizedChain).toMatchObject({ status: "failed", error_code: "IM_PARTICIPANT_CONTEXT_TOO_LARGE" });
+    expect(fetchCalls).toBe(1);
     expect(runtime.database.get(
       "SELECT model_id, model_stage, attempt_count, ai_call_ids_json FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
-      String(chain.id)
+      String(oversizedChain.id)
     )).toEqual({ model_id: null, model_stage: null, attempt_count: 0, ai_call_ids_json: "[]" });
   });
 
