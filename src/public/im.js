@@ -840,16 +840,21 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
 
   async function send() {
     if (!current?.active) return;
+    const conversationId = current.id;
     const content = serializeImComposer(composer);
     if (!content) return;
     composer.replaceChildren();
     closeMentionMenu();
     provisionalReplies.clear();
     try {
-      const result = await api(`/api/im/conversations/${encodeURIComponent(current.id)}/messages`, {
+      const result = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/messages`, {
         method: "POST",
         body: { content, requestId: requestId() }
       });
+      if (current?.id !== conversationId) {
+        await refreshConversations();
+        return;
+      }
       const existing = array(current.messages).some((message) => message.id === result.message.id);
       if (!existing) current.messages.push(result.message);
       current.activeChain = result.chain;
@@ -858,7 +863,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       await refreshConversations();
       if (result.chain?.status === "waiting_config") toast("消息已发送；请配置主模型和 fallback 后重试 AI 链路", "warning");
     } catch (error) {
-      composer.textContent = content;
+      if (current?.id === conversationId) composer.textContent = content;
       toast(error.message, "error");
     }
   }
