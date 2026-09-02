@@ -566,6 +566,50 @@ describe("IM AI 调度", () => {
     )).toEqual({ count: 0 });
   });
 
+  it("同一毫秒创建的链按数据库插入顺序选择最新一条", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-chain-rowid-order-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "chain_rowid_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "链顺序作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "链顺序角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const first = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "同毫秒第一条链。",
+      requestId: "im-chain-rowid-order-0001"
+    });
+    const second = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "同毫秒第二条链。",
+      requestId: "im-chain-rowid-order-0002"
+    });
+    const firstChainId = String((first.chain as Record<string, unknown>).id);
+    const secondChainId = String((second.chain as Record<string, unknown>).id);
+    runtime.database.run(
+      "UPDATE im_chains SET created_at = ?, updated_at = ? WHERE id IN (?, ?)",
+      "2026-09-03T00:00:00.000Z",
+      "2026-09-03T00:00:00.000Z",
+      firstChainId,
+      secondChainId
+    );
+
+    expect(runtime.im.getConversation(String(direct.id), owner.userId)).toMatchObject({
+      activeChain: { id: secondChainId }
+    });
+    expect(runtime.im.getDiagnostics(owner, String(direct.id))).toMatchObject({
+      chain: { id: secondChainId }
+    });
+  });
+
   it("停止后不接受忽略 abort 的迟到主动判断结果", async () => {
     const responseControl: { release?: () => void } = {};
     let markStarted: (() => void) | null = null;

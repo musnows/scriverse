@@ -1158,7 +1158,7 @@ export class ImService {
          AND (? IS NULL OR trigger.sequence <= ?)
          AND chain.created_at >= ?
          AND (? IS NULL OR chain.created_at <= ?)
-       ORDER BY chain.created_at DESC LIMIT 1`,
+       ORDER BY chain.created_at DESC, chain.rowid DESC LIMIT 1`,
       conversationId,
       Number(viewerMembership.joined_sequence),
       viewerLeftSequence,
@@ -2138,7 +2138,7 @@ export class ImService {
   getDiagnostics(owner: AuthUser, conversationId: string): Record<string, unknown> {
     this.assertOwner(conversationId, owner.userId);
     const chain = this.db.get(
-      "SELECT * FROM im_chains WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
+      "SELECT * FROM im_chains WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
       conversationId
     );
     if (!chain) return { chain: null, turns: [] };
