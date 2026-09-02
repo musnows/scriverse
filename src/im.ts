@@ -1902,6 +1902,13 @@ export class ImService {
         input.requestId,
         timestamp
       );
+      this.db.run(
+        `UPDATE im_human_memberships SET last_read_sequence = MAX(last_read_sequence, ?)
+         WHERE conversation_id = ? AND user_id = ? AND left_at IS NULL`,
+        sequence,
+        conversationId,
+        user.userId
+      );
       mentions.forEach((mention, position) => this.db.run(
         `INSERT INTO im_mentions (message_id, position, target_kind, target_id, target_snapshot_json)
          VALUES (?, ?, ?, ?, ?)`,
@@ -1995,6 +2002,13 @@ export class ImService {
         input.requestId,
         JSON.stringify({ type: "announcement", publishedBy: this.humanSnapshot(owner) }),
         timestamp
+      );
+      this.db.run(
+        `UPDATE im_human_memberships SET last_read_sequence = MAX(last_read_sequence, ?)
+         WHERE conversation_id = ? AND user_id = ? AND left_at IS NULL`,
+        sequence,
+        conversationId,
+        owner.userId
       );
       const activeCharacters = this.db.all(
         `SELECT id FROM im_character_memberships

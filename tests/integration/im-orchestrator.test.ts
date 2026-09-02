@@ -832,6 +832,8 @@ describe("IM AI 调度", () => {
       "SELECT chain_id FROM im_messages WHERE id = ?",
       String((sent.message as Record<string, unknown>).id)
     )).toEqual({ chain_id: null });
+    expect(runtime.im.listConversations(owner.userId).find((conversation) => conversation.id === group.id))
+      .toMatchObject({ unreadCount: 0 });
   });
 
   it("重复保存相同群设置不会取消活动链", () => {
