@@ -29,7 +29,7 @@ describe("工作台模块图预加载", () => {
     expect(preloadHrefs).toContain("/ai-skill-menu.js?v=20260830-ai-skill-slash-menu-v1");
     expect(preloadHrefs).toContain("/chapter-line-id-tracker.js?v=20260829-live-annotation-anchors-v1");
     expect(preloadHrefs).toContain("/chapter-editor-behavior.js?v=20260828-centered-scroll-v1");
-    expect(preloadHrefs).toContain("/im.js?v=20260902-global-im-v56");
+    expect(preloadHrefs).toContain("/im.js?v=20260902-global-im-v57");
     expect(page.text.indexOf('rel="modulepreload"')).toBeLessThan(page.text.indexOf("</head>"));
   });
 });

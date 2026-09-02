@@ -129,8 +129,12 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let works = [];
   let createCharacters = [];
   const createSelectedCharacters = new Map();
+  let createHumans = [];
+  const createSelectedHumans = new Map();
   let createSearchTimer = null;
   let createSearchRequest = 0;
+  let createHumanSearchTimer = null;
+  let createHumanSearchRequest = 0;
   let memberAddKind = null;
   let memberAddCandidates = [];
   let memberAddSelectedId = "";
@@ -141,7 +145,6 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let conversationRequest = 0;
   let diagnosticsRequest = 0;
   let requestedConversationId = null;
-  let users = [];
   let models = [];
   let settings = null;
   let eventSource = null;
@@ -734,9 +737,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   async function loadCatalogs() {
-    [works, users, models, settings] = await Promise.all([
+    [works, models, settings] = await Promise.all([
       api("/api/im/works"),
-      api("/api/users/directory?q="),
       api("/api/im/models"),
       api("/api/im/settings")
     ]);
@@ -884,6 +886,39 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     bindImAvatarFallbacks(host);
   }
 
+  function renderCreateHumanOptions() {
+    const host = document.querySelector("#im-group-human-options");
+    host.innerHTML = createHumans.length
+      ? createHumans.filter((item) => item.userId !== currentUserId()).map((item) => `<label><input type="checkbox" value="${esc(item.userId)}" ${createSelectedHumans.has(item.userId) ? "checked" : ""}>${imAvatarHtml(item, "user", "im-option-avatar")}<span><strong>${esc(item.displayName)}</strong><small>@${esc(item.username)}</small></span></label>`).join("")
+      : '<p class="im-empty">没有匹配的用户。</p>';
+    bindImAvatarFallbacks(host);
+  }
+
+  function renderCreateSelectedHumans() {
+    const host = document.querySelector("#im-create-selected-humans");
+    const selected = [...createSelectedHumans.values()];
+    host.classList.toggle("hidden", selected.length === 0);
+    host.innerHTML = selected.length
+      ? `<div><strong>已选人类成员</strong><small>${selected.length} / 49</small></div><div>${selected.map((item) => `<button type="button" data-im-remove-selected-human="${esc(item.userId)}" aria-label="移除用户 ${esc(item.displayName)}">${imAvatarHtml(item, "user", "im-selected-avatar")}<span>${esc(item.displayName)}</span><small>@${esc(item.username)}</small><b aria-hidden="true">×</b></button>`).join("")}</div>`
+      : "";
+    bindImAvatarFallbacks(host);
+  }
+
+  async function loadCreateHumans() {
+    const search = document.querySelector("#im-create-human-search");
+    const query = search.value.trim();
+    const requestId = ++createHumanSearchRequest;
+    if (!query) {
+      createHumans = [];
+      document.querySelector("#im-group-human-options").innerHTML = '<p class="im-empty">输入关键词搜索用户。</p>';
+      return;
+    }
+    const page = await api(`/api/users/directory?q=${encodeURIComponent(query)}&limit=50&cursor=0`);
+    if (requestId !== createHumanSearchRequest) return;
+    createHumans = array(page.items ?? page);
+    renderCreateHumanOptions();
+  }
+
   function syncCreateSelection() {
     const selected = [...createSelectedCharacters.values()];
     const count = selected.length;
@@ -898,6 +933,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     groupSection.querySelectorAll("input, select").forEach((control) => { control.disabled = !groupMode; });
     humanSection.querySelectorAll("input").forEach((control) => { control.disabled = !groupMode; });
     renderCreateSelectedCharacters();
+    renderCreateSelectedHumans();
     title.required = groupMode;
     if (groupMode && !title.value.trim()) title.value = selected.slice(0, 3).map((item) => item.name).join("、").slice(0, 80);
     submit.disabled = count === 0 || !hasWork;
@@ -933,17 +969,23 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const dialog = document.querySelector("#im-group-dialog");
     document.querySelector("#im-group-form").reset();
     if (createSearchTimer !== null) window.clearTimeout(createSearchTimer);
+    if (createHumanSearchTimer !== null) window.clearTimeout(createHumanSearchTimer);
     createSearchTimer = null;
+    createHumanSearchTimer = null;
     createSearchRequest += 1;
+    createHumanSearchRequest += 1;
     createSelectedCharacters.clear();
+    createSelectedHumans.clear();
     createCharacters = [];
+    createHumans = [];
     const workSelect = document.querySelector("#im-create-work");
     workSelect.innerHTML = '<option value="">请选择书籍</option>' + works.map((work) => `<option value="${esc(work.id)}">${esc(work.title)} · ${Number(work.characterCount)} 个角色</option>`).join("");
     const search = document.querySelector("#im-create-search");
     search.value = "";
     search.disabled = true;
     document.querySelector("#im-group-character-options").innerHTML = '<p class="im-empty">选择书籍后显示角色。</p>';
-    document.querySelector("#im-group-human-options").innerHTML = users.filter((item) => item.userId !== currentUserId()).map((item) => `<label><input type="checkbox" name="humanUserId" value="${esc(item.userId)}"><span><strong>${esc(item.displayName)}</strong><small>@${esc(item.username)}</small></span></label>`).join("") || '<p class="im-empty">没有可添加的其他用户。</p>';
+    document.querySelector("#im-create-human-search").value = "";
+    document.querySelector("#im-group-human-options").innerHTML = '<p class="im-empty">输入关键词搜索用户。</p>';
     syncCreateSelection();
     dialog.showModal();
   }
@@ -1209,6 +1251,34 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       renderCreateCharacterOptions();
       syncCreateSelection();
     });
+    document.querySelector("#im-create-human-search").addEventListener("input", () => {
+      if (createHumanSearchTimer !== null) window.clearTimeout(createHumanSearchTimer);
+      createHumanSearchTimer = window.setTimeout(() => {
+        createHumanSearchTimer = null;
+        void loadCreateHumans().catch((error) => toast(error.message, "error"));
+      }, 160);
+    });
+    document.querySelector("#im-group-human-options").addEventListener("change", (event) => {
+      const checkbox = event.target.closest('input[type="checkbox"]');
+      if (!checkbox) return;
+      const item = createHumans.find((user) => user.userId === checkbox.value);
+      if (!item) return;
+      if (checkbox.checked && createSelectedHumans.size >= 49) {
+        checkbox.checked = false;
+        toast("一个群聊最多选择 49 个人类成员", "warning");
+        return;
+      }
+      if (checkbox.checked) createSelectedHumans.set(item.userId, item);
+      else createSelectedHumans.delete(item.userId);
+      renderCreateSelectedHumans();
+    });
+    document.querySelector("#im-create-selected-humans").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-im-remove-selected-human]");
+      if (!button) return;
+      createSelectedHumans.delete(button.dataset.imRemoveSelectedHuman);
+      renderCreateHumanOptions();
+      renderCreateSelectedHumans();
+    });
     document.querySelector("#im-member-add-work").addEventListener("change", () => {
       memberAddCandidates = [];
       memberAddSelectedId = "";
@@ -1393,7 +1463,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         : api("/api/im/conversations/group", { method: "POST", body: {
             title: String(form.get("title") || "").trim(),
             characterIds,
-            humanUserIds: form.getAll("humanUserId").map(String),
+            humanUserIds: [...createSelectedHumans.keys()],
             replyMode: String(form.get("replyMode") || "mention"),
             responseThreshold: Number(form.get("responseThreshold") || 60),
             maxAiMessages: Number(form.get("maxAiMessages") || 20)
