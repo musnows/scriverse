@@ -171,6 +171,73 @@ describe("IM AI 调度", () => {
     expect(String(work.id)).toBeTruthy();
   });
 
+  it("工具轮次共享一次角色调用的模型失败预算", async () => {
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-tool-round-retry-budget-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (body.model === "primary-model") {
+          primaryCalls += 1;
+          if (primaryCalls <= 2 || primaryCalls === 4) return new Response("temporary failure", { status: 500 });
+          if (primaryCalls === 3) {
+            return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+              id: "im-date-calculation",
+              type: "function",
+              function: {
+                name: "calculate_time",
+                arguments: JSON.stringify({ startDate: "2026-09-01", endDate: "2026-09-02" })
+              }
+            }] }, finish_reason: "tool_calls" }] }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" }
+            });
+          }
+          throw new Error("primary model exceeded the shared failure budget");
+        }
+        fallbackCalls += 1;
+        return completion("fallback 在累计第三次失败后接管。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "tool_round_retry_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "工具轮次重试作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "工具轮次角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 3
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "先计算日期，再回答。",
+      requestId: "im-tool-round-retry-budget-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "completed", model_stage: "fallback", generated_count: 1 });
+    expect(primaryCalls).toBe(4);
+    expect(fallbackCalls).toBe(1);
+    const reply = runtime.database.get(
+      "SELECT content, metadata_json FROM im_messages WHERE conversation_id = ? AND sender_kind = 'character'",
+      String(direct.id)
+    );
+    expect(reply?.content).toBe("fallback 在累计第三次失败后接管。");
+    expect(JSON.parse(String(reply?.metadata_json))).toMatchObject({
+      modelStage: "fallback",
+      primaryAttemptCount: 4,
+      fallbackAttemptCount: 1,
+      attemptCount: 5
+    });
+  });
+
   it("流式响应中断后按配置次数重试并只重置当前 turn", async () => {
     const encoder = new TextEncoder();
     let primaryCalls = 0;

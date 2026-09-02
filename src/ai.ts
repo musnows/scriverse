@@ -10109,6 +10109,7 @@ export class AiManager {
       const processSteps: AiProcessStep[] = [];
       const completionDelivery = new WeakMap<CompletionPayload, "json" | "sse">();
       let streamingGenerationRound = 0;
+      let requestFailureCount = 0;
       type CompletionRequestOptions = {
         messages?: CompletionMessage[];
         parameters?: Record<string, unknown>;
@@ -10174,6 +10175,7 @@ export class AiManager {
           let retryLimit = requestAttemptLimit === null ? legacyMaximumAttempts - 1 : requestAttemptLimit - 1;
           let retryDelayMs = attempt * 1_200;
           let attemptEmitted = false;
+          let failureCounted = false;
           const attemptStartedAt = process.hrtime.bigint();
           const traceAttempt: AiCallTraceAttempt = {
             attempt,
@@ -10352,12 +10354,17 @@ export class AiManager {
               ? aiHttpRetryCount(candidate.status, requestRetryPolicy)
               : requestAttemptLimit - 1;
             retryDelayMs = aiHttpRetryDelayMs(candidate.status, attempt, candidate.retryAfter);
-            if (attempt > retryLimit) {
+            if (requestAttemptLimit !== null) {
+              requestFailureCount += 1;
+              failureCounted = true;
+            }
+            if (attempt > retryLimit || (requestAttemptLimit !== null && requestFailureCount >= requestAttemptLimit)) {
               retryable = false;
               throw lastFailure;
             }
           } catch (error) {
             lastFailure = error;
+            if (requestAttemptLimit !== null && !failureCounted) requestFailureCount += 1;
             if (error instanceof AppError && error.code === "AI_STREAM_NETWORK_ERROR") {
               retryLimit = requestAttemptLimit === null
                 ? aiHttpRetryCount(error.status, requestRetryPolicy)
@@ -10377,11 +10384,13 @@ export class AiManager {
             const canRetryAttempt = retryable
               && attempt <= retryLimit
               && attempt < maximumAttempts
+              && (requestAttemptLimit === null || requestFailureCount < requestAttemptLimit)
               && !input.signal?.aborted
               && (!attemptEmitted || Boolean(onStreamReset));
             logger.warn("ai.call.attempt_failed", {
               callId,
               attempt,
+              requestFailureCount,
               retryable: canRetryAttempt,
               durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000,
               streaming: streamResponse,
