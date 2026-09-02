@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, imDiagnosticStatusLabel, isImRealtimeChainCurrent, matchImProvisionalReplyTurn, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, sameImGroupSettings, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
+import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, imConversationAccessibleLabel, imDiagnosticStatusLabel, isImRealtimeChainCurrent, matchImProvisionalReplyTurn, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, sameImGroupSettings, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -66,6 +66,12 @@ describe("IM 编辑区域尺寸", () => {
     expect(isImRealtimeChainCurrent({ id: "chain-current" }, { chainId: "chain-old" })).toBe(false);
     expect(isImRealtimeChainCurrent(null, { chainId: "chain-old" })).toBe(false);
     expect(isImRealtimeChainCurrent({ id: "chain-current" }, {})).toBe(false);
+  });
+
+  it("把会话未读和提及数加入可访问名称", () => {
+    expect(imConversationAccessibleLabel("讨论群", "主动交流", 0, 0)).toBe("讨论群，主动交流");
+    expect(imConversationAccessibleLabel("讨论群", "主动交流", 3, 0)).toBe("讨论群，主动交流，3 条未读");
+    expect(imConversationAccessibleLabel("讨论群", "主动交流", 5, 2)).toBe("讨论群，主动交流，2 条提及未读，共 5 条未读");
   });
 
   it("按当前文本节点的光标位置识别 mention 查询", () => {

@@ -98,6 +98,15 @@ export function isImRealtimeChainCurrent(activeChain, payload) {
   return Boolean(activeChainId && eventChainId && activeChainId === eventChainId);
 }
 
+export function imConversationAccessibleLabel(title, subtitle, unreadCount = 0, mentionUnreadCount = 0) {
+  const unread = Math.max(0, Number(unreadCount) || 0);
+  const mentions = Math.max(0, Number(mentionUnreadCount) || 0);
+  const unreadLabel = mentions > 0
+    ? `${mentions} 条提及未读${unread > mentions ? `，共 ${unread} 条未读` : ""}`
+    : unread > 0 ? `${unread} 条未读` : "";
+  return [title, subtitle, unreadLabel].filter(Boolean).join("，");
+}
+
 export function findImMentionQuery(text, caretOffset = String(text).length) {
   const source = String(text);
   const offset = Math.max(0, Math.min(source.length, Number(caretOffset) || 0));
@@ -403,7 +412,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       ? document.activeElement.closest?.("[data-im-conversation]")?.dataset.imConversation
       : null;
     const items = conversations.length
-      ? conversations.map((item) => `<button class="im-conversation-item${current?.id === item.id ? " is-active" : ""}" type="button" data-im-conversation="${esc(item.id)}"${current?.id === item.id ? ' aria-current="true"' : ""} aria-label="${esc(`${item.title}，${conversationSubtitle(item)}`)}" title="${esc(item.title)}">
+      ? conversations.map((item) => `<button class="im-conversation-item${current?.id === item.id ? " is-active" : ""}" type="button" data-im-conversation="${esc(item.id)}"${current?.id === item.id ? ' aria-current="true"' : ""} aria-label="${esc(imConversationAccessibleLabel(item.title, conversationSubtitle(item), item.unreadCount, item.mentionUnreadCount))}" title="${esc(item.title)}">
           ${conversationAvatarHtml(item)}
           <span><strong>${esc(item.title)}</strong><small>${esc(conversationSubtitle(item))}</small></span>
           ${item.mentionUnreadCount ? `<b class="im-mention-unread">@${Number(item.mentionUnreadCount)}</b>` : item.unreadCount ? `<b class="im-item-unread">${Number(item.unreadCount)}</b>` : ""}

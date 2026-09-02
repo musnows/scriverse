@@ -21,6 +21,8 @@ export function imDiagnosticStatusLabel(turn: Record<string, unknown>): string;
 
 export function isImRealtimeChainCurrent(activeChain: Record<string, unknown> | null, payload: Record<string, unknown>): boolean;
 
+export function imConversationAccessibleLabel(title: string, subtitle: string, unreadCount?: number, mentionUnreadCount?: number): string;
+
 export function findImMentionQuery(text: string, caretOffset?: number): {
   query: string;
   startOffset: number;
