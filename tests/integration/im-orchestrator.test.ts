@@ -318,6 +318,48 @@ describe("IM AI 调度", () => {
     ]);
   });
 
+  it("拒绝超过消息存储上限的角色回复并保留明确错误", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-reply-length-limit-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return completion("长".repeat(20_001), body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "reply_length_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "超长回复来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "长文角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "生成超长回复。",
+      requestId: "im-reply-length-limit-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+
+    expect(chain).toMatchObject({ status: "failed", generated_count: 0, error_code: "IM_AI_REPLY_TOO_LONG" });
+    expect(runtime.database.get(
+      "SELECT failure FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
+      chainId
+    )).toEqual({ failure: expect.stringContaining("IM_AI_REPLY_TOO_LONG") });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      chainId
+    )).toEqual({ count: 0 });
+  });
+
   it("一个角色回答失败时继续执行同批其他角色", async () => {
     const normalCharacterModels: string[] = [];
     runtime = createRuntime({

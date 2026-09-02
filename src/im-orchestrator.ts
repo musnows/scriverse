@@ -28,6 +28,7 @@ type InvocationResult = {
 };
 
 const IM_USER_CHAIN_CONCURRENCY = 3;
+const IM_MESSAGE_MAX_CHARACTERS = 20_000;
 
 function requiredString(value: unknown): string {
   return typeof value === "string" ? value : String(value ?? "");
@@ -872,6 +873,9 @@ export class ImOrchestrator {
         }
       );
       if (!result.content.trim()) throw new AppError(502, "IM_AI_EMPTY_REPLY", "AI 返回了空消息");
+      if (Array.from(result.content).length > IM_MESSAGE_MAX_CHARACTERS) {
+        throw new AppError(502, "IM_AI_REPLY_TOO_LONG", `AI 回复超过 ${IM_MESSAGE_MAX_CHARACTERS} 字符，未写入会话`);
+      }
       this.finishTurn(turnId, result, undefined, true);
       const message = this.appendCharacterMessage(chain, membership, result);
       this.publish(requiredString(chain.conversation_id), "message", { message });
