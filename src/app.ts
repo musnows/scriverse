@@ -2070,8 +2070,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }).strict(), request.body);
     const current = im.getConversation(request.params.conversationId, user.userId);
     if (current.active !== true) throw new AppError(403, "IM_MEMBERSHIP_INACTIVE", "你已经退出这个 IM 会话");
-    imOrchestrator.cancelConversation(request.params.conversationId, "human_message_received");
-    const result = im.sendMessage(user, request.params.conversationId, input);
+    const result = im.sendMessage(user, request.params.conversationId, input, () => {
+      imOrchestrator.cancelConversation(request.params.conversationId, "human_message_received");
+    });
     imOrchestrator.publishMessageResult(result);
     data(response, result, 201);
   });

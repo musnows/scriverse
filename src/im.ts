@@ -1035,7 +1035,7 @@ export class ImService {
     );
   }
 
-  sendMessage(user: AuthUser, conversationId: string, input: ImMessageInput): Record<string, unknown> {
+  sendMessage(user: AuthUser, conversationId: string, input: ImMessageInput, beforeCreate?: () => void): Record<string, unknown> {
     const conversation = this.assertActiveMembership(conversationId, user.userId);
     this.refreshCharacterAvailability(conversationId);
     const existing = this.db.get(
@@ -1055,6 +1055,7 @@ export class ImService {
       const chain = existingChainId ? this.db.get("SELECT * FROM im_chains WHERE id = ?", existingChainId) ?? null : null;
       return { message: this.mapMessage(existing), chain, duplicate: true };
     }
+    beforeCreate?.();
     const mentions = this.validatedMentions(conversationId, input.content);
     const settings = this.getSettings(user.userId);
     const messageId = id("imMessage");

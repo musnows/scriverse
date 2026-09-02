@@ -188,6 +188,13 @@ describe("IM AI 调度", () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     expect(initialEvents.some((event) => event.type === "delta")).toBe(true);
+    let duplicateCancellationCalled = false;
+    const duplicate = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "开始流式回复。",
+      requestId: "im-stream-replay-0001"
+    }, () => { duplicateCancellationCalled = true; });
+    expect(duplicate).toMatchObject({ duplicate: true });
+    expect(duplicateCancellationCalled).toBe(false);
     unsubscribeInitial();
 
     const replayed: Array<{ type: string; payload: Record<string, unknown> }> = [];
