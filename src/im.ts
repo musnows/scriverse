@@ -340,7 +340,8 @@ export class ImService {
       userId: user.userId,
       username: user.username,
       displayName: user.displayName,
-      avatarUrl: user.avatarUrl
+      avatarUrl: user.avatarUrl,
+      avatarSha256: avatarVersionFromUrl(user.avatarUrl)
     };
   }
 
@@ -673,12 +674,18 @@ export class ImService {
         ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(senderCharacterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
         : null;
     } else if (!showCurrentCharacterAvatar && requiredString(row.sender_kind) === "character" && senderCharacterId) {
-      sender.avatarUrl = optionalString(historicalParticipants?.characters
-        .find((character) => optionalString(character.characterId) === senderCharacterId)?.avatarUrl);
+      const avatarSha256 = optionalString(sender.avatarSha256) ?? avatarVersionFromUrl(sender.avatarUrl);
+      sender.avatarUrl = avatarSha256
+        ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(senderCharacterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
+        : optionalString(historicalParticipants?.characters
+            .find((character) => optionalString(character.characterId) === senderCharacterId)?.avatarUrl);
     } else if (!showCurrentCharacterAvatar && requiredString(row.sender_kind) === "human") {
       const senderUserId = optionalString(row.sender_user_id);
-      sender.avatarUrl = optionalString(historicalParticipants?.humans
-        .find((human) => optionalString(human.userId) === senderUserId)?.avatarUrl);
+      const avatarSha256 = optionalString(sender.avatarSha256) ?? avatarVersionFromUrl(sender.avatarUrl);
+      sender.avatarUrl = senderUserId && avatarSha256
+        ? `/api/im/conversations/${encodeURIComponent(conversationId)}/users/${encodeURIComponent(senderUserId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
+        : optionalString(historicalParticipants?.humans
+            .find((human) => optionalString(human.userId) === senderUserId)?.avatarUrl);
     }
     const mentions = this.db.all(
       "SELECT * FROM im_mentions WHERE message_id = ? ORDER BY position",
@@ -1083,7 +1090,10 @@ export class ImService {
     if (!visibleCharacter) throw notFound("IM 群角色");
     const visibleSha256 = avatarVersionFromUrl(visibleCharacter.avatarUrl);
     const requestedSha256 = optionalString(sha256) ?? visibleSha256;
-    if (!requestedSha256 || requestedSha256 !== visibleSha256) {
+    const visibleInMessage = requestedSha256
+      ? this.messageAvatarVersionVisible(userId, conversationId, "character", characterId, requestedSha256)
+      : false;
+    if (!requestedSha256 || (requestedSha256 !== visibleSha256 && !visibleInMessage)) {
       throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "该角色头像版本不在你的 IM 可见任期内");
     }
     if (requestedSha256) {
@@ -1118,7 +1128,8 @@ export class ImService {
     const visibleHuman = this.conversationParticipants(conversationId, userId).humans
       .find((membership) => requiredString(membership.userId) === targetUserId);
     if (!visibleHuman) throw notFound("IM 群成员");
-    if (avatarVersionFromUrl(visibleHuman.avatarUrl) !== sha256) {
+    if (avatarVersionFromUrl(visibleHuman.avatarUrl) !== sha256
+      && !this.messageAvatarVersionVisible(userId, conversationId, "human", targetUserId, sha256)) {
       throw new AppError(404, "USER_AVATAR_NOT_FOUND", "该成员头像版本不在你的 IM 可见任期内");
     }
     const version = this.db.get(
@@ -1139,6 +1150,33 @@ export class ImService {
       height: Number(version.height),
       updatedAt: requiredString(version.created_at)
     };
+  }
+
+  private messageAvatarVersionVisible(
+    userId: string,
+    conversationId: string,
+    senderKind: "character" | "human",
+    senderId: string,
+    sha256: string
+  ): boolean {
+    const senderColumn = senderKind === "character" ? "message.sender_character_id" : "message.sender_user_id";
+    return this.db.all(
+      `SELECT message.sender_snapshot_json FROM im_messages message
+       WHERE message.conversation_id = ? AND message.sender_kind = ? AND ${senderColumn} = ?
+         AND EXISTS (
+           SELECT 1 FROM im_human_memberships membership
+           WHERE membership.conversation_id = message.conversation_id AND membership.user_id = ?
+             AND message.sequence > membership.joined_sequence
+             AND (membership.left_sequence IS NULL OR message.sequence <= membership.left_sequence)
+         )`,
+      conversationId,
+      senderKind,
+      senderId,
+      userId
+    ).some((message) => {
+      const snapshot = json<Record<string, unknown>>(requiredString(message.sender_snapshot_json), {});
+      return (optionalString(snapshot.avatarSha256) ?? avatarVersionFromUrl(snapshot.avatarUrl)) === sha256;
+    });
   }
 
   updateGroup(owner: AuthUser, conversationId: string, input: Partial<Pick<ImGroupInput, "title" | "replyMode" | "responseThreshold" | "maxAiMessages">>): Record<string, unknown> {
@@ -1210,6 +1248,36 @@ export class ImService {
        WHERE membership.conversation_id = ? AND membership.left_at IS NULL`,
       timestamp,
       conversationId
+    );
+  }
+
+  captureCharacterAvatarVersion(conversationId: string, characterId: string, timestamp: string): void {
+    this.db.run(
+      `INSERT OR IGNORE INTO im_avatar_versions (
+         conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+         storage_key, content, width, height, created_at
+       )
+       SELECT ?, 'character', avatar.character_id, avatar.sha256, avatar.mime_type, avatar.byte_length,
+              avatar.storage_key, NULL, avatar.width, avatar.height, ?
+       FROM character_avatars avatar WHERE avatar.character_id = ?`,
+      conversationId,
+      timestamp,
+      characterId
+    );
+  }
+
+  private captureHumanAvatarVersion(conversationId: string, userId: string, timestamp: string): void {
+    this.db.run(
+      `INSERT OR IGNORE INTO im_avatar_versions (
+         conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+         storage_key, content, width, height, created_at
+       )
+       SELECT ?, 'user', avatar.user_id, avatar.sha256, avatar.mime_type, avatar.byte_length,
+              NULL, avatar.content, avatar.width, avatar.height, ?
+       FROM user_avatars avatar WHERE avatar.user_id = ?`,
+      conversationId,
+      timestamp,
+      userId
     );
   }
 
@@ -1322,6 +1390,7 @@ export class ImService {
     const timestamp = now();
     this.db.transaction(() => {
       this.cancelActiveChain(conversationId, "character_member_removed");
+      this.captureConversationAvatarVersions(conversationId, timestamp);
       this.db.run(
         `UPDATE im_character_memberships SET status = 'removed', left_sequence = ?, left_at = ? WHERE id = ?`,
         this.nextSequence(conversationId) - 1,
@@ -1520,6 +1589,7 @@ export class ImService {
     const timestamp = now();
     return this.db.transaction(() => {
       this.cancelActiveChain(conversationId, "human_message_received");
+      this.captureHumanAvatarVersion(conversationId, user.userId, timestamp);
       const sequence = this.nextSequence(conversationId);
       this.db.run(
         `INSERT INTO im_messages (

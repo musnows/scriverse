@@ -575,6 +575,7 @@ describe("全局 IM API", () => {
     });
     const owner = await register(runtime, "im_avatar_owner");
     const member = await register(runtime, "im_avatar_member");
+    const lateMember = await register(runtime, "im_avatar_late_member");
     const work = await owner.agent.post("/api/works")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ title: "IM 头像版本作品" })
@@ -646,8 +647,14 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ userId: member.user.userId })
       .expect(201);
-    await member.agent.get(exitedCharacterUrl).expect(404);
-    await member.agent.get(exitedHumanUrl).expect(404);
+    expect(Buffer.from((await member.agent.get(exitedCharacterUrl).expect(200)).body)).toEqual(avatarPng);
+    expect(Buffer.from((await member.agent.get(exitedHumanUrl).expect(200)).body)).toEqual(avatarPng);
+    await owner.agent.post(`/api/im/conversations/${exitedGroup.body.data.id}/humans`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: lateMember.user.userId })
+      .expect(201);
+    await lateMember.agent.get(exitedCharacterUrl).expect(404);
+    await lateMember.agent.get(exitedHumanUrl).expect(404);
 
     const disbandedGroup = await owner.agent.post("/api/im/conversations/group")
       .set("X-CSRF-Token", owner.csrfToken)

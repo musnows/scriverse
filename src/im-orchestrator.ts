@@ -991,6 +991,7 @@ export class ImOrchestrator {
     };
     const timestamp = now();
     this.db.transaction(() => {
+      if (senderCharacterId) this.im.captureCharacterAvatarVersion(conversationId, senderCharacterId, timestamp);
       this.db.run(
         `INSERT INTO im_messages (
            id, conversation_id, sequence, context_epoch, sender_kind, sender_character_id,
