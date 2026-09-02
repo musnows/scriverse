@@ -736,7 +736,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const summary = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: { sequence: current.latestSequence } });
       if (request !== conversationRequest) return;
       upsertConversationSummary(summary);
-      await refreshUnreadTotal();
+      void refreshUnreadTotal().catch(() => undefined);
     }
   }
 
@@ -1123,7 +1123,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   async function handleRealtime(event) {
     const envelope = JSON.parse(event.data);
     const eventConversationId = envelope.conversationId;
-    if (envelope.type === "message" || envelope.type === "conversation") await refreshUnreadTotal();
+    if (envelope.type === "message" || envelope.type === "conversation") {
+      void refreshUnreadTotal().catch(() => undefined);
+    }
     if (!opened) {
       if (shouldRefreshImConversationListForEvent(envelope.type)) await refreshConversationSummary(eventConversationId);
       return;
@@ -1224,9 +1226,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.addEventListener("visibilitychange", () => {
       if (!current || !shouldMarkImConversationRead(opened, document.visibilityState) || !current.active || current.latestSequence <= 0) return;
       void api(`/api/im/conversations/${encodeURIComponent(current.id)}/read`, { method: "POST", body: { sequence: current.latestSequence } })
-        .then(async (summary) => {
+        .then((summary) => {
           upsertConversationSummary(summary);
-          await refreshUnreadTotal();
+          void refreshUnreadTotal().catch(() => undefined);
         })
         .catch(() => undefined);
     });
