@@ -62,14 +62,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v35");
+    expect(page.text).toContain("feature=global-im-v36");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260901-global-im-v35');
+    expect(application.text).toContain('/im.js?v=20260901-global-im-v36');
     expect(application.text).toContain("createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf })");
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');
@@ -123,6 +123,9 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain('document.addEventListener("visibilitychange"');
     expect(im.text).toContain("setupConversationsResize");
     expect(im.text).toContain("let conversationRequest = 0");
+    expect(im.text).toContain("let requestedConversationId = null");
+    expect(im.text).toContain("requestedConversationId && requestedConversationId !== conversationId");
+    expect(im.text).toContain("openConversation(button.dataset.imConversation, true)");
     expect(im.text).toContain("if (request !== conversationRequest) return");
     expect(im.text).toContain('conversationsResize.addEventListener("pointermove"');
     expect(im.text).toContain('conversationsWidth <= 180');

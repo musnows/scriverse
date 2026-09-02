@@ -85,6 +85,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let memberAddSearchTimer = null;
   let memberAddRequest = 0;
   let conversationRequest = 0;
+  let requestedConversationId = null;
   let users = [];
   let models = [];
   let settings = null;
@@ -518,11 +519,20 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     syncComposer();
   }
 
-  async function openConversation(conversationId) {
+  async function openConversation(conversationId, userInitiated = false) {
+    if (userInitiated) requestedConversationId = conversationId;
+    else if (requestedConversationId && requestedConversationId !== conversationId) return;
     const request = ++conversationRequest;
-    const nextConversation = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}`);
-    if (request !== conversationRequest) return;
+    let nextConversation;
+    try {
+      nextConversation = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}`);
+    } catch (error) {
+      if (userInitiated && requestedConversationId === conversationId) requestedConversationId = null;
+      throw error;
+    }
+    if (request !== conversationRequest || (requestedConversationId && requestedConversationId !== conversationId)) return;
     current = nextConversation;
+    if (requestedConversationId === conversationId) requestedConversationId = null;
     workspace.classList.add("has-conversation");
     syncProvisionalReplies();
     renderConversationList();
@@ -920,6 +930,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   function close() {
     opened = false;
     conversationRequest += 1;
+    requestedConversationId = null;
     workspace.classList.add("hidden");
     workspace.classList.remove("has-conversation");
     document.querySelector("#app").classList.remove("im-mode");
@@ -1009,7 +1020,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     });
     listHost.addEventListener("click", (event) => {
       const button = event.target.closest("[data-im-conversation]");
-      if (button) void openConversation(button.dataset.imConversation).catch((error) => toast(error.message, "error"));
+      if (button) void openConversation(button.dataset.imConversation, true).catch((error) => toast(error.message, "error"));
     });
     document.querySelector("#im-send").addEventListener("click", () => void send());
     document.querySelector("#im-stop").addEventListener("click", async () => {
@@ -1026,6 +1037,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#im-details-close").addEventListener("click", () => document.querySelector("#im-details").classList.remove("is-open"));
     document.querySelector("#im-mobile-back").addEventListener("click", () => {
       conversationRequest += 1;
+      requestedConversationId = null;
       current = null;
       workspace.classList.remove("has-conversation");
       provisionalReplies.clear();
