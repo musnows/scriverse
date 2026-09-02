@@ -56,6 +56,7 @@ import {
   shouldRejectAgentToolCalls,
   shouldRejectGlobalToolCalls,
   structuralToolResultRecords,
+  type AgentToolResultPagination,
   withAgentToolCallQuotaNotice
 } from "./ai-tool-results.js";
 import { AiConnectivityTestGate, hashAiConnectivityConfiguration, type AiConnectivityTestClaim } from "./ai-connectivity-test.js";
@@ -1509,12 +1510,69 @@ const TOOL_CONTEXT_COMPACT_MAX_TOKENS = 1_024;
 const TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS = MIN_OUTPUT_RESERVE_TOKENS;
 const IMAGE_TOOL_MAX_BYTES = 30 * 1024 * 1024;
 const IMAGE_TOOL_MAX_OUTPUT_TOKENS = 8_192;
-const agentToolCursor = z.number().int().min(0).max(100_000).default(0);
+const LEGACY_AGENT_TOOL_CURSOR_MAX = 100_000;
+const AGENT_TOOL_CURSOR_INDEX_BASE = 1_000_000;
+const AGENT_TOOL_RECORD_MIN_CHARS = 128;
+const AGENT_TOOL_RECORD_MAX_CHARS = 6_000;
+const AGENT_TOOL_CURSOR_MAX = AGENT_TOOL_RECORD_MAX_CHARS * AGENT_TOOL_CURSOR_INDEX_BASE + AGENT_TOOL_CURSOR_INDEX_BASE - 1;
+const agentToolCursor = z.number().int().min(0).max(AGENT_TOOL_CURSOR_MAX).refine((value) => {
+  if (value <= LEGACY_AGENT_TOOL_CURSOR_MAX) return true;
+  const recordChars = Math.floor(value / AGENT_TOOL_CURSOR_INDEX_BASE);
+  return recordChars >= AGENT_TOOL_RECORD_MIN_CHARS && recordChars <= AGENT_TOOL_RECORD_MAX_CHARS;
+}, "Invalid result cursor.").default(0);
+
+type AgentToolCursorState = {
+  suppliedCursor: number;
+  recordIndex: number;
+  recordMaximumChars: number;
+};
+
+function resolveAgentToolCursor(cursor: number, defaultRecordMaximumChars: number): AgentToolCursorState {
+  if (cursor <= LEGACY_AGENT_TOOL_CURSOR_MAX) {
+    return { suppliedCursor: cursor, recordIndex: cursor, recordMaximumChars: defaultRecordMaximumChars };
+  }
+  return {
+    suppliedCursor: cursor,
+    recordIndex: cursor % AGENT_TOOL_CURSOR_INDEX_BASE,
+    recordMaximumChars: Math.floor(cursor / AGENT_TOOL_CURSOR_INDEX_BASE)
+  };
+}
+
+function encodeAgentToolCursor(recordMaximumChars: number, recordIndex: number): number {
+  if (recordIndex >= AGENT_TOOL_CURSOR_INDEX_BASE) throw new Error("Agent tool result cursor exceeded its record index limit.");
+  return recordMaximumChars * AGENT_TOOL_CURSOR_INDEX_BASE + recordIndex;
+}
+
+function paginateAgentToolResultRecords(
+  records: Record<string, unknown>[],
+  cursor: AgentToolCursorState,
+  buildResult: (page: Record<string, unknown>[], pagination: AgentToolResultPagination) => Record<string, unknown>,
+  maximumChars: number
+): Record<string, unknown> {
+  return paginateToolResultRecords(records, cursor.recordIndex, (page, pagination) => buildResult(page, {
+    cursor: cursor.suppliedCursor,
+    nextCursor: pagination.nextCursor === null
+      ? null
+      : encodeAgentToolCursor(cursor.recordMaximumChars, pagination.nextCursor),
+    maxChars: pagination.maxChars
+  }), maximumChars);
+}
+
 const storyIndexArguments = z.object({
-  offset: z.number().int().min(0).max(10_000).default(0),
+  chapterOffset: z.number().int().min(0).max(10_000).optional(),
+  // 兼容旧版工具调用；新工具定义只向模型暴露语义明确的 chapterOffset。
+  offset: z.number().int().min(0).max(10_000).optional(),
   limit: z.number().int().min(1).max(50).default(20),
   cursor: agentToolCursor
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (value.chapterOffset !== undefined && value.offset !== undefined) {
+    context.addIssue({ code: "custom", message: "chapterOffset and legacy offset cannot be used together." });
+  }
+}).transform(({ chapterOffset, offset, limit, cursor }) => ({
+  chapterOffset: chapterOffset ?? offset ?? 0,
+  limit,
+  cursor
+}));
 const readChaptersArguments = z.object({
   chapterIds: z.array(z.string().min(1).max(200)).min(1).max(3),
   include: z.enum(["summary", "content", "both"]).default("both"),
@@ -1588,9 +1646,16 @@ const askUserQuestionArguments = z.object({
 const agentToolCursorParameter = {
   type: "integer",
   minimum: 0,
-  maximum: 100_000,
+  maximum: AGENT_TOOL_CURSOR_MAX,
   default: 0,
-  description: "续页游标，取 pagination.nextCursor。"
+  description: "不透明的结果分片游标；原样传入 pagination.nextCursor 并保持查询参数不变。"
+};
+const roleplayMemoryCursorParameter = {
+  type: "integer",
+  minimum: 0,
+  maximum: LEGACY_AGENT_TOOL_CURSOR_MAX,
+  default: 0,
+  description: "记忆列表续页游标；取 pagination.nextCursor。"
 };
 
 function storyOrderingGuide(timelineAvailable: boolean): Record<string, unknown> {
@@ -1616,8 +1681,22 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "story_index",
-      description: "读取当前作品的基本信息，并按分卷剧情顺序分页列出卷章、章节概要和完整顺序元数据。latestChaptersByStructure 始终独立返回结构上最新的正文章节，不受当前章节分页影响；nextOffset 非空时表示还有后续章节页。有时间线读取权限时还返回已确认且可排序的关联事件。回答作品简介、最新剧情、情节先后、整体结构或定位章节时优先使用；不会返回正文。",
-      parameters: { type: "object", properties: { offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 50 }, cursor: agentToolCursorParameter }, additionalProperties: false }
+      description: "读取当前作品的基本信息，并按分卷剧情顺序分页列出卷章、章节概要和完整顺序元数据。latestChaptersByStructure 始终独立返回结构上最新的正文章节，不受当前章节分页影响；nextChapterOffset 非空时表示还有后续章节页。有时间线读取权限时还返回已确认且可排序的关联事件。回答作品简介、最新剧情、情节先后、整体结构或定位章节时优先使用；不会返回正文。",
+      parameters: {
+        type: "object",
+        properties: {
+          chapterOffset: {
+            type: "integer",
+            minimum: 0,
+            maximum: 10_000,
+            default: 0,
+            description: "章节页起点；换页时取 data.nextChapterOffset 并将 cursor 置 0。"
+          },
+          limit: { type: "integer", minimum: 1, maximum: 50, default: 20, description: "每个章节页最多读取的章节数。" },
+          cursor: agentToolCursorParameter
+        },
+        additionalProperties: false
+      }
     }
   },
   read_chapters: {
@@ -1736,7 +1815,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
         properties: {
           query: { type: "string", maxLength: 200, default: "" },
           categories: { type: "array", items: { type: "string", enum: ["event", "state", "relationship", "commitment", "knowledge", "scene"] }, maxItems: 6, default: [] },
-          cursor: agentToolCursorParameter
+          cursor: roleplayMemoryCursorParameter
         },
         additionalProperties: false
       }
@@ -7667,7 +7746,7 @@ export class AiManager {
           ...directImageToolGuidance,
           ...(enabledToolIds.includes("calculate_time") ? ["涉及两个日期之间的天数差时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录、最新剧情、情节先后或章节定位优先调用 story_index，并严格按返回的 storyOrdering 与 storyOrder 判断顺序；story_index.latestChaptersByStructure 是不受当前分页影响的结构最新章节，若要遍历完整目录则在 nextOffset 非空时用该值作为 offset 继续调用。按关键字定位正文段落时调用 grep；以 grep.latestOccurrences.byStructure 判断关键词的结构最后出现位置，以 grep.latestOccurrences.byTimelineTrack 中同一 trackId 的最大 timeSort 判断倒叙时间，不能跨轨道比较。已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；需要用自然语言整句跨正文和设定库查找原文时，才显式调用 semantic_search_story，并保留其 semantic 来源标记；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
+          "整体介绍、作品基本信息、目录、最新剧情、情节先后或章节定位优先调用 story_index，并严格按返回的 storyOrdering 与 storyOrder 判断顺序；story_index.latestChaptersByStructure 是不受当前分页影响的结构最新章节。遍历目录时，pagination.nextCursor 非空则保持 chapterOffset/limit 续读；否则用 nextChapterOffset 换页并将 cursor 置 0。按关键字定位正文段落时调用 grep；以 grep.latestOccurrences.byStructure 判断关键词的结构最后出现位置，以 grep.latestOccurrences.byTimelineTrack 中同一 trackId 的最大 timeSort 判断倒叙时间，不能跨轨道比较。已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；需要用自然语言整句跨正文和设定库查找原文时，才显式调用 semantic_search_story，并保留其 semantic 来源标记；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -8572,7 +8651,10 @@ export class AiManager {
     const name = toolCall.function.name;
     const calledAt = now();
     const conversationId = chatContext?.conversationId ?? null;
-    const maximumRecordChars = Math.max(128, Math.min(6_000, maximumResultChars - 500));
+    const defaultRecordMaximumChars = Math.max(
+      AGENT_TOOL_RECORD_MIN_CHARS,
+      Math.min(AGENT_TOOL_RECORD_MAX_CHARS, maximumResultChars - 500)
+    );
     let rawArguments: unknown = toolCall.function.arguments;
     if (typeof rawArguments === "string") {
       try {
@@ -8696,6 +8778,11 @@ export class AiManager {
       };
     }
     const args = parsed.data;
+    const suppliedCursor = typeof args === "object" && args !== null && "cursor" in args && typeof args.cursor === "number"
+      ? args.cursor
+      : 0;
+    const paginationCursor = resolveAgentToolCursor(suppliedCursor, defaultRecordMaximumChars);
+    const maximumRecordChars = paginationCursor.recordMaximumChars;
     const scopedChapterIds = scope && (scope.type === "chapter" || scope.type === "volume" || scope.type === "book")
       ? new Set(this.getScopeChapters(workId, scope).map((chapter) => String(chapter.id)))
       : null;
@@ -8793,7 +8880,7 @@ export class AiManager {
       }
       const sourceRecords = hasRequestedCharacters ? relationshipRecords : [...relatedCharacters.values()];
       const records = structuralToolResultRecords(sourceRecords, maximumRecordChars);
-      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+      const result = paginateAgentToolResultRecords(records, paginationCursor, (page, pagination) => ({
         ok: true,
         data: {
           identity: { name: character.name, gender: character.gender, code: character.code },
@@ -8866,7 +8953,7 @@ export class AiManager {
         }
       }
       const records = structuralToolResultRecords(sourceRecords, maximumRecordChars);
-      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+      const result = paginateAgentToolResultRecords(records, paginationCursor, (page, pagination) => ({
         ok: true,
         data: {
           identity: { name: character.name, gender: character.gender, code: character.code },
@@ -8988,7 +9075,7 @@ export class AiManager {
         }
       }
       const records = structuralToolResultRecords(memoryRecords, maximumRecordChars);
-      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+      const result = paginateAgentToolResultRecords(records, paginationCursor, (page, pagination) => ({
         ok: true,
         data: {
           identity: { name: character.name, gender: character.gender, code: character.code },
@@ -9165,7 +9252,7 @@ export class AiManager {
         }
       }
       const records = structuralToolResultRecords(memoryRecords, maximumRecordChars);
-      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+      const result = paginateAgentToolResultRecords(records, paginationCursor, (page, pagination) => ({
         ok: true,
         data: {
           identity: { name: character.name, gender: character.gender, code: character.code },
@@ -9189,10 +9276,10 @@ export class AiManager {
       };
     }
     if (name === "story_index") {
-      const { offset, limit, cursor } = args as z.infer<typeof storyIndexArguments>;
+      const { chapterOffset, limit, cursor } = args as z.infer<typeof storyIndexArguments>;
       const work = this.store.getWork(workId);
       const timelineAvailable = canReadWorkModule(permissions, "timeline");
-      const chapterPage = this.store.getStoryIndexChapterPage(workId, offset, limit, {
+      const chapterPage = this.store.getStoryIndexChapterPage(workId, chapterOffset, limit, {
         excludeAuthorNotes: true,
         includeTimeline: timelineAvailable
       });
@@ -9219,7 +9306,7 @@ export class AiManager {
             rule: "directoryOrder 非剧情顺序；相同 storyOrder 或 timeSort 不强行定序。"
           }
         : storyOrderingGuide(timelineAvailable);
-      const result = paginateToolResultRecords([...latestChapterRecords, ...workRecords, ...chapterRecords], cursor, (page, pagination) => {
+      const result = paginateAgentToolResultRecords([...latestChapterRecords, ...workRecords, ...chapterRecords], paginationCursor, (page, pagination) => {
         const pageWork = page.flatMap((record) => {
           if (record._toolResultSection !== "work") return [];
           const { _toolResultSection: _section, ...value } = record;
@@ -9235,7 +9322,14 @@ export class AiManager {
           const { _toolResultSection: _section, ...value } = record;
           return [value];
         });
-        const nextOffset = pagination.nextCursor === null && offset + limit < chapterPage.totalChapters ? offset + limit : null;
+        const nextChapterOffset = pagination.nextCursor === null && chapterOffset + limit < chapterPage.totalChapters
+          ? chapterOffset + limit
+          : null;
+        const continuationRule = pagination.nextCursor !== null
+          ? "当前章节页的结果仍有后续分片；使用 pagination.nextCursor 作为 cursor，并保持 chapterOffset 与 limit 不变。"
+          : nextChapterOffset !== null
+            ? "当前章节页的结果已读完；使用 nextChapterOffset 作为下一次 chapterOffset，并把 cursor 重置为 0。"
+            : "章节目录已全部读完。";
         return {
           ok: true,
           data: {
@@ -9244,14 +9338,16 @@ export class AiManager {
             storyOrdering: indexStoryOrdering,
             latestChaptersByStructure: pageLatestChapters,
             totalChapters: chapterPage.totalChapters,
-            offset,
+            chapterOffset,
             chapters: pageChapters,
-            nextOffset,
-            nextOffsetRule: compactOrdering
-              ? (nextOffset === null ? "end" : "use nextOffset")
-              : nextOffset === null
-                ? "当前章节页已到末尾。"
-                : "章节目录仍有后续；如需遍历完整目录，使用 nextOffset 作为下一次 story_index 的 offset。"
+            nextChapterOffset,
+            continuationRule: compactOrdering
+              ? (pagination.nextCursor !== null
+                  ? "use pagination.nextCursor with same chapterOffset/limit"
+                  : nextChapterOffset !== null
+                    ? "use nextChapterOffset and reset cursor"
+                    : "end")
+              : continuationRule
           },
           pagination
         };
@@ -9260,7 +9356,7 @@ export class AiManager {
         id: toolCall.id,
         name,
         calledAt,
-        arguments: { offset, limit, ...(cursor > 0 ? { cursor } : {}) },
+        arguments: { chapterOffset, limit, ...(cursor > 0 ? { cursor } : {}) },
         status: "completed",
         result
       };
@@ -9292,7 +9388,7 @@ export class AiManager {
         }
       });
       const records = structuralToolResultRecords(chapters, maximumRecordChars);
-      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+      const result = paginateAgentToolResultRecords(records, paginationCursor, (page, pagination) => ({
         ok: true,
         data: { storyOrdering: storyOrderingGuide(timelineAvailable), chapters: page },
         pagination
@@ -9342,9 +9438,9 @@ export class AiManager {
             rule: "directoryOrder 非剧情顺序；相同 storyOrder 或 timeSort 表示并行、同时或未知。"
           }
         : storyOrderingGuide(timelineAvailable);
-      const result = paginateToolResultRecords(
+      const result = paginateAgentToolResultRecords(
         [...latestStructureRecords, ...latestTimelineRecords, ...matchRecords],
-        cursor,
+        paginationCursor,
         (page, pagination) => {
           const section = (name: string): Record<string, unknown>[] => page.flatMap((record) => {
             if (record._toolResultSection !== name) return [];
@@ -9425,7 +9521,7 @@ export class AiManager {
             rule: "orderEligible=false 不参与时间比较；directoryOrder 非剧情顺序。"
           }
         : storyOrderingGuide(canReadWorkModule(permissions, "timeline"));
-      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+      const result = paginateAgentToolResultRecords(records, paginationCursor, (page, pagination) => ({
         ok: true,
         data: {
           query,
@@ -9465,7 +9561,7 @@ export class AiManager {
         });
         const matches = Array.isArray(search.results) ? search.results as Record<string, unknown>[] : [];
         const records = structuralToolResultRecords(matches, maximumRecordChars);
-        const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+        const result = paginateAgentToolResultRecords(records, paginationCursor, (page, pagination) => ({
           ok: search.status === "ready" || search.status === "degraded",
           data: {
             query,
@@ -9524,7 +9620,7 @@ export class AiManager {
         }
       });
       const records = structuralToolResultRecords(sections, maximumRecordChars);
-      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+      const result = paginateAgentToolResultRecords(records, paginationCursor, (page, pagination) => ({
         ok: true,
         data: { sections: page },
         pagination
@@ -9549,7 +9645,7 @@ export class AiManager {
         };
       });
       const records = structuralToolResultRecords(matches, maximumRecordChars);
-      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+      const result = paginateAgentToolResultRecords(records, paginationCursor, (page, pagination) => ({
         ok: true,
         data: {
           meaning: "这些内容是作者记录的未确认临时想法，可能采用，也可能永远不会写入正文或正式设定；不得视为故事事实。",
