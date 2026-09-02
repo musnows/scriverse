@@ -601,8 +601,25 @@ describe("全局 IM API", () => {
     expect(listedConversations.length).toBeGreaterThanOrEqual(4);
     expect(allSpy).toHaveBeenCalledTimes(7);
     expect(getSpy).not.toHaveBeenCalled();
+    const scopedListQueries = allSpy.mock.calls
+      .map(([sql]) => String(sql))
+      .filter((sql) => sql.includes("WITH visible_conversations"));
+    expect(scopedListQueries).toHaveLength(3);
     allSpy.mockRestore();
     getSpy.mockRestore();
+    const plans = scopedListQueries.map((sql) => runtime.database.all(
+      `EXPLAIN QUERY PLAN ${sql}`,
+      owner.user.userId
+    ).map((row) => String(row.detail)));
+    expect(plans[0]).toEqual(expect.arrayContaining([
+      expect.stringContaining("idx_im_messages_conversation")
+    ]));
+    expect(plans[1]).toEqual(expect.arrayContaining([
+      expect.stringContaining("idx_im_human_memberships_conversation")
+    ]));
+    expect(plans[2]).toEqual(expect.arrayContaining([
+      expect.stringContaining("idx_im_character_memberships_conversation")
+    ]));
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 

@@ -915,12 +915,13 @@ export class ImService {
       if (!viewerByConversation.has(conversationId)) viewerByConversation.set(conversationId, membership);
     }
     const latestByConversation = new Map(this.db.all(
-      `SELECT message.conversation_id, MAX(message.sequence) AS sequence
-       FROM im_messages message
-       WHERE EXISTS (
-         SELECT 1 FROM im_human_memberships viewer
-         WHERE viewer.conversation_id = message.conversation_id AND viewer.user_id = ?
-       ) GROUP BY message.conversation_id`,
+      `WITH visible_conversations AS (
+         SELECT DISTINCT conversation_id FROM im_human_memberships WHERE user_id = ?
+       )
+       SELECT visible.conversation_id, MAX(message.sequence) AS sequence
+       FROM visible_conversations visible
+       JOIN im_messages message ON message.conversation_id = visible.conversation_id
+       GROUP BY visible.conversation_id`,
       userId
     ).map((row) => [requiredString(row.conversation_id), Number(row.sequence)]));
     const unreadByConversation = new Map(this.db.all(
@@ -946,24 +947,27 @@ export class ImService {
       userId
     ).map((row) => [requiredString(row.conversation_id), Number(row.count)]));
     const humanRows = this.db.all(
-      `SELECT membership.id AS membership_id, membership.conversation_id, membership.user_id, membership.role,
+      `WITH visible_conversations AS (
+         SELECT DISTINCT conversation_id FROM im_human_memberships WHERE user_id = ?
+       )
+       SELECT membership.id AS membership_id, membership.conversation_id, membership.user_id, membership.role,
               membership.joined_sequence, membership.left_sequence, membership.joined_at, membership.left_at,
               user.username, user.display_name, user.avatar_sha256
-       FROM im_human_memberships membership JOIN users user ON user.id = membership.user_id
-       WHERE EXISTS (
-         SELECT 1 FROM im_human_memberships viewer
-         WHERE viewer.conversation_id = membership.conversation_id AND viewer.user_id = ?
-       ) ORDER BY membership.conversation_id, membership.joined_at, membership.id`,
+       FROM visible_conversations visible
+       JOIN im_human_memberships membership ON membership.conversation_id = visible.conversation_id
+       JOIN users user ON user.id = membership.user_id
+       ORDER BY membership.conversation_id, membership.joined_at, membership.id`,
       userId
     );
     const characterRows = this.db.all(
-      `SELECT membership.*, avatar.sha256 AS avatar_sha256
-       FROM im_character_memberships membership
+      `WITH visible_conversations AS (
+         SELECT DISTINCT conversation_id FROM im_human_memberships WHERE user_id = ?
+       )
+       SELECT membership.*, avatar.sha256 AS avatar_sha256
+       FROM visible_conversations visible
+       JOIN im_character_memberships membership ON membership.conversation_id = visible.conversation_id
        LEFT JOIN character_avatars avatar ON avatar.character_id = membership.character_id
-       WHERE EXISTS (
-         SELECT 1 FROM im_human_memberships viewer
-         WHERE viewer.conversation_id = membership.conversation_id AND viewer.user_id = ?
-       ) ORDER BY membership.conversation_id, membership.joined_at, membership.id`,
+       ORDER BY membership.conversation_id, membership.joined_at, membership.id`,
       userId
     );
     const humanRowsByConversation = new Map<string, Record<string, unknown>[]>();
