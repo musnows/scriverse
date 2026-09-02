@@ -1043,7 +1043,11 @@ export class S3BackupManager {
     }
     const characterAvatarStorage = this.characterAvatarStorage;
     for (const row of this.database.all(
-      "SELECT storage_key, mime_type, sha256 FROM character_avatars ORDER BY storage_key"
+      `SELECT storage_key, mime_type, sha256 FROM character_avatars
+       UNION
+       SELECT storage_key, mime_type, sha256 FROM im_avatar_versions
+       WHERE participant_kind = 'character' AND storage_key IS NOT NULL AND storage_key <> ''
+       ORDER BY storage_key`
     )) {
       const storageKey = requiredString(row, "storage_key");
       const contentType = requiredString(row, "mime_type");
