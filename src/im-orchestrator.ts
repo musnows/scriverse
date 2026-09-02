@@ -740,6 +740,7 @@ export class ImOrchestrator {
         "IM_AI_EMPTY_REPLY",
         "IM_AI_REPLY_TOO_LONG",
         "IM_AI_MENTION_LIMIT_EXCEEDED",
+        "IM_AI_MENTION_TARGET_INVALID",
         "IM_AI_EMPTY_COMPACTION",
         "AI_CALL_FAILED"
       ]);
@@ -1066,6 +1067,9 @@ export class ImOrchestrator {
           avatarSha256: optionalString(row.avatar_sha256)
         } });
     }
+    if (result.length !== mentions.length) {
+      throw new AppError(502, "IM_AI_MENTION_TARGET_INVALID", "AI 回复包含已经离开或不可用的 mention 目标，未写入会话");
+    }
     return result;
   }
 
@@ -1208,6 +1212,7 @@ export class ImOrchestrator {
           if (parseImMentions(content).length > IM_MAX_MENTIONS_PER_MESSAGE) {
             throw new AppError(502, "IM_AI_MENTION_LIMIT_EXCEEDED", `AI 回复超过 ${IM_MAX_MENTIONS_PER_MESSAGE} 个 mention，未写入会话`);
           }
+          this.validatedOutputMentions(requiredString(chain.conversation_id), content);
         },
         turnId
       );

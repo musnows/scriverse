@@ -1559,6 +1559,52 @@ describe("IM AI 调度", () => {
     expect(fallbackCalls).toBe(1);
   });
 
+  it("AI 输出失效 mention 时切换 fallback", async () => {
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-output-invalid-mention-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (body.model === "primary-model") {
+          primaryCalls += 1;
+          return completion("mention://character/missing-character 这条提及无效。", body.stream === true);
+        }
+        fallbackCalls += 1;
+        return completion("fallback 不再包含失效提及。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "output_invalid_mention_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "输出失效 Mention 来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "输出失效 Mention 角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "验证输出失效 mention。",
+      requestId: "im-output-invalid-mention-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "completed", model_stage: "fallback", generated_count: 1 });
+    expect(primaryCalls).toBe(1);
+    expect(fallbackCalls).toBe(1);
+    expect(runtime.database.get(
+      "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      String(chain.id)
+    )).toEqual({ content: "fallback 不再包含失效提及。" });
+  });
+
   it("主模型回复空白时切换 fallback 生成有效消息", async () => {
     let primaryCalls = 0;
     let fallbackCalls = 0;
