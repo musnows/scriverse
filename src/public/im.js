@@ -869,6 +869,13 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         }).join("")
       : `<p class="im-empty">${emptyText}</p>`;
     bindImAvatarFallbacks(host);
+    syncMemberAddSelection();
+  }
+
+  function syncMemberAddSelection() {
+    document.querySelectorAll("#im-member-add-options [data-im-member-add-candidate]").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.imMemberAddCandidate === memberAddSelectedId));
+    });
     const submit = document.querySelector("#im-member-add-submit");
     submit.disabled = !memberAddSelectedId;
     submit.textContent = memberAddKind === "character" ? "添加角色" : "添加用户";
@@ -1415,7 +1422,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const button = event.target.closest("[data-im-member-add-candidate]");
       if (!button) return;
       memberAddSelectedId = button.dataset.imMemberAddCandidate;
-      renderMemberAddOptions();
+      syncMemberAddSelection();
     });
     listHost.addEventListener("click", (event) => {
       if (event.target.closest("[data-im-load-more-conversations]")) {
