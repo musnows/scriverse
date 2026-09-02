@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
 import { runWithRequestActor, type RequestActor } from "../../src/request-context.js";
 
@@ -608,6 +608,8 @@ describe("IM AI 调度", () => {
 
   it("主模型和 fallback 都返回空白摘要时不推进压缩游标", async () => {
     let replyPrompt = "";
+    let primaryCompactCalls = 0;
+    let fallbackCompactCalls = 0;
     runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "im-empty-compaction-secret-with-enough-length",
@@ -616,7 +618,11 @@ describe("IM AI 调度", () => {
         const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
         const messages = body.messages as Array<{ role: string; content: string }>;
         const compact = messages.some((message) => message.content.includes("只把已送达给当前角色的 IM 历史压缩"));
-        if (compact) return completion(" \n ", body.stream === true);
+        if (compact) {
+          if (body.model === "primary-model") primaryCompactCalls += 1;
+          else fallbackCompactCalls += 1;
+          return completion(" \n ", body.stream === true);
+        }
         replyPrompt = messages.map((message) => message.content).join("\n");
         return completion("压缩失败后仍正常回复。", body.stream === true);
       },
@@ -631,7 +637,7 @@ describe("IM AI 调度", () => {
     runtime.im.updateSettings(owner.userId, {
       primaryModelId: models.primaryModelId,
       fallbackModelId: models.fallbackModelId,
-      retryCount: 1
+      retryCount: 3
     });
     const group = runtime.im.createGroup(owner, {
       title: "空白压缩群",
@@ -655,6 +661,8 @@ describe("IM AI 调度", () => {
     expect(chain.generated_count).toBe(1);
     expect(replyPrompt).toContain("空白压缩公告 1");
     expect(replyPrompt).toContain("空白压缩公告 81");
+    expect(primaryCompactCalls).toBe(3);
+    expect(fallbackCompactCalls).toBe(3);
     expect(runtime.database.get(
       `SELECT COUNT(*) AS count FROM im_character_contexts context
        JOIN im_character_memberships membership ON membership.id = context.character_membership_id
@@ -883,13 +891,49 @@ describe("IM AI 调度", () => {
     ]);
   });
 
+  it("未知模型异常不会把内部错误文本写入链路或 turn", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-unknown-error-redaction-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "unknown_error_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "未知异常来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "未知异常角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    vi.spyOn(runtime.ai, "generateIm").mockRejectedValue(new Error("sensitive /internal/database/path"));
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "触发未知异常。",
+      requestId: "im-unknown-error-redaction-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+    const turn = runtime.database.get("SELECT failure FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'", String(chain.id));
+
+    expect(chain).toMatchObject({ status: "failed", error_code: "IM_AI_CHAIN_FAILED", error_message: "IM AI 交流链失败" });
+    expect(turn).toEqual({ failure: "IM_AI_CHAIN_FAILED: IM AI 交流链失败" });
+    expect(JSON.stringify({ chain, turn })).not.toContain("sensitive");
+  });
+
   it("拒绝超过消息存储上限的角色回复并保留明确错误", async () => {
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
     runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "im-reply-length-limit-secret-with-enough-length",
       serveUi: false,
       fetchImpl: async (_url, init) => {
         const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (body.model === "primary-model") primaryCalls += 1;
+        else fallbackCalls += 1;
         return completion("长".repeat(20_001), body.stream === true);
       },
       aiRetrySleep: async () => undefined
@@ -903,7 +947,7 @@ describe("IM AI 调度", () => {
     runtime.im.updateSettings(owner.userId, {
       primaryModelId: models.primaryModelId,
       fallbackModelId: models.fallbackModelId,
-      retryCount: 1
+      retryCount: 3
     });
     const direct = runtime.im.createDirect(owner, String(character.id));
     const sent = runtime.im.sendMessage(owner, String(direct.id), {
@@ -915,10 +959,12 @@ describe("IM AI 调度", () => {
     const chain = await waitForChain(runtime, chainId);
 
     expect(chain).toMatchObject({ status: "failed", generated_count: 0, error_code: "IM_AI_REPLY_TOO_LONG" });
+    expect(primaryCalls).toBe(3);
+    expect(fallbackCalls).toBe(3);
     expect(runtime.database.get(
-      "SELECT failure FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
+      "SELECT failure, attempt_count FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
       chainId
-    )).toEqual({ failure: expect.stringContaining("IM_AI_REPLY_TOO_LONG") });
+    )).toEqual({ failure: expect.stringContaining("IM_AI_REPLY_TOO_LONG"), attempt_count: 6 });
     expect(runtime.database.get(
       "SELECT COUNT(*) AS count FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
       chainId
@@ -1015,6 +1061,49 @@ describe("IM AI 调度", () => {
       "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
       String(chain.id)
     )).toEqual({ content: "fallback 有效回复。" });
+  });
+
+  it("主模型和 fallback 空白回复各自耗尽配置失败次数", async () => {
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-empty-reply-attempts-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (body.model === "primary-model") primaryCalls += 1;
+        else fallbackCalls += 1;
+        return completion(" \n ", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "empty_reply_attempts_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "空白回复次数来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "空白回复次数角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 3
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "验证空白回复失败次数。",
+      requestId: "im-empty-reply-attempts-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "failed", model_stage: "fallback", error_code: "AI_CALL_FAILED" });
+    expect(primaryCalls).toBe(3);
+    expect(fallbackCalls).toBe(3);
+    expect(runtime.database.get(
+      "SELECT attempt_count FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
+      String(chain.id)
+    )).toEqual({ attempt_count: 6 });
   });
 
   it("一个角色回答失败时继续执行同批其他角色", async () => {

@@ -661,7 +661,7 @@ export class ImOrchestrator {
       const details = errorDetails(error);
       const source = error instanceof AppError
         ? error
-        : new AppError(502, "IM_AI_CHAIN_FAILED", error instanceof Error ? error.message : "IM AI 交流链失败");
+        : new AppError(502, "IM_AI_CHAIN_FAILED", "IM AI 交流链失败");
       return new AppError(source.status, source.code, source.message, {
         ...details,
         callId: callIds.at(-1) ?? details.callId,
@@ -675,10 +675,17 @@ export class ImOrchestrator {
     };
     const invokeValidatedModel = async (modelId: string, stage: "primary" | "fallback"): Promise<InvocationResult> => {
       const semanticAttemptLimit = Math.max(1, Number(chain.retry_count));
+      const retryableOutputCodes = new Set([
+        "IM_JUDGE_INVALID_SCORE",
+        "IM_AI_EMPTY_REPLY",
+        "IM_AI_REPLY_TOO_LONG",
+        "IM_AI_EMPTY_COMPACTION",
+        "AI_CALL_FAILED"
+      ]);
       const started = process.hrtime.bigint();
       const callIds: string[] = [];
       let attemptCount = 0;
-      for (let semanticAttempt = 1; attemptCount < semanticAttemptLimit; semanticAttempt += 1) {
+      while (attemptCount < semanticAttemptLimit) {
         try {
           const result = await invokeModel(modelId, stage, semanticAttemptLimit - attemptCount);
           return {
@@ -690,8 +697,10 @@ export class ImOrchestrator {
         } catch (error) {
           const details = errorDetails(error);
           for (const callId of errorCallIds(error)) if (!callIds.includes(callId)) callIds.push(callId);
-          attemptCount += Math.max(0, Number(details.attemptCount) || 0);
-          if (error instanceof AppError && error.code === "IM_JUDGE_INVALID_SCORE" && semanticAttempt < semanticAttemptLimit) continue;
+          const consumedAttempts = Math.max(0, Number(details.attemptCount) || 0);
+          attemptCount += consumedAttempts;
+          if (error instanceof AppError && retryableOutputCodes.has(error.code)
+            && consumedAttempts > 0 && attemptCount < semanticAttemptLimit) continue;
           throw enrichedError(error, stage, callIds, attemptCount, 0, modelId);
         }
       }
