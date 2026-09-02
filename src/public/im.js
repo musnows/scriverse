@@ -581,15 +581,22 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     return array(current?.participants?.characters).filter((item) => !item.leftAt && item.status === "active");
   }
 
-  function captureGroupSettingsDraft() {
+  function readGroupSettingsForm() {
     const form = document.querySelector("#im-group-settings");
-    if (!form || !current?.id || current.kind !== "group" || current.ownerUserId !== currentUserId()) return null;
-    const draft = {
+    if (!form) return null;
+    return {
       title: document.querySelector("#im-detail-title").value,
       replyMode: document.querySelector("#im-detail-mode").value,
       responseThreshold: Number(document.querySelector("#im-detail-threshold").value),
       maxAiMessages: Number(document.querySelector("#im-detail-limit").value)
     };
+  }
+
+  function captureGroupSettingsDraft() {
+    const form = document.querySelector("#im-group-settings");
+    if (!form || !current?.id || current.kind !== "group" || current.ownerUserId !== currentUserId()) return null;
+    const draft = readGroupSettingsForm();
+    if (!draft) return null;
     if (sameImGroupSettings(draft, current)) groupSettingsDrafts.delete(current.id);
     else groupSettingsDrafts.set(current.id, draft);
     const control = form.contains(document.activeElement) ? document.activeElement : null;
@@ -809,7 +816,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   async function openConversation(conversationId, userInitiated = false) {
-    const detailsFocus = captureGroupSettingsDraft();
+    captureGroupSettingsDraft();
     if (current?.id && current.id !== conversationId) {
       if (serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
       else conversationDrafts.delete(current.id);
@@ -843,6 +850,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       if (serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
       else conversationDrafts.delete(current.id);
     }
+    const detailsFocus = captureGroupSettingsDraft();
     current = nextConversation;
     const savedGroupSettings = groupSettingsDrafts.get(conversationId);
     if (savedGroupSettings && sameImGroupSettings(savedGroupSettings, nextConversation)) groupSettingsDrafts.delete(conversationId);
