@@ -1211,6 +1211,16 @@ export class ImOrchestrator {
         },
         turnId
       );
+      if (signal.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : new AppError(499, "IM_CHAIN_CANCELLED", "IM 交流链已取消");
+      }
+      const currentChain = this.chainRow(requiredString(chain.id));
+      const currentConversation = this.conversationRow(requiredString(chain.conversation_id));
+      if (requiredString(currentChain.status) !== "running"
+        || requiredString(currentConversation.status) !== "active"
+        || Number(currentConversation.context_epoch) !== Number(sourceMessage.context_epoch)) {
+        throw new AppError(499, "IM_CHAIN_CANCELLED", "IM 交流链已取消或上下文已经变化");
+      }
       if (!result.content.trim()) throw new AppError(502, "IM_AI_EMPTY_REPLY", "AI 返回了空消息");
       if (Array.from(result.content).length > IM_MESSAGE_MAX_CHARACTERS) {
         throw new AppError(502, "IM_AI_REPLY_TOO_LONG", `AI 回复超过 ${IM_MESSAGE_MAX_CHARACTERS} 字符，未写入会话`);

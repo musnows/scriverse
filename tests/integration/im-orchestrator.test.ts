@@ -344,6 +344,53 @@ describe("IM AI 调度", () => {
     });
   });
 
+  it("取消链后忽略不遵守 abort 的迟到模型结果", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-late-cancel-result-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        markStarted?.();
+        await responseGate;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return completion("已取消链的迟到结果。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "late_cancel_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "迟到取消作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "迟到取消角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "开始后立即取消。",
+      requestId: "im-late-cancel-result-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    runtime.imOrchestrator.cancelConversation(String(direct.id), "manual_stop");
+    responseControl.release?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(runtime.database.get("SELECT status FROM im_chains WHERE id = ?", String((sent.chain as Record<string, unknown>).id)))
+      .toEqual({ status: "cancelled" });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_messages WHERE conversation_id = ? AND sender_kind = 'character'",
+      String(direct.id)
+    )).toEqual({ count: 0 });
+  });
+
   it("流式响应中断后按配置次数重试并只重置当前 turn", async () => {
     const encoder = new TextEncoder();
     let primaryCalls = 0;
