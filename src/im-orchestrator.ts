@@ -1,5 +1,5 @@
 import { AppError, notFound } from "./errors.js";
-import type { AiManager, ImAiPromptInput } from "./ai.js";
+import { estimateAiTokens, type AiManager, type ImAiPromptInput } from "./ai.js";
 import type { Store } from "./store.js";
 import type { AuthUser, UserAuthService } from "./user-auth.js";
 import { runWithRequestActor } from "./request-context.js";
@@ -31,6 +31,8 @@ type InvocationResult = {
 const IM_USER_CHAIN_CONCURRENCY = 3;
 const IM_MESSAGE_MAX_CHARACTERS = 20_000;
 const IM_EVENT_CONNECTION_LIMIT_PER_USER = 5;
+const IM_PARTICIPANT_CONTEXT_MAX_TOKENS = 2_048;
+const IM_CONTEXT_FIXED_RESERVE_TOKENS = 8_192;
 
 function requiredString(value: unknown): string {
   return typeof value === "string" ? value : String(value ?? "");
@@ -323,7 +325,7 @@ export class ImOrchestrator {
     membership: Record<string, unknown>,
     conversation: Record<string, unknown>,
     throughSequence: number,
-    maximumHistoryChars: number
+    maximumHistoryTokens: number
   ): { history: string; summary: string } {
     const membershipId = requiredString(membership.id);
     const contextEpoch = Number(conversation.context_epoch);
@@ -346,25 +348,36 @@ export class ImOrchestrator {
       throughSequence
     );
     const lines: string[] = [];
-    let historyLength = 0;
+    let historyTokens = 0;
     for (const row of rows) {
       const line = this.historyLine(row);
-      const additionLength = line.length + (lines.length ? 2 : 0);
-      if (historyLength + additionLength > maximumHistoryChars) break;
+      const additionTokens = estimateAiTokens(`${lines.length ? "\n\n" : ""}${line}`);
+      if (historyTokens + additionTokens > maximumHistoryTokens) break;
       lines.unshift(line);
-      historyLength += additionLength;
+      historyTokens += additionTokens;
     }
     return { history: lines.join("\n\n"), summary: requiredString(context?.summary) };
   }
 
-  private maximumHistoryChars(chain: Record<string, unknown>): number {
+  private minimumContextWindow(chain: Record<string, unknown>): number {
     const modelIds = [optionalString(chain.primary_model_id), optionalString(chain.fallback_model_id)]
       .filter((modelId): modelId is string => Boolean(modelId));
     const contextWindows = modelIds.map((modelId) => Number(
       this.db.get("SELECT context_window FROM models WHERE id = ?", modelId)?.context_window ?? 128_000
     ));
-    const minimumContextWindow = contextWindows.length ? Math.min(...contextWindows) : 128_000;
-    return Math.max(IM_MESSAGE_MAX_CHARACTERS + 512, Math.floor(minimumContextWindow * 2));
+    return contextWindows.length ? Math.min(...contextWindows) : 128_000;
+  }
+
+  private maximumHistoryTokens(chain: Record<string, unknown>, participantContext: string): number {
+    const participantTokens = estimateAiTokens(participantContext);
+    if (participantTokens > IM_PARTICIPANT_CONTEXT_MAX_TOKENS) {
+      throw new AppError(
+        409,
+        "IM_PARTICIPANT_CONTEXT_TOO_LARGE",
+        "当前群成员身份信息过长，无法在所选模型上下文内完整暴露；请减少成员或缩短身份信息"
+      );
+    }
+    return Math.max(1, this.minimumContextWindow(chain) - IM_CONTEXT_FIXED_RESERVE_TOKENS - participantTokens);
   }
 
   private historyLine(row: Record<string, unknown>): string {
@@ -381,74 +394,90 @@ export class ImOrchestrator {
   ): Promise<void> {
     const conversation = this.conversationRow(requiredString(chain.conversation_id));
     const contextEpoch = Number(conversation.context_epoch);
-    const context = this.db.get(
-      `SELECT summary, summarized_through_sequence FROM im_character_contexts
-       WHERE character_membership_id = ? AND context_epoch = ?`,
-      requiredString(membership.id),
-      contextEpoch
-    );
-    const summarizedThroughSequence = Number(context?.summarized_through_sequence ?? 0);
-    const rows = this.db.all(
-      `SELECT message.* FROM im_message_deliveries delivery
-       JOIN im_messages message ON message.id = delivery.message_id
-       WHERE delivery.character_membership_id = ? AND message.context_epoch = ?
-         AND message.sequence > ? AND message.sequence <= ?
-       ORDER BY message.sequence`,
-      requiredString(membership.id),
-      contextEpoch,
-      summarizedThroughSequence,
-      Number(sourceMessage.sequence)
-    );
-    if (rows.length <= 60) return;
-    const historyLimit = this.maximumHistoryChars(chain);
-    const compactCandidates = rows.slice(0, Math.max(0, rows.length - 20));
-    const compactLines: string[] = [];
-    let compactLength = 0;
-    let compactThrough = summarizedThroughSequence;
-    for (const row of compactCandidates) {
-      const line = this.historyLine(row);
-      const additionLength = line.length + (compactLines.length ? 2 : 0);
-      if (compactLength + additionLength > historyLimit) break;
-      compactLines.push(line);
-      compactLength += additionLength;
-      compactThrough = Number(row.sequence);
-    }
-    if (compactThrough <= summarizedThroughSequence) return;
-    const compactHistory = compactLines.join("\n\n");
-    const turnId = this.createTurn(requiredString(chain.id), requiredString(membership.id), "compact");
-    try {
-      const result = await this.invoke(
-        chain,
-        membership,
-        "compact",
-        `把已送达历史压缩为当前角色可继续使用的第一人称 IM 记忆；压缩到消息序号 ${compactThrough}，只保留事实、关系变化、承诺、未决事项和重要称呼。`,
-        sourceMessage,
-        signal,
-        undefined,
-        (content) => {
-          if (!content.trim()) throw new AppError(502, "IM_AI_EMPTY_COMPACTION", "AI 返回了空白的角色上下文摘要");
-        },
-        undefined,
-        { history: compactHistory, summary: requiredString(context?.summary) }
+    const senderSnapshot = json<Record<string, unknown>>(requiredString(sourceMessage.sender_snapshot_json), {});
+    const participantContext = this.participantContext(requiredString(conversation.id), senderSnapshot);
+    const historyLimit = this.maximumHistoryTokens(chain, participantContext);
+    for (;;) {
+      const context = this.db.get(
+        `SELECT summary, summarized_through_sequence FROM im_character_contexts
+         WHERE character_membership_id = ? AND context_epoch = ?`,
+        requiredString(membership.id),
+        contextEpoch
       );
-      this.db.run(
-        `INSERT INTO im_character_contexts (
-           character_membership_id, context_epoch, summary, summarized_through_sequence, updated_at
-         ) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(character_membership_id, context_epoch) DO UPDATE SET
-           summary = excluded.summary,
-           summarized_through_sequence = excluded.summarized_through_sequence,
-           updated_at = excluded.updated_at`,
+      const summarizedThroughSequence = Number(context?.summarized_through_sequence ?? 0);
+      const rows = this.db.all(
+        `SELECT message.* FROM im_message_deliveries delivery
+         JOIN im_messages message ON message.id = delivery.message_id
+         WHERE delivery.character_membership_id = ? AND message.context_epoch = ?
+           AND message.sequence > ? AND message.sequence <= ?
+         ORDER BY message.sequence`,
         requiredString(membership.id),
         contextEpoch,
-        result.content.slice(0, 20_000),
-        compactThrough,
-        now()
+        summarizedThroughSequence,
+        Number(sourceMessage.sequence)
       );
-      this.finishTurn(turnId, result);
-    } catch (error) {
-      this.failTurn(turnId, error);
-      if (signal.aborted) throw error;
+      const totalTokens = rows.reduce((total, row) => total + estimateAiTokens(`${total ? "\n\n" : ""}${this.historyLine(row)}`), 0);
+      if (rows.length <= 60 && totalTokens <= historyLimit) return;
+      let retainedTokens = 0;
+      let compactCandidateCount = rows.length;
+      for (let index = rows.length - 1; index >= 0; index -= 1) {
+        const lineTokens = estimateAiTokens(`${retainedTokens ? "\n\n" : ""}${this.historyLine(rows[index] ?? {})}`);
+        if (retainedTokens + lineTokens > historyLimit) break;
+        retainedTokens += lineTokens;
+        compactCandidateCount = index;
+      }
+      if (compactCandidateCount <= 0 && rows.length > 60) compactCandidateCount = Math.max(1, rows.length - 20);
+      const compactCandidates = rows.slice(0, Math.max(1, compactCandidateCount));
+      const compactLines: string[] = [];
+      let compactTokens = 0;
+      let compactThrough = summarizedThroughSequence;
+      for (const row of compactCandidates) {
+        const line = this.historyLine(row);
+        const additionTokens = estimateAiTokens(`${compactLines.length ? "\n\n" : ""}${line}`);
+        if (compactTokens + additionTokens > historyLimit) break;
+        compactLines.push(line);
+        compactTokens += additionTokens;
+        compactThrough = Number(row.sequence);
+      }
+      if (compactThrough <= summarizedThroughSequence) {
+        throw new AppError(409, "IM_MESSAGE_CONTEXT_TOO_LARGE", "单条 IM 消息超过所选模型可安全处理的上下文预算");
+      }
+      const turnId = this.createTurn(requiredString(chain.id), requiredString(membership.id), "compact");
+      try {
+        const result = await this.invoke(
+          chain,
+          membership,
+          "compact",
+          `把已送达历史压缩为当前角色可继续使用的第一人称 IM 记忆；压缩到消息序号 ${compactThrough}，只保留事实、关系变化、承诺、未决事项和重要称呼。`,
+          sourceMessage,
+          signal,
+          undefined,
+          (content) => {
+            if (!content.trim()) throw new AppError(502, "IM_AI_EMPTY_COMPACTION", "AI 返回了空白的角色上下文摘要");
+          },
+          undefined,
+          { history: compactLines.join("\n\n"), summary: requiredString(context?.summary) }
+        );
+        this.db.run(
+          `INSERT INTO im_character_contexts (
+             character_membership_id, context_epoch, summary, summarized_through_sequence, updated_at
+           ) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(character_membership_id, context_epoch) DO UPDATE SET
+             summary = excluded.summary,
+             summarized_through_sequence = excluded.summarized_through_sequence,
+             updated_at = excluded.updated_at`,
+          requiredString(membership.id),
+          contextEpoch,
+          result.content.slice(0, 20_000),
+          compactThrough,
+          now()
+        );
+        this.finishTurn(turnId, result);
+      } catch (error) {
+        this.failTurn(turnId, error);
+        if (signal.aborted) throw error;
+        return;
+      }
     }
   }
 
@@ -528,14 +557,15 @@ export class ImOrchestrator {
     const conversation = this.conversationRow(requiredString(chain.conversation_id));
     const authorization = this.assertCharacterAuthorization(chain, membership);
     const snapshot = json<Record<string, unknown>>(requiredString(sourceMessage.sender_snapshot_json), {});
-    const maximumHistoryChars = this.maximumHistoryChars(chain);
-    const context = this.characterHistory(membership, conversation, Number(sourceMessage.sequence), maximumHistoryChars);
+    const participantContext = this.participantContext(requiredString(conversation.id), snapshot);
+    const maximumHistoryTokens = this.maximumHistoryTokens(chain, participantContext);
+    const context = this.characterHistory(membership, conversation, Number(sourceMessage.sequence), maximumHistoryTokens);
     const common = {
       workId: authorization.workId,
       characterId: authorization.characterId,
       kind,
       instruction,
-      participantContext: this.participantContext(requiredString(conversation.id), snapshot),
+      participantContext,
       history: historyOverride?.history ?? context.history,
       summary: historyOverride?.summary ?? context.summary,
       characterPrompt: authorization.initiatorPermissions && canReadWorkModule(authorization.initiatorPermissions, "characters")

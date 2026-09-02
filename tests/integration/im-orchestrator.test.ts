@@ -693,6 +693,106 @@ describe("IM AI 调度", () => {
     )).toEqual({ summarized_through_sequence: 42 });
   });
 
+  it("最小上下文模型会先分批压缩多条长中文消息", async () => {
+    const compactPrompts: string[] = [];
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-long-token-budget-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const prompt = messages.map((message) => message.content).join("\n");
+        if (prompt.includes("只把已送达给当前角色的 IM 历史压缩")) {
+          compactPrompts.push(prompt);
+          return completion(`分批摘要 ${compactPrompts.length}`, false);
+        }
+        return completion("长消息分批压缩后回复。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "long_token_budget_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    runtime.database.run("UPDATE models SET context_window = 32768 WHERE id IN (?, ?)", models.primaryModelId, models.fallbackModelId);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "长消息 Token 预算来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "长消息 Token 预算角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "长消息 Token 预算群",
+      characterIds: [String(character.id)],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    for (let index = 1; index <= 3; index += 1) {
+      runtime.im.publishAnnouncement(owner, String(group.id), {
+        content: `LONG-${index}-BEGIN-${"中".repeat(19_960)}-LONG-${index}-END`,
+        requestId: `im-long-token-budget-announcement-${index}`
+      });
+    }
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://character/${character.id} 继续。`,
+      requestId: "im-long-token-budget-message-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain.generated_count).toBe(1);
+    expect(compactPrompts).toHaveLength(2);
+    expect(compactPrompts[0]).toContain("LONG-1-BEGIN-");
+    expect(compactPrompts[0]).toContain("-LONG-1-END");
+    expect(compactPrompts[1]).toContain("LONG-2-BEGIN-");
+    expect(compactPrompts[1]).toContain("-LONG-2-END");
+    expect(runtime.database.get(
+      `SELECT context.summarized_through_sequence FROM im_character_contexts context
+       JOIN im_character_memberships membership ON membership.id = context.character_membership_id
+       WHERE membership.conversation_id = ?`,
+      String(group.id)
+    )).toEqual({ summarized_through_sequence: 2 });
+  });
+
+  it("成员身份上下文超出最小模型预算时在调用模型前明确失败", async () => {
+    let fetchCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-participant-budget-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return completion("不应调用", true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "participant_budget_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    runtime.database.run("UPDATE models SET context_window = 32768 WHERE id IN (?, ?)", models.primaryModelId, models.fallbackModelId);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "身份预算来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "身份预算角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      additionalNotes: "身份".repeat(2000),
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "验证身份预算。",
+      requestId: "im-participant-budget-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "failed", error_code: "IM_PARTICIPANT_CONTEXT_TOO_LARGE" });
+    expect(fetchCalls).toBe(0);
+  });
+
   it("在角色生成前发布气泡状态并把最终错误保留在角色 turn 中", async () => {
     runtime = createRuntime({
       databasePath: ":memory:",
