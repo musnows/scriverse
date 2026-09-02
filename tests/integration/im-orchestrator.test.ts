@@ -460,10 +460,11 @@ describe("IM AI 调度", () => {
       }
     });
     responseControl.release?.();
-    await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
 
-    expect(toolResult).toContain("TOOL_NOT_AVAILABLE");
-    expect(toolResult).not.toContain("权限密钥只能由有权用户读取");
+    expect(chain).toMatchObject({ status: "failed", error_code: "IM_CHARACTER_ACCESS_DENIED", generated_count: 0 });
+    expect(requestCount).toBe(1);
+    expect(toolResult).toBe("");
   });
 
   it("角色权限在模型请求期间失效时不写入迟到回复", async () => {
@@ -602,6 +603,138 @@ describe("IM AI 调度", () => {
       "SELECT status FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
       chainId
     )).toEqual({ status: "failed" });
+  });
+
+  it("主模型等待期间撤权后不再向 fallback 发送私有上下文", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-fallback-permission-recheck-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (body.model === "primary-model") {
+          primaryCalls += 1;
+          markStarted?.();
+          await responseGate;
+          return new Response("primary failed after permission change", { status: 500 });
+        }
+        fallbackCalls += 1;
+        return completion("fallback 不应收到私有上下文。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const workOwner = runtime.auth.register({ username: "fallback_access_work_owner", password: "secure-password-123" }).session.user;
+    const groupOwner = runtime.auth.register({ username: "fallback_access_group_owner", password: "secure-password-123" }).session.user;
+    const initiator = runtime.auth.register({ username: "fallback_access_initiator", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const { work, character } = runWithRequestActor(actor(workOwner), () => {
+      const work = runtime.store.createWork({ title: "Fallback 撤权作品" });
+      return {
+        work,
+        character: runtime.store.createCharacter(String(work.id), {
+          name: "Fallback 撤权角色",
+          attributes: { privateSecret: "FALLBACK_PRIVATE_CHARACTER_DATA" }
+        })
+      };
+    });
+    runtime.auth.addMember(String(work.id), groupOwner.userId, { role: "editor" }, workOwner.userId);
+    runtime.auth.addMember(String(work.id), initiator.userId, { role: "editor" }, workOwner.userId);
+    runtime.im.updateSettings(initiator.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(groupOwner, {
+      title: "Fallback 撤权群",
+      characterIds: [String(character.id)],
+      humanUserIds: [initiator.userId],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    const sent = runtime.im.sendMessage(initiator, String(group.id), {
+      content: `mention://character/${character.id} 请回复。`,
+      requestId: "im-fallback-permission-recheck-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    runtime.auth.updateMemberPermissions(String(work.id), initiator.userId, {
+      permissions: {
+        prose: "read", comments: "read", todos: "read", drafts: "read", settings: "read",
+        characters: "none", races: "read", organizations: "read", timeline: "read", relationships: "read",
+        outlines: "read", reviews: "read", "ai-chat": "none", "ai-analysis": "read", "ai-settings": "read"
+      }
+    });
+    responseControl.release?.();
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "failed", error_code: "IM_CHARACTER_ACCESS_DENIED", generated_count: 0 });
+    expect(primaryCalls).toBe(1);
+    expect(fallbackCalls).toBe(0);
+  });
+
+  it("发起人停用后不再执行模型提出的角色工具", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    let requestCount = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-disabled-initiator-tool-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async () => {
+        requestCount += 1;
+        markStarted?.();
+        await responseGate;
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "im-disabled-recall-self",
+          type: "function",
+          function: { name: "recall_self", arguments: "{}" }
+        }] }, finish_reason: "tool_calls" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const workOwner = runtime.auth.register({ username: "disabled_tool_work_owner", password: "secure-password-123" }).session.user;
+    const initiator = runtime.auth.register({ username: "disabled_tool_initiator", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const { work, character } = runWithRequestActor(actor(workOwner), () => {
+      const work = runtime.store.createWork({ title: "停用工具发起人作品" });
+      return { work, character: runtime.store.createCharacter(String(work.id), { name: "停用工具发起人角色" }) };
+    });
+    runtime.auth.addMember(String(work.id), initiator.userId, { role: "editor" }, workOwner.userId);
+    runtime.im.updateSettings(initiator.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(workOwner, {
+      title: "停用工具发起人群",
+      characterIds: [String(character.id)],
+      humanUserIds: [initiator.userId],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    const sent = runtime.im.sendMessage(initiator, String(group.id), {
+      content: `mention://character/${character.id} 请查询角色资料。`,
+      requestId: "im-disabled-initiator-tool-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    runtime.auth.updateUser(workOwner, initiator.userId, { status: "disabled" });
+    responseControl.release?.();
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "failed", error_code: "IM_INITIATOR_DISABLED", generated_count: 0 });
+    expect(requestCount).toBe(1);
   });
 
   it("角色消息写入失败时原子回滚回复 turn 的完成状态", async () => {

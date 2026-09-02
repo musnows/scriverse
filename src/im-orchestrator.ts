@@ -725,7 +725,12 @@ export class ImOrchestrator {
         ),
       retryCount: Number(chain.retry_count),
       createdByUserId: requiredString(chain.initiator_user_id),
-      signal
+      signal,
+      beforeRequest: () => {
+        const currentMembership = this.characterMembership(requiredString(membership.id));
+        const currentAuthorization = this.assertCharacterAuthorization(chain, currentMembership);
+        this.assertRequiredInitiatorPermissions(currentAuthorization.initiatorPermissions, requiredInitiatorModules);
+      }
     } satisfies Omit<ImAiPromptInput, "modelId">;
     const invokeModel = async (modelId: string, stage: "primary" | "fallback", attemptLimit = Number(chain.retry_count)): Promise<InvocationResult> => {
       const started = process.hrtime.bigint();
@@ -1042,7 +1047,14 @@ export class ImOrchestrator {
     permissions: WorkModulePermissions | null,
     invocation: InvocationResult
   ): void {
-    if (invocation.requiredInitiatorModules.every((module) => permissions && canReadWorkModule(permissions, module))) return;
+    this.assertRequiredInitiatorPermissions(permissions, invocation.requiredInitiatorModules);
+  }
+
+  private assertRequiredInitiatorPermissions(
+    permissions: WorkModulePermissions | null,
+    requiredModules: WorkPermissionModule[]
+  ): void {
+    if (requiredModules.every((module) => permissions && canReadWorkModule(permissions, module))) return;
     throw new AppError(403, "IM_CHARACTER_ACCESS_DENIED", "发起人的作品权限已变化，包含私有资料的角色结果未写入群聊");
   }
 

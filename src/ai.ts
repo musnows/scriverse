@@ -499,6 +499,7 @@ export type ImAiPromptInput = {
   retryCount: number;
   createdByUserId: string;
   signal?: AbortSignal;
+  beforeRequest?: () => void;
 };
 
 type ImGenerationPrompt = Pick<ImAiPromptInput, "characterId" | "kind" | "participantContext" | "history" | "summary" | "characterPrompt" | "allowRoleplayMemory">;
@@ -517,6 +518,7 @@ type GenerateInput = {
   signal?: AbortSignal;
   maxAttempts?: number;
   requestAttemptLimit?: number;
+  beforeRequest?: () => void;
   onToolCall?: (call: AgentToolCallResult, round: number) => void;
   onProcessStep?: (step: AiProcessStep & { append?: boolean }) => void;
   onContextCompacted?: (event: AiContextCompactionEvent) => void;
@@ -9908,6 +9910,7 @@ export class AiManager {
       agentToolIds: input.kind === "reply" ? roleplayReadTools : [],
       retryPolicy: { retryCount: input.retryCount, backoffRetryCount: input.retryCount },
       requestAttemptLimit: input.retryCount,
+      beforeRequest: input.beforeRequest,
       im: {
         characterId: input.characterId,
         kind: input.kind,
@@ -10188,6 +10191,7 @@ export class AiManager {
           logger.info("ai.call.attempt_started", { callId, attempt, maximumAttempts, toolChoice, purpose });
           let streamedRoundContent = "";
           try {
+            input.beforeRequest?.();
             const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
               if (input.runtime) {
                 const response = await input.runtime.completionTransport({
@@ -10608,6 +10612,7 @@ export class AiManager {
         const currentRoundMessages: CompletionMessage[] = [assistantToolMessage];
         const nativeImageMessages: CompletionMessage[] = [];
         for (const toolCall of toolCalls) {
+          input.beforeRequest?.();
           const execution = await this.executeAgentTool(
             input.workId,
             toolCall,
