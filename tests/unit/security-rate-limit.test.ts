@@ -99,10 +99,10 @@ describe("安全限速器", () => {
     imApp.all("/{*path}", (_request, response) => response.json({ ok: true }));
     const imAgent = request.agent(imApp);
     for (let index = 0; index < 15; index += 1) {
-      await imAgent.post("/api/im/conversations/group_1/messages").expect(200);
-      await imAgent.post(`/api/im/conversations/group_1/chains/chain_${index}/retry`).expect(200);
+      await imAgent.post("/api/im/conversations/group_1/messages/").expect(200);
+      await imAgent.post(`/api/im/conversations/group_1/chains/chain_${index}/retry/`).expect(200);
     }
-    const blockedIm = await imAgent.post("/api/im/conversations/group_1/messages").expect(429);
+    const blockedIm = await imAgent.post("/api/im/conversations/group_1/messages/").expect(429);
     expect(blockedIm.body.error.code).toBe("EXPENSIVE_API_RATE_LIMITED");
   });
 
