@@ -400,6 +400,53 @@ describe("IM AI 调度", () => {
     });
   });
 
+  it("角色消息写入失败时原子回滚回复 turn 的完成状态", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-atomic-reply-message-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return completion("这条角色消息会被测试触发器拒绝。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "atomic_reply_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "回复原子写入作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "回复原子写入角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    runtime.database.run(
+      `CREATE TRIGGER fail_character_message_insert
+       BEFORE INSERT ON im_messages WHEN NEW.sender_kind = 'character'
+       BEGIN SELECT RAISE(ABORT, 'forced character message failure'); END;`
+    );
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "触发角色消息原子回滚。",
+      requestId: "im-atomic-reply-message-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+
+    expect(chain).toMatchObject({ status: "failed", generated_count: 0 });
+    expect(runtime.database.get(
+      "SELECT status FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
+      chainId
+    )).toEqual({ status: "failed" });
+    expect(runtime.database.all(
+      "SELECT sender_kind, content FROM im_messages WHERE conversation_id = ? ORDER BY sequence",
+      String(direct.id)
+    )).toEqual([{ sender_kind: "human", content: "触发角色消息原子回滚。" }]);
+  });
+
   it("取消链后忽略不遵守 abort 的迟到模型结果", async () => {
     const responseControl: { release?: () => void } = {};
     let markStarted: (() => void) | null = null;

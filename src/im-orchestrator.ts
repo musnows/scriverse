@@ -1164,7 +1164,8 @@ export class ImOrchestrator {
   private appendCharacterMessage(
     chain: Record<string, unknown>,
     membership: Record<string, unknown>,
-    invocation: InvocationResult
+    invocation: InvocationResult,
+    turnId: string
   ): Record<string, unknown> {
     const conversationId = requiredString(chain.conversation_id);
     const conversation = this.conversationRow(conversationId);
@@ -1238,6 +1239,7 @@ export class ImOrchestrator {
           timestamp
         );
       }
+      this.finishTurn(turnId, invocation, undefined, true);
       this.db.run(
         "UPDATE im_chains SET generated_count = generated_count + 1, updated_at = ? WHERE id = ?",
         timestamp,
@@ -1328,8 +1330,7 @@ export class ImOrchestrator {
         characterId: currentMembership.character_id,
         delta: result.content
       });
-      this.finishTurn(turnId, result, undefined, true);
-      const message = this.appendCharacterMessage(chain, currentMembership, result);
+      const message = this.appendCharacterMessage(chain, currentMembership, result, turnId);
       this.publish(requiredString(chain.conversation_id), "message", { message });
       this.publishReplyTurn(chain, membership, turnId, "completed");
       this.streamingReplies.delete(turnId);
