@@ -474,7 +474,7 @@ describe("IM AI 调度", () => {
     });
     runtime.imOrchestrator.publishMessageResult(sent);
     await requestStarted;
-    runtime.imOrchestrator.dispose();
+    await runtime.imOrchestrator.dispose();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     const chainId = String((sent.chain as Record<string, unknown>).id);

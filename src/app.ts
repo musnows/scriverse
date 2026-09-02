@@ -4581,6 +4581,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   backups.startScheduler();
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
   let closePromise: Promise<void> | null = null;
+  let imOrchestratorClosePromise: Promise<void> | null = null;
   let stopping = false;
   let closed = false;
   const close = (): Promise<void> => {
@@ -4591,7 +4592,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       logger.info("runtime.closing");
       backups.dispose();
       liteLlmPriceCache.dispose();
-      imOrchestrator.dispose();
+      imOrchestratorClosePromise = imOrchestrator.dispose();
       ai.dispose();
       offlineSync.dispose();
       const cancelledStreamRequests = store.cancelActiveAiConversationStreamRequests();
@@ -4600,6 +4601,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     closePromise = (async () => {
       try {
         await backups.waitForIdle(RUNTIME_BACKUP_IDLE_TIMEOUT_MS);
+        await imOrchestratorClosePromise;
         collaborationPresence.close();
         database.close();
         if (temporaryStorageRoot) rmSync(temporaryStorageRoot, { recursive: true, force: true });

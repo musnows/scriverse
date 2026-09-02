@@ -67,6 +67,7 @@ export class ImOrchestrator {
   private readonly activeByUser = new Map<string, number>();
   private readonly streamingReplies = new Map<string, ImRealtimeEvent>();
   private readonly recipientCache = new Map<string, string[]>();
+  private readonly activeRunPromises = new Set<Promise<void>>();
   private disposed = false;
 
   constructor(
@@ -275,7 +276,10 @@ export class ImOrchestrator {
       this.activeByUser.set(userId, (this.activeByUser.get(userId) ?? 0) + 1);
       const controller = new AbortController();
       this.controllers.set(chainId, controller);
-      void this.runChain(chainId, controller.signal).finally(() => {
+      const run = this.runChain(chainId, controller.signal);
+      this.activeRunPromises.add(run);
+      void run.finally(() => {
+        this.activeRunPromises.delete(run);
         this.controllers.delete(chainId);
         const remaining = Math.max(0, (this.activeByUser.get(userId) ?? 1) - 1);
         if (remaining === 0) this.activeByUser.delete(userId);
@@ -1420,7 +1424,7 @@ export class ImOrchestrator {
     }
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     this.disposed = true;
     const interruption = new AppError(503, "IM_CHAIN_RUNTIME_RESTARTED", "服务关闭导致 IM 交流链中断，可从原消息重试");
     for (const controller of this.controllers.values()) controller.abort(interruption);
@@ -1440,6 +1444,7 @@ export class ImOrchestrator {
       `${interruption.code}: ${interruption.message}`,
       timestamp
     );
+    await Promise.allSettled([...this.activeRunPromises]);
     this.controllers.clear();
     this.streamingReplies.clear();
     this.recipientCache.clear();
