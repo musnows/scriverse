@@ -562,6 +562,34 @@ describe("IM AI 调度", () => {
     });
   });
 
+  it("批量读取多书籍 IM 目录权限", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-catalog-permission-batch-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "catalog_batch_owner", password: "secure-password-123" }).session.user;
+    runWithRequestActor(actor(owner), () => {
+      for (let index = 0; index < 5; index += 1) {
+        const work = runtime.store.createWork({ title: `目录批量作品 ${index + 1}` });
+        runtime.store.createCharacter(String(work.id), { name: `目录批量角色 ${index + 1}` });
+      }
+    });
+
+    const allSpy = vi.spyOn(runtime.database, "all");
+    const getSpy = vi.spyOn(runtime.database, "get");
+    expect(runtime.im.listAvailableWorks(owner)).toHaveLength(5);
+    expect(allSpy).toHaveBeenCalledTimes(1);
+    expect(getSpy).not.toHaveBeenCalled();
+    allSpy.mockClear();
+    getSpy.mockClear();
+    expect(runtime.im.listAvailableCharacters(owner)).toHaveLength(5);
+    expect(allSpy).toHaveBeenCalledTimes(1);
+    expect(getSpy).not.toHaveBeenCalled();
+    allSpy.mockRestore();
+    getSpy.mockRestore();
+  });
+
   it("SSE 重连时重放正在生成气泡的完整流式快照", async () => {
     const encoder = new TextEncoder();
     let releaseStream: (() => void) | null = null;

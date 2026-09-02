@@ -3,7 +3,13 @@ import { PLATFORM_AI_WORK_ID } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import type { Store } from "./store.js";
 import type { AuthUser, UserAuthService } from "./user-auth.js";
-import { canReadWorkModule, canWriteWorkModule } from "./work-permissions.js";
+import {
+  canReadWorkModule,
+  canWriteWorkModule,
+  fullWorkModulePermissions,
+  storedWorkModulePermissions,
+  type WorkModulePermissions
+} from "./work-permissions.js";
 import { id, json, now } from "./utils.js";
 
 export const IM_MAX_AI_PARTICIPANTS = 10;
@@ -238,9 +244,17 @@ export class ImService {
     }));
   }
 
+  private catalogWorkPermissions(user: Pick<AuthUser, "userId" | "role">, row: Record<string, unknown>): WorkModulePermissions | null {
+    if (user.role === "admin" || requiredString(row.owner_user_id) === user.userId) return fullWorkModulePermissions();
+    if (optionalString(row.membership_user_id) !== user.userId) return null;
+    return storedWorkModulePermissions(requiredString(row.membership_role), row.membership_permissions_json);
+  }
+
   listAvailableWorks(user: AuthUser): Record<string, unknown>[] {
     return this.db.all(
-      `SELECT DISTINCT work.*, (
+      `SELECT work.id, work.title, work.owner_user_id,
+              membership.user_id AS membership_user_id, membership.role AS membership_role,
+              membership.permissions_json AS membership_permissions_json, (
          SELECT COUNT(*) FROM characters character
          WHERE character.work_id = work.id AND character.merged_into_character_id IS NULL
        ) AS character_count FROM works work
@@ -253,7 +267,7 @@ export class ImService {
       user.userId
     ).flatMap((work) => {
       const workId = requiredString(work.id);
-      const permissions = this.auth.workModulePermissions(user, workId, true);
+      const permissions = this.catalogWorkPermissions(user, work);
       if (!permissions || !canReadWorkModule(permissions, "characters") || !canWriteWorkModule(permissions, "ai-chat")) return [];
       return [{
         id: workId,
@@ -275,7 +289,10 @@ export class ImService {
     const rows = this.db.all(
       `SELECT character.id, character.work_id, character.name, character.code, character.gender,
               character.is_dead, character.attributes_json, character.profile_json,
-              work.title AS work_title, avatar.sha256 AS avatar_sha256,
+              work.title AS work_title, work.owner_user_id,
+              membership.user_id AS membership_user_id, membership.role AS membership_role,
+              membership.permissions_json AS membership_permissions_json,
+              avatar.sha256 AS avatar_sha256,
               EXISTS (
                 SELECT 1 FROM work_entity_pins pin
                 WHERE pin.work_id = character.work_id AND pin.entity_type = 'character'
@@ -307,14 +324,9 @@ export class ImService {
       normalizedQuery,
       normalizedQuery
     );
-    const permissionsByWorkId = new Map<string, ReturnType<UserAuthService["workModulePermissions"]>>();
     return rows.flatMap((row) => {
       const workId = requiredString(row.work_id);
-      let permissions = permissionsByWorkId.get(workId);
-      if (!permissionsByWorkId.has(workId)) {
-        permissions = this.auth.workModulePermissions(user, workId, true);
-        permissionsByWorkId.set(workId, permissions);
-      }
+      const permissions = this.catalogWorkPermissions(user, row);
       if (!permissions || !canReadWorkModule(permissions, "characters") || !canWriteWorkModule(permissions, "ai-chat")) return [];
       const character = {
         id: requiredString(row.id),
@@ -1034,9 +1046,6 @@ export class ImService {
 
   getConversation(conversationId: string, userId: string, beforeSequence?: number, afterSequence?: number): Record<string, unknown> {
     const row = this.assertReadableConversation(conversationId, userId);
-    if (requiredString(row.status) === "active" && this.activeMembership(conversationId, userId)) {
-      this.refreshCharacterAvailability(conversationId);
-    }
     const viewerMembership = this.db.get(
       `SELECT joined_sequence, left_sequence, joined_at, left_at, conversation_snapshot_json FROM im_human_memberships
        WHERE conversation_id = ? AND user_id = ?
@@ -1045,6 +1054,9 @@ export class ImService {
       userId
     );
     if (!viewerMembership) throw new AppError(403, "IM_CONVERSATION_ACCESS_DENIED", "你不是这个 IM 会话的成员");
+    if (requiredString(row.status) === "active" && !optionalString(viewerMembership.left_at)) {
+      this.refreshCharacterAvailability(conversationId, requiredString(row.owner_user_id));
+    }
     const viewerLeftSequence = viewerMembership.left_sequence === null || viewerMembership.left_sequence === undefined
       ? null
       : Number(viewerMembership.left_sequence);
@@ -1141,47 +1153,57 @@ export class ImService {
     };
   }
 
-  refreshCharacterAvailability(conversationId: string): void {
-    const conversation = this.db.get("SELECT owner_user_id FROM im_conversations WHERE id = ?", conversationId);
-    if (!conversation) throw notFound("IM 会话");
-    let owner: AuthUser | null = null;
-    try {
-      owner = this.auth.getUser(requiredString(conversation.owner_user_id));
-    } catch {
-      owner = null;
-    }
-    let availableCharacterCount = 0;
-    for (const membership of this.db.all(
-      `SELECT id, character_id, source_work_id, snapshot_json FROM im_character_memberships
-       WHERE conversation_id = ? AND left_at IS NULL
-       ORDER BY joined_at, id`,
+  refreshCharacterAvailability(conversationId: string, knownOwnerUserId?: string): void {
+    const ownerUserId = optionalString(knownOwnerUserId) ?? optionalString(
+      this.db.get("SELECT owner_user_id FROM im_conversations WHERE id = ?", conversationId)?.owner_user_id
+    );
+    if (!ownerUserId) throw notFound("IM 会话");
+    const memberships = this.db.all(
+      `SELECT membership.id, membership.character_id, membership.source_work_id, membership.snapshot_json,
+              character.id AS available_character_id, character.work_id AS available_work_id,
+              work.owner_user_id, work_member.user_id AS membership_user_id,
+              work_member.role AS membership_role, work_member.permissions_json AS membership_permissions_json,
+              owner.status AS conversation_owner_status, owner.role AS conversation_owner_role
+       FROM im_character_memberships membership
+       JOIN users owner ON owner.id = ?
+       LEFT JOIN characters character
+         ON character.id = COALESCE(membership.character_id, json_extract(membership.snapshot_json, '$.id'))
+        AND character.merged_into_character_id IS NULL
+       LEFT JOIN works work ON work.id = character.work_id AND work.deleted_at IS NULL
+       LEFT JOIN work_memberships work_member ON work_member.work_id = work.id AND work_member.user_id = ?
+       WHERE membership.conversation_id = ? AND membership.left_at IS NULL
+       ORDER BY membership.joined_at, membership.id`,
+      ownerUserId,
+      ownerUserId,
       conversationId
-    )) {
+    );
+    const owner = {
+      userId: ownerUserId,
+      role: requiredString(memberships[0]?.conversation_owner_role) === "admin" ? "admin" as const : "user" as const
+    };
+    let availableCharacterCount = 0;
+    for (const membership of memberships) {
       const snapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
       const currentCharacterId = optionalString(membership.character_id);
       const characterId = currentCharacterId ?? optionalString(snapshot.id);
       let status: "active" | "suspended" = "suspended";
       let restoredCharacterId: string | null = null;
-      if (owner?.status === "active" && characterId) {
-        try {
-          const character = this.assertCharacterAvailable(owner, characterId);
-          const sourceWorkId = optionalString(membership.source_work_id) ?? optionalString(snapshot.workId);
-          if (!sourceWorkId || requiredString(character.workId) === sourceWorkId) {
-            const duplicate = currentCharacterId ? undefined : this.db.get(
-              `SELECT 1 AS present FROM im_character_memberships
-               WHERE conversation_id = ? AND character_id = ? AND left_at IS NULL AND id <> ?`,
-              conversationId,
-              characterId,
-              requiredString(membership.id)
-            );
-            if (!duplicate && availableCharacterCount < IM_MAX_AI_PARTICIPANTS) {
-              status = "active";
-              restoredCharacterId = characterId;
-              availableCharacterCount += 1;
-            }
+      const permissions = requiredString(membership.conversation_owner_status) === "active"
+        ? this.catalogWorkPermissions(owner, membership)
+        : null;
+      if (characterId && optionalString(membership.available_character_id) === characterId
+        && permissions && canReadWorkModule(permissions, "characters") && canWriteWorkModule(permissions, "ai-chat")) {
+        const sourceWorkId = optionalString(membership.source_work_id) ?? optionalString(snapshot.workId);
+        if (!sourceWorkId || requiredString(membership.available_work_id) === sourceWorkId) {
+          const duplicate = currentCharacterId ? undefined : memberships.find((candidate) => (
+            requiredString(candidate.id) !== requiredString(membership.id)
+            && optionalString(candidate.character_id) === characterId
+          ));
+          if (!duplicate && availableCharacterCount < IM_MAX_AI_PARTICIPANTS) {
+            status = "active";
+            restoredCharacterId = characterId;
+            availableCharacterCount += 1;
           }
-        } catch {
-          status = "suspended";
         }
       }
       this.db.run(
