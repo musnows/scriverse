@@ -584,6 +584,7 @@ export class ImOrchestrator {
     return ![
       "IM_CHAIN_CANCELLED",
       "AI_STREAM_REQUEST_CANCELLED",
+      "IM_CHARACTER_ACCESS_DENIED",
       "IM_CHARACTER_UNAVAILABLE",
       "IM_OWNER_DISABLED",
       "IM_INITIATOR_DISABLED",
@@ -1177,6 +1178,7 @@ export class ImOrchestrator {
   ): Promise<Record<string, unknown>> {
     const membership = this.characterMembership(membershipId);
     let streamed = "";
+    let result: InvocationResult | null = null;
     try {
       await this.maybeCompact(chain, membership, sourceMessage, signal);
       this.db.run("UPDATE im_chain_turns SET status = 'running' WHERE id = ?", turnId);
@@ -1188,7 +1190,7 @@ export class ImOrchestrator {
         payload: { ...this.replyTurnPayload(chain, membership, turnId, "running"), content: "" },
         createdAt: now()
       });
-      const result = await this.invoke(
+      result = await this.invoke(
         chain,
         membership,
         "reply",
@@ -1196,13 +1198,15 @@ export class ImOrchestrator {
         sourceMessage,
         signal,
         (delta) => {
+          const currentMembership = this.characterMembership(membershipId);
+          this.assertCharacterAuthorization(chain, currentMembership);
           streamed += delta;
           const snapshot = this.streamingReplies.get(turnId);
           if (snapshot) snapshot.payload.content = `${requiredString(snapshot.payload.content)}${delta}`;
           this.publish(requiredString(chain.conversation_id), "delta", {
             chainId: requiredString(chain.id),
             turnId,
-            characterId: membership.character_id,
+            characterId: currentMembership.character_id,
             delta
           });
         },
@@ -1233,7 +1237,20 @@ export class ImOrchestrator {
       if (streamed) this.publish(requiredString(chain.conversation_id), "reset", { chainId: requiredString(chain.id), turnId, reason: "retry" });
       const failure = publicError(error);
       const cancelled = signal.aborted || failure.code === "IM_CHAIN_CANCELLED" || failure.code === "AI_STREAM_REQUEST_CANCELLED";
-      this.failTurn(turnId, error, cancelled ? "cancelled" : "failed");
+      const failureForTurn = result ? new AppError(
+        error instanceof AppError ? error.status : 502,
+        failure.code,
+        failure.message,
+        {
+          ...(error instanceof AppError && error.details && typeof error.details === "object" ? error.details : {}),
+          modelRecordId: result.model.id,
+          modelStage: result.stage,
+          attemptCount: result.primaryAttemptCount + result.attemptCount,
+          callId: result.callId,
+          callIds: result.callIds
+        }
+      ) : error;
+      this.failTurn(turnId, failureForTurn, cancelled ? "cancelled" : "failed");
       this.publishReplyTurn(chain, membership, turnId, cancelled ? "cancelled" : "failed", failure);
       this.streamingReplies.delete(turnId);
       throw error;

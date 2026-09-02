@@ -10790,6 +10790,10 @@ export class AiManager {
         || error.code === "MONTHLY_TOKEN_QUOTA_EXCEEDED"
         || error.code === "PROVIDER_DAILY_TOKEN_QUOTA_EXCEEDED"
         || error.code === "PROVIDER_MONTHLY_TOKEN_QUOTA_EXCEEDED"
+        || error.code === "IM_CHARACTER_ACCESS_DENIED"
+        || error.code === "IM_CHARACTER_UNAVAILABLE"
+        || error.code === "IM_OWNER_DISABLED"
+        || error.code === "IM_INITIATOR_DISABLED"
         || isInteractiveStreamError(error)
       )) {
         throw new AppError(error.status, error.code, error.message, {

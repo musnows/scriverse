@@ -310,6 +310,10 @@ describe("IM AI 调度", () => {
       retryCount: 1
     });
     const direct = runtime.im.createDirect(owner, String(character.id));
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => {
+      if (event.conversationId === direct.id) events.push({ type: event.type, payload: event.payload });
+    });
     const sent = runtime.im.sendMessage(owner, String(direct.id), {
       content: "等待角色请求返回。",
       requestId: "im-mid-request-authorization-0001"
@@ -319,16 +323,25 @@ describe("IM AI 调度", () => {
     runtime.auth.updateMemberPermissions(String(work.id), owner.userId, { role: "viewer" });
     responseControl.release?.();
     const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+    unsubscribe();
 
     expect(chain).toMatchObject({ status: "failed", error_code: "IM_CHARACTER_ACCESS_DENIED", generated_count: 0 });
     expect(runtime.database.all(
       "SELECT sender_kind, content FROM im_messages WHERE conversation_id = ? ORDER BY sequence",
       String(direct.id)
     )).toEqual([{ sender_kind: "human", content: "等待角色请求返回。" }]);
+    expect(events.filter((event) => event.type === "delta")).toEqual([]);
     expect(runtime.database.get(
-      "SELECT status FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
+      `SELECT status, model_id, model_stage, attempt_count, ai_call_ids_json
+       FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'`,
       String((sent.chain as Record<string, unknown>).id)
-    )).toEqual({ status: "failed" });
+    )).toEqual({
+      status: "failed",
+      model_id: models.primaryModelId,
+      model_stage: "primary",
+      attempt_count: 1,
+      ai_call_ids_json: expect.not.stringMatching(/^\[\]$/u)
+    });
   });
 
   it("流式响应中断后按配置次数重试并只重置当前 turn", async () => {
