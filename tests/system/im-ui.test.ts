@@ -62,14 +62,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v72");
+    expect(page.text).toContain("feature=global-im-v73");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260902-global-im-v72');
+    expect(application.text).toContain('/im.js?v=20260902-global-im-v73');
     expect(application.text).toContain("onRouteChange: schedulePresenceHeartbeat");
     expect(application.text).toContain("进入 IM 将放弃本地修改");
     expect(im.text).toContain("!await beforeOpen()");
@@ -139,6 +139,8 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain("pendingAnnouncementRequests.get(conversationId)");
     expect(im.text).toContain("sendingConversations.has(conversationId)");
     expect(im.text).toContain("const savedDraft = conversationDrafts.get(conversationId)");
+    expect(im.text).toContain("const submittedHtml = composer.innerHTML");
+    expect(im.text).toContain("composer.innerHTML = newerDraftHtml");
     expect(im.text).toContain("void refreshUnreadTotal().catch(() => undefined)");
     expect(page.text).toContain('id="im-details-toggle"');
     expect(page.text).toContain('aria-expanded="false" disabled>成员与设置');

@@ -1150,6 +1150,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     if (sendingConversations.has(conversationId)) return;
     const content = serializeImComposer(composer);
     if (!content) return;
+    const submittedHtml = composer.innerHTML;
     const pendingRequest = pendingMessageRequests.get(conversationId);
     const messageRequestId = pendingRequest?.content === content ? pendingRequest.id : requestId();
     pendingMessageRequests.set(conversationId, { content, id: messageRequestId });
@@ -1180,13 +1181,11 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     } catch (error) {
       if (!committed) {
         if (current?.id === conversationId) {
-          const newerDraft = serializeImComposer(composer);
-          composer.textContent = newerDraft ? `${content}\n\n${newerDraft}` : content;
+          const newerDraftHtml = composer.innerHTML;
+          composer.innerHTML = newerDraftHtml ? `${submittedHtml}<div><br></div>${newerDraftHtml}` : submittedHtml;
         } else {
-          const draft = document.createElement("div");
-          draft.textContent = content;
           const savedDraft = conversationDrafts.get(conversationId) ?? "";
-          conversationDrafts.set(conversationId, savedDraft ? `${draft.innerHTML}<br><br>${savedDraft}` : draft.innerHTML);
+          conversationDrafts.set(conversationId, savedDraft ? `${submittedHtml}<div><br></div>${savedDraft}` : submittedHtml);
         }
       }
       toast(committed ? `消息已发送，但刷新会话失败：${error.message}` : error.message, "error");
