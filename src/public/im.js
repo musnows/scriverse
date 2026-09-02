@@ -151,6 +151,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let settings = null;
   let eventSource = null;
   const provisionalReplies = new Map();
+  const conversationDrafts = new Map();
   let mentionOptions = [];
   let mentionIndex = -1;
   let mentionCaretState = null;
@@ -741,6 +742,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   async function openConversation(conversationId, userInitiated = false) {
+    if (current?.id && current.id !== conversationId) {
+      if (serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
+      else conversationDrafts.delete(current.id);
+    }
     if (userInitiated) requestedConversationId = conversationId;
     else if (requestedConversationId && requestedConversationId !== conversationId) return;
     const request = ++conversationRequest;
@@ -767,6 +772,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       nextConversation.hasMoreMessages = previousConversation.hasMoreMessages === true;
     }
     current = nextConversation;
+    if (conversationChanged) composer.innerHTML = conversationDrafts.get(conversationId) ?? "";
     if (requestedConversationId === conversationId) requestedConversationId = null;
     workspace.classList.add("has-conversation");
     syncProvisionalReplies();
@@ -1137,6 +1143,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const content = serializeImComposer(composer);
     if (!content) return;
     composer.replaceChildren();
+    conversationDrafts.delete(conversationId);
     closeMentionMenu();
     provisionalReplies.clear();
     let committed = false;
@@ -1238,6 +1245,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   function close() {
+    if (current?.id && serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
     opened = false;
     conversationRequest += 1;
     requestedConversationId = null;
@@ -1400,6 +1408,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#im-mobile-back").addEventListener("click", () => {
       conversationRequest += 1;
       requestedConversationId = null;
+      if (current?.id && serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
       current = null;
       workspace.classList.remove("has-conversation");
       document.querySelector("#im-details").classList.remove("is-open");
