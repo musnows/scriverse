@@ -292,13 +292,17 @@ export class ImService {
 
   listAvailableCharacters(user: AuthUser, query = "", selectedWorkId?: string, limit = IM_MAX_CHARACTER_DIRECTORY_RESULTS, offset = 0): Record<string, unknown>[] {
     const normalizedQuery = query.normalize("NFKC").trim();
+    let authorizedWorkIds: string[];
     if (selectedWorkId) {
       this.assertWorkMembership(user, selectedWorkId);
       const permissions = this.auth.workModulePermissions(user, selectedWorkId, true);
       if (!permissions || !canReadWorkModule(permissions, "characters") || !canWriteWorkModule(permissions, "ai-chat")) {
         throw new AppError(403, "IM_CHARACTER_ACCESS_DENIED", "需要角色读取和 AI 对话写入权限才能浏览这本书的角色");
       }
-    }
+      authorizedWorkIds = [selectedWorkId];
+    } else authorizedWorkIds = this.listAvailableWorks(user).map((work) => requiredString(work.id));
+    if (authorizedWorkIds.length === 0) return [];
+    const authorizedWorkPlaceholders = authorizedWorkIds.map(() => "?").join(", ");
     const rows = this.db.all(
       `SELECT character.id, character.work_id, character.name, character.code, character.gender,
               character.is_dead, character.attributes_json, character.profile_json,
@@ -321,8 +325,7 @@ export class ImService {
        LEFT JOIN work_memberships membership ON membership.work_id = work.id AND membership.user_id = ?
        WHERE work.deleted_at IS NULL AND COALESCE(work.is_internal, 0) = 0
          AND character.merged_into_character_id IS NULL
-         AND (? = 1 OR work.owner_user_id = ? OR membership.user_id = ?)
-         AND (? IS NULL OR character.work_id = ?)
+         AND character.work_id IN (${authorizedWorkPlaceholders})
          AND (? = '' OR character.name LIKE '%' || ? || '%' COLLATE NOCASE OR EXISTS (
            SELECT 1 FROM character_names name
            WHERE name.character_id = character.id AND name.display_name LIKE '%' || ? || '%' COLLATE NOCASE
@@ -331,11 +334,7 @@ export class ImService {
        LIMIT ? OFFSET ?`,
       user.userId,
       user.userId,
-      user.role === "admin" ? 1 : 0,
-      user.userId,
-      user.userId,
-      selectedWorkId ?? null,
-      selectedWorkId ?? null,
+      ...authorizedWorkIds,
       normalizedQuery,
       normalizedQuery,
       normalizedQuery,

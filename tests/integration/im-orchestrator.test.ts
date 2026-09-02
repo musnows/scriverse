@@ -2040,7 +2040,7 @@ describe("IM AI 调度", () => {
     allSpy.mockClear();
     getSpy.mockClear();
     expect(runtime.im.listAvailableCharacters(owner)).toHaveLength(5);
-    expect(allSpy).toHaveBeenCalledTimes(1);
+    expect(allSpy).toHaveBeenCalledTimes(2);
     expect(getSpy).not.toHaveBeenCalled();
     allSpy.mockRestore();
     getSpy.mockRestore();
@@ -2064,6 +2064,41 @@ describe("IM AI 调度", () => {
     expect(runtime.im.listAvailableCharacters(owner, "", String(work.id))).toHaveLength(100);
     expect(runtime.im.listAvailableCharacters(owner, "", String(work.id), 100, 100)).toHaveLength(5);
     expect(runtime.im.listAvailableCharacters(owner, "目录上限角色 104", String(work.id))).toHaveLength(1);
+  });
+
+  it("跨书角色目录在分页前排除无模块权限作品", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-cross-work-directory-permission-secret-with-enough-length",
+      serveUi: false
+    });
+    const workOwner = runtime.auth.register({ username: "directory_permission_owner", password: "secure-password-123" }).session.user;
+    const member = runtime.auth.register({ username: "directory_permission_member", password: "secure-password-123" }).session.user;
+    const { eligibleWork, blockedWork, eligibleCharacters } = runWithRequestActor(actor(workOwner), () => {
+      const eligibleWork = runtime.store.createWork({ title: "可用角色目录作品" });
+      const eligibleCharacters = [
+        runtime.store.createCharacter(String(eligibleWork.id), { name: "可用目录角色一" }),
+        runtime.store.createCharacter(String(eligibleWork.id), { name: "可用目录角色二" })
+      ];
+      const blockedWork = runtime.store.createWork({ title: "无权角色目录作品" });
+      for (let index = 1; index <= 60; index += 1) {
+        runtime.store.createCharacter(String(blockedWork.id), { name: `无权目录角色 ${index}` });
+      }
+      return { eligibleWork, blockedWork, eligibleCharacters };
+    });
+    runtime.auth.addMember(String(eligibleWork.id), member.userId, { role: "editor" }, workOwner.userId);
+    runtime.auth.addMember(String(blockedWork.id), member.userId, {
+      permissions: {
+        prose: "read", comments: "read", todos: "read", drafts: "read", settings: "read",
+        characters: "none", races: "read", organizations: "read", timeline: "read", relationships: "read",
+        outlines: "read", reviews: "read", "ai-chat": "none", "ai-analysis": "read", "ai-settings": "read"
+      }
+    }, workOwner.userId);
+    runtime.database.run("UPDATE works SET updated_at = ? WHERE id = ?", "9999-09-03T00:00:00.000Z", String(blockedWork.id));
+    runtime.database.run("UPDATE works SET updated_at = ? WHERE id = ?", "9998-09-03T00:00:00.000Z", String(eligibleWork.id));
+
+    expect(runtime.im.listAvailableCharacters(member, "", undefined, 51, 0).map((character) => character.id))
+      .toEqual(eligibleCharacters.map((character) => character.id));
   });
 
   it("SSE 重连时重放正在生成气泡的完整流式快照", async () => {
