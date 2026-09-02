@@ -599,6 +599,74 @@ describe("IM AI 调度", () => {
     )).toEqual({ failure: expect.any(String) });
   });
 
+  it("长消息以完整原子进入压缩和普通角色历史", async () => {
+    let compactPrompt = "";
+    let replyPrompt = "";
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-long-history-atom-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const prompt = messages.map((message) => message.content).join("\n");
+        if (prompt.includes("只把已送达给当前角色的 IM 历史压缩")) {
+          compactPrompt = prompt;
+          return completion("长消息已完整压缩。", false);
+        }
+        replyPrompt = prompt;
+        return completion("已读取完整长消息。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "long_history_atom_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    runtime.database.run("UPDATE models SET context_window = 32768 WHERE id IN (?, ?)", models.primaryModelId, models.fallbackModelId);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "长消息原子来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "长消息原子角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "长消息原子群",
+      characterIds: [String(character.id)],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    const longContent = `LONG-BEGIN-${"长".repeat(19_970)}-LONG-END`;
+    runtime.im.publishAnnouncement(owner, String(group.id), {
+      content: longContent,
+      requestId: "im-long-history-announcement-1"
+    });
+    for (let index = 2; index <= 61; index += 1) {
+      runtime.im.publishAnnouncement(owner, String(group.id), {
+        content: `短公告 ${index}`,
+        requestId: `im-long-history-announcement-${index}`
+      });
+    }
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://character/${character.id} 继续。`,
+      requestId: "im-long-history-message-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain.generated_count).toBe(1);
+    expect(compactPrompt).toContain("LONG-BEGIN-");
+    expect(compactPrompt).toContain("-LONG-END");
+    expect(replyPrompt).toContain("长消息已完整压缩。");
+    expect(runtime.database.get(
+      `SELECT context.summarized_through_sequence FROM im_character_contexts context
+       JOIN im_character_memberships membership ON membership.id = context.character_membership_id
+       WHERE membership.conversation_id = ?`,
+      String(group.id)
+    )).toEqual({ summarized_through_sequence: 42 });
+  });
+
   it("在角色生成前发布气泡状态并把最终错误保留在角色 turn 中", async () => {
     runtime = createRuntime({
       databasePath: ":memory:",

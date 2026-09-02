@@ -298,7 +298,12 @@ export class ImOrchestrator {
     return JSON.stringify({ humans, characters, currentSender });
   }
 
-  private characterHistory(membership: Record<string, unknown>, conversation: Record<string, unknown>, throughSequence: number): { history: string; summary: string } {
+  private characterHistory(
+    membership: Record<string, unknown>,
+    conversation: Record<string, unknown>,
+    throughSequence: number,
+    maximumHistoryChars: number
+  ): { history: string; summary: string } {
     const membershipId = requiredString(membership.id);
     const contextEpoch = Number(conversation.context_epoch);
     const context = this.db.get(
@@ -318,13 +323,17 @@ export class ImOrchestrator {
       contextEpoch,
       summarizedThroughSequence,
       throughSequence
-    ).reverse();
-    const history = rows.map((row) => {
-      const sender = json<Record<string, unknown>>(requiredString(row.sender_snapshot_json), {});
-      const label = sender.name ?? sender.displayName ?? (requiredString(row.sender_kind) === "system" ? "系统" : "成员");
-      return `[${Number(row.sequence)}] ${String(label)}：${requiredString(row.content)}`;
-    }).join("\n\n").slice(-60_000);
-    return { history, summary: requiredString(context?.summary) };
+    );
+    const lines: string[] = [];
+    let historyLength = 0;
+    for (const row of rows) {
+      const line = this.historyLine(row);
+      const additionLength = line.length + (lines.length ? 2 : 0);
+      if (historyLength + additionLength > maximumHistoryChars) break;
+      lines.unshift(line);
+      historyLength += additionLength;
+    }
+    return { history: lines.join("\n\n"), summary: requiredString(context?.summary) };
   }
 
   private maximumHistoryChars(chain: Record<string, unknown>): number {
@@ -334,7 +343,7 @@ export class ImOrchestrator {
       this.db.get("SELECT context_window FROM models WHERE id = ?", modelId)?.context_window ?? 128_000
     ));
     const minimumContextWindow = contextWindows.length ? Math.min(...contextWindows) : 128_000;
-    return Math.max(2_000, Math.floor(minimumContextWindow * 2));
+    return Math.max(IM_MESSAGE_MAX_CHARACTERS + 512, Math.floor(minimumContextWindow * 2));
   }
 
   private historyLine(row: Record<string, unknown>): string {
@@ -498,15 +507,15 @@ export class ImOrchestrator {
     const conversation = this.conversationRow(requiredString(chain.conversation_id));
     const authorization = this.assertCharacterAuthorization(chain, membership);
     const snapshot = json<Record<string, unknown>>(requiredString(sourceMessage.sender_snapshot_json), {});
-    const context = this.characterHistory(membership, conversation, Number(sourceMessage.sequence));
     const maximumHistoryChars = this.maximumHistoryChars(chain);
+    const context = this.characterHistory(membership, conversation, Number(sourceMessage.sequence), maximumHistoryChars);
     const common = {
       workId: authorization.workId,
       characterId: authorization.characterId,
       kind,
       instruction,
       participantContext: this.participantContext(requiredString(conversation.id), snapshot),
-      history: historyOverride?.history ?? context.history.slice(-maximumHistoryChars),
+      history: historyOverride?.history ?? context.history,
       summary: historyOverride?.summary ?? context.summary,
       characterPrompt: authorization.initiatorPermissions && canReadWorkModule(authorization.initiatorPermissions, "characters")
         ? undefined
