@@ -281,12 +281,15 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
 
   async function refreshConversations() {
     const request = ++conversationListRequest;
+    const unreadGeneration = ++unreadRequest;
     const page = await api("/api/im/conversations?limit=50");
     if (request !== conversationListRequest) return;
     conversations = array(page.items ?? page);
     if (current && !conversations.some((conversation) => conversation.id === current.id)) conversations.push(current);
     conversationNextCursor = page.nextCursor ?? null;
-    conversationUnreadTotal = Number(page.unreadCount ?? conversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0));
+    if (unreadGeneration === unreadRequest) {
+      conversationUnreadTotal = Number(page.unreadCount ?? conversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0));
+    }
     renderUnread();
     renderConversationList();
   }
@@ -294,6 +297,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   async function loadMoreConversations() {
     if (conversationNextCursor === null || conversationPageLoading) return;
     conversationPageLoading = true;
+    const unreadGeneration = ++unreadRequest;
     const cursor = conversationNextCursor;
     try {
       const page = await api(`/api/im/conversations?limit=50&cursor=${encodeURIComponent(cursor)}`);
@@ -301,7 +305,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const known = new Set(conversations.map((conversation) => conversation.id));
       conversations.push(...array(page.items).filter((conversation) => !known.has(conversation.id)));
       conversationNextCursor = page.nextCursor ?? null;
-      conversationUnreadTotal = Number(page.unreadCount ?? conversationUnreadTotal);
+      if (unreadGeneration === unreadRequest) conversationUnreadTotal = Number(page.unreadCount ?? conversationUnreadTotal);
       renderUnread();
       renderConversationList();
     } finally {
@@ -1098,11 +1102,13 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     composer.replaceChildren();
     closeMentionMenu();
     provisionalReplies.clear();
+    let committed = false;
     try {
       const result = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/messages`, {
         method: "POST",
         body: { content, requestId: requestId() }
       });
+      committed = true;
       if (current?.id !== conversationId) {
         await refreshConversationSummary(conversationId);
         return;
@@ -1115,8 +1121,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       await refreshConversationSummary(conversationId);
       if (result.chain?.status === "waiting_config") toast("消息已发送；请配置主模型和 fallback 后重试 AI 链路", "warning");
     } catch (error) {
-      if (current?.id === conversationId) composer.textContent = content;
-      toast(error.message, "error");
+      if (!committed && current?.id === conversationId) composer.textContent = content;
+      toast(committed ? `消息已发送，但刷新会话失败：${error.message}` : error.message, "error");
     }
   }
 
