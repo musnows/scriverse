@@ -533,9 +533,36 @@ describe("全局 IM API", () => {
         new Date(sequence * 1000).toISOString()
       );
     }
+    const pagedCharacterMembership = runtime.database.get(
+      "SELECT id FROM im_character_memberships WHERE conversation_id = ? AND left_at IS NULL",
+      pagedGroup.body.data.id
+    );
+    runtime.database.run(
+      `INSERT INTO im_chains (
+         id, conversation_id, initiator_user_id, authorization_user_id, trigger_message_id,
+         mode, threshold, max_ai_messages, retry_count, status, created_at, updated_at, completed_at
+       ) VALUES ('im-page-query-chain', ?, ?, ?, 'im-page-message-55', 'mention', 60, 20, 3, 'failed', ?, ?, ?)`,
+      pagedGroup.body.data.id,
+      owner.user.userId,
+      owner.user.userId,
+      "9998-09-02T00:01:00.000Z",
+      "9998-09-02T00:01:00.000Z",
+      "9998-09-02T00:01:00.000Z"
+    );
+    for (let index = 1; index <= 20; index += 1) {
+      runtime.database.run(
+        `INSERT INTO im_chain_turns (id, chain_id, character_membership_id, kind, status, created_at, completed_at)
+         VALUES (?, 'im-page-query-chain', ?, 'reply', 'failed', ?, ?)`,
+        `im-page-query-turn-${index}`,
+        String(pagedCharacterMembership?.id),
+        `9998-09-02T00:01:${String(index).padStart(2, "0")}.000Z`,
+        `9998-09-02T00:01:${String(index).padStart(2, "0")}.000Z`
+      );
+    }
     const newestPage = await owner.agent.get(`/api/im/conversations/${pagedGroup.body.data.id}`).expect(200);
     expect(newestPage.body.data.hasMoreMessages).toBe(true);
     expect(newestPage.body.data.messages).toHaveLength(50);
+    expect(newestPage.body.data.activeChain.turns).toHaveLength(20);
     expect(newestPage.body.data.messages[0]).toMatchObject({ sequence: 6, content: "分页消息 6" });
     const pageAllSpy = vi.spyOn(runtime.database, "all");
     const pageGetSpy = vi.spyOn(runtime.database, "get");

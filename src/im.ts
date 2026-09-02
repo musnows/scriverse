@@ -239,7 +239,10 @@ export class ImService {
 
   listAvailableWorks(user: AuthUser): Record<string, unknown>[] {
     return this.db.all(
-      `SELECT DISTINCT work.* FROM works work
+      `SELECT DISTINCT work.*, (
+         SELECT COUNT(*) FROM characters character
+         WHERE character.work_id = work.id AND character.merged_into_character_id IS NULL
+       ) AS character_count FROM works work
        LEFT JOIN work_memberships membership ON membership.work_id = work.id AND membership.user_id = ?
        WHERE work.deleted_at IS NULL AND COALESCE(work.is_internal, 0) = 0
          AND (work.owner_user_id = ? OR membership.user_id = ?)
@@ -254,10 +257,7 @@ export class ImService {
       return [{
         id: workId,
         title: requiredString(work.title),
-        characterCount: Number(this.db.get(
-          "SELECT COUNT(*) AS count FROM characters WHERE work_id = ? AND merged_into_character_id IS NULL",
-          workId
-        )?.count ?? 0)
+        characterCount: Number(work.character_count)
       }];
     }).filter((work) => Number(work.characterCount) > 0);
   }
@@ -272,7 +272,9 @@ export class ImService {
       }
     }
     const rows = this.db.all(
-      `SELECT character.id, character.work_id, work.title AS work_title,
+      `SELECT character.id, character.work_id, character.name, character.code, character.gender,
+              character.is_dead, character.attributes_json, character.profile_json,
+              work.title AS work_title, avatar.sha256 AS avatar_sha256,
               EXISTS (
                 SELECT 1 FROM work_entity_pins pin
                 WHERE pin.work_id = character.work_id AND pin.entity_type = 'character'
@@ -284,6 +286,7 @@ export class ImService {
                   AND favorite.entity_id = character.id AND favorite.user_id = ? AND favorite.is_favorite = 1
               ) AS user_is_favorite
        FROM characters character JOIN works work ON work.id = character.work_id
+       LEFT JOIN character_avatars avatar ON avatar.character_id = character.id
        LEFT JOIN work_memberships membership ON membership.work_id = work.id AND membership.user_id = ?
        WHERE work.deleted_at IS NULL AND character.merged_into_character_id IS NULL
          AND (work.owner_user_id = ? OR membership.user_id = ?)
@@ -303,22 +306,38 @@ export class ImService {
       normalizedQuery,
       normalizedQuery
     );
+    const permissionsByWorkId = new Map<string, ReturnType<UserAuthService["workModulePermissions"]>>();
     return rows.flatMap((row) => {
       const workId = requiredString(row.work_id);
-      const permissions = this.auth.workModulePermissions(user, workId, true);
+      let permissions = permissionsByWorkId.get(workId);
+      if (!permissionsByWorkId.has(workId)) {
+        permissions = this.auth.workModulePermissions(user, workId, true);
+        permissionsByWorkId.set(workId, permissions);
+      }
       if (!permissions || !canReadWorkModule(permissions, "characters") || !canWriteWorkModule(permissions, "ai-chat")) return [];
-      const character = this.store.getCharacter(requiredString(row.id));
+      const character = {
+        id: requiredString(row.id),
+        name: requiredString(row.name),
+        code: requiredString(row.code),
+        gender: requiredString(row.gender),
+        isDead: booleanValue(row.is_dead),
+        attributes: json<Record<string, unknown>>(requiredString(row.attributes_json), {}),
+        profile: json<Record<string, unknown>>(requiredString(row.profile_json), {})
+      };
+      const avatarSha256 = optionalString(row.avatar_sha256);
       return [{
-        id: requiredString(character.id),
+        id: character.id,
         workId,
         workTitle: requiredString(row.work_title),
         name: requiredString(character.name),
         code: requiredString(character.code),
         gender: requiredString(character.gender),
-        isDead: Boolean(character.isDead),
+        isDead: character.isDead,
         isPinned: Boolean(row.is_pinned),
         isFavorite: Boolean(row.user_is_favorite),
-        avatarUrl: character.avatarUrl ?? null,
+        avatarUrl: avatarSha256
+          ? `/api/characters/${encodeURIComponent(character.id)}/avatar?v=${encodeURIComponent(avatarSha256)}`
+          : null,
         publicSummary: publicCharacterSummary(character)
       }];
     });
@@ -1038,7 +1057,8 @@ export class ImService {
       optionalString(viewerMembership.left_at),
       optionalString(viewerMembership.left_at)
     );
-    const replyTurns = activeChain ? this.db.all(
+    const activeChainId = requiredString(activeChain?.id);
+    const replyTurnRows = activeChain ? this.db.all(
       `SELECT turn.*, membership.character_id, membership.snapshot_json
        FROM im_chain_turns turn JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
        WHERE turn.chain_id = ? AND turn.kind = 'reply' AND membership.joined_sequence <= ?
@@ -1047,15 +1067,26 @@ export class ImService {
       requiredString(activeChain.id),
       Number(activeChain.trigger_sequence),
       Number(activeChain.trigger_sequence)
-    ).map((turn) => {
+    ) : [];
+    const replyCharacterIds = [...new Set(replyTurnRows.flatMap((turn) => optionalString(turn.character_id) ? [requiredString(turn.character_id)] : []))];
+    const replyAvatarShaByCharacterId = new Map<string, string>();
+    if (viewerLeftSequence === null && replyCharacterIds.length > 0) {
+      const placeholders = replyCharacterIds.map(() => "?").join(", ");
+      for (const avatar of this.db.all(
+        `SELECT character_id, sha256 FROM character_avatars WHERE character_id IN (${placeholders})`,
+        ...replyCharacterIds
+      )) {
+        replyAvatarShaByCharacterId.set(requiredString(avatar.character_id), requiredString(avatar.sha256));
+      }
+    }
+    const conversationSnapshot = json<Record<string, unknown>>(requiredString(viewerMembership.conversation_snapshot_json), {});
+    const frozenParticipants = conversationSnapshot.participants && typeof conversationSnapshot.participants === "object"
+      ? conversationSnapshot.participants as Record<string, unknown>
+      : {};
+    const replyTurns = replyTurnRows.map((turn) => {
       const snapshot = json<Record<string, unknown>>(requiredString(turn.snapshot_json), {});
       const characterId = optionalString(turn.character_id) ?? requiredString(snapshot.id);
-      const avatar = characterId ? this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", characterId) : null;
-      const currentAvatarSha256 = optionalString(avatar?.sha256);
-      const conversationSnapshot = json<Record<string, unknown>>(requiredString(viewerMembership.conversation_snapshot_json), {});
-      const frozenParticipants = conversationSnapshot.participants && typeof conversationSnapshot.participants === "object"
-        ? conversationSnapshot.participants as Record<string, unknown>
-        : {};
+      const currentAvatarSha256 = characterId ? replyAvatarShaByCharacterId.get(characterId) ?? null : null;
       const frozenCharacter = Array.isArray(frozenParticipants.characters)
         ? frozenParticipants.characters.find((item) => item && typeof item === "object" && !Array.isArray(item)
           && optionalString((item as Record<string, unknown>).characterId) === characterId) as Record<string, unknown> | undefined
@@ -1067,7 +1098,7 @@ export class ImService {
         : optionalString(frozenCharacter?.avatarUrl);
       return {
         id: requiredString(turn.id),
-        chainId: requiredString(activeChain.id),
+        chainId: activeChainId,
         characterId,
         character: {
           characterId,
@@ -1080,7 +1111,7 @@ export class ImService {
         createdAt: requiredString(turn.created_at),
         completedAt: optionalString(turn.completed_at)
       };
-    }) : [];
+    });
     const messagePage = this.visibleMessagePage(conversationId, userId, 50, beforeSequence, afterSequence);
     return {
       ...this.mapConversation(row, userId),
