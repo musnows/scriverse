@@ -201,34 +201,36 @@ export class ImService {
       throw new AppError(400, "IM_FALLBACK_MODEL_DUPLICATE", "主模型和 fallback 模型不能相同");
     }
     const timestamp = now();
-    this.db.run(
-      `INSERT INTO im_user_settings (
-         user_id, preferred_name, pronouns, identity_summary, additional_notes,
-         primary_model_id, fallback_model_id, retry_count, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(user_id) DO UPDATE SET
-         preferred_name = excluded.preferred_name,
-         pronouns = excluded.pronouns,
-         identity_summary = excluded.identity_summary,
-         additional_notes = excluded.additional_notes,
-         primary_model_id = excluded.primary_model_id,
-         fallback_model_id = excluded.fallback_model_id,
-         retry_count = excluded.retry_count,
-         updated_at = excluded.updated_at`,
-      userId,
-      input.preferredName ?? requiredString(current.preferredName),
-      input.pronouns ?? requiredString(current.pronouns),
-      input.identitySummary ?? requiredString(current.identitySummary),
-      input.additionalNotes ?? requiredString(current.additionalNotes),
-      primaryModelId,
-      fallbackModelId,
-      input.retryCount ?? Number(current.retryCount),
-      timestamp
-    );
-    this.store.audit(null, "im.settings.updated", "user", userId, {
-      primaryModelId,
-      fallbackModelId,
-      retryCount: input.retryCount ?? current.retryCount
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO im_user_settings (
+           user_id, preferred_name, pronouns, identity_summary, additional_notes,
+           primary_model_id, fallback_model_id, retry_count, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           preferred_name = excluded.preferred_name,
+           pronouns = excluded.pronouns,
+           identity_summary = excluded.identity_summary,
+           additional_notes = excluded.additional_notes,
+           primary_model_id = excluded.primary_model_id,
+           fallback_model_id = excluded.fallback_model_id,
+           retry_count = excluded.retry_count,
+           updated_at = excluded.updated_at`,
+        userId,
+        input.preferredName ?? requiredString(current.preferredName),
+        input.pronouns ?? requiredString(current.pronouns),
+        input.identitySummary ?? requiredString(current.identitySummary),
+        input.additionalNotes ?? requiredString(current.additionalNotes),
+        primaryModelId,
+        fallbackModelId,
+        input.retryCount ?? Number(current.retryCount),
+        timestamp
+      );
+      this.store.audit(null, "im.settings.updated", "user", userId, {
+        primaryModelId,
+        fallbackModelId,
+        retryCount: input.retryCount ?? current.retryCount
+      });
     });
     return this.getSettings(userId);
   }

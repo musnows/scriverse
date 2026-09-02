@@ -210,6 +210,15 @@ describe("全局 IM API", () => {
       fallbackModelId: models.fallbackModelId
     });
     runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = 'provider-im'");
+    const originalAudit = runtime.store.audit.bind(runtime.store);
+    runtime.store.audit = () => { throw new Error("forced IM settings audit failure"); };
+    try {
+      expect(() => runtime.im.updateSettings(owner.user.userId, { preferredName: "不应保存的身份" }))
+        .toThrow(/forced IM settings audit failure/u);
+    } finally {
+      runtime.store.audit = originalAudit;
+    }
+    expect(runtime.im.getSettings(owner.user.userId)).toMatchObject({ preferredName: "模型失效时仍可改身份" });
 
     const ownerConversationEvents: string[] = [];
     const unsubscribeOwnerConversations = runtime.imOrchestrator.subscribe(owner.user.userId, (event) => {
