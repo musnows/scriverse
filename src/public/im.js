@@ -134,6 +134,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let memberAddSearchTimer = null;
   let memberAddRequest = 0;
   let conversationListRequest = 0;
+  const conversationSummaryRequests = new Map();
   let conversationRequest = 0;
   let diagnosticsRequest = 0;
   let requestedConversationId = null;
@@ -269,6 +270,23 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     conversations = nextConversations;
     renderUnread();
     renderConversationList();
+  }
+
+  function upsertConversationSummary(summary) {
+    const index = conversations.findIndex((conversation) => conversation.id === summary.id);
+    if (index >= 0) conversations[index] = summary;
+    else conversations.push(summary);
+    conversations.sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+    renderUnread();
+    renderConversationList();
+  }
+
+  async function refreshConversationSummary(conversationId) {
+    const request = (conversationSummaryRequests.get(conversationId) || 0) + 1;
+    conversationSummaryRequests.set(conversationId, request);
+    const summary = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/summary`);
+    if (conversationSummaryRequests.get(conversationId) !== request) return;
+    upsertConversationSummary(summary);
   }
 
   function conversationSubtitle(item) {
@@ -646,9 +664,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     renderConversation(conversationChanged);
     if (current.active && current.latestSequence > 0 && shouldMarkImConversationRead(opened, document.visibilityState)) {
       if (request !== conversationRequest) return;
-      await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: { sequence: current.latestSequence } });
+      const summary = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: { sequence: current.latestSequence } });
       if (request !== conversationRequest) return;
-      await refreshConversations();
+      upsertConversationSummary(summary);
     }
   }
 
@@ -962,7 +980,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         body: { content, requestId: requestId() }
       });
       if (current?.id !== conversationId) {
-        await refreshConversations();
+        await refreshConversationSummary(conversationId);
         return;
       }
       const existing = array(current.messages).some((message) => message.id === result.message.id);
@@ -970,7 +988,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       current.activeChain = result.chain;
       renderConversation(true);
       await openConversation(current.id);
-      await refreshConversations();
+      await refreshConversationSummary(conversationId);
       if (result.chain?.status === "waiting_config") toast("消息已发送；请配置主模型和 fallback 后重试 AI 链路", "warning");
     } catch (error) {
       if (current?.id === conversationId) composer.textContent = content;
@@ -982,7 +1000,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const envelope = JSON.parse(event.data);
     const eventConversationId = envelope.conversationId;
     if (!opened) {
-      if (shouldRefreshImConversationListForEvent(envelope.type)) await refreshConversations();
+      if (shouldRefreshImConversationListForEvent(envelope.type)) await refreshConversationSummary(eventConversationId);
       return;
     }
     if (envelope.type === "turn" && current?.id === eventConversationId && envelope.payload.kind === "reply") {
@@ -1016,7 +1034,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       return;
     }
     if (current?.id === eventConversationId) await openConversation(eventConversationId);
-    else if (shouldRefreshImConversationListForEvent(envelope.type)) await refreshConversations();
+    else if (shouldRefreshImConversationListForEvent(envelope.type)) await refreshConversationSummary(eventConversationId);
   }
 
   function connectEvents() {
@@ -1074,7 +1092,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.addEventListener("visibilitychange", () => {
       if (!current || !shouldMarkImConversationRead(opened, document.visibilityState) || !current.active || current.latestSequence <= 0) return;
       void api(`/api/im/conversations/${encodeURIComponent(current.id)}/read`, { method: "POST", body: { sequence: current.latestSequence } })
-        .then(refreshConversations)
+        .then(upsertConversationSummary)
         .catch(() => undefined);
     });
     document.querySelector("#im-create-search").addEventListener("input", () => {

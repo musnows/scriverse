@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
 import { PLATFORM_AI_WORK_ID } from "../../src/database.js";
 
@@ -554,6 +554,14 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ userId: member.user.userId })
       .expect(403);
+    const allSpy = vi.spyOn(runtime.database, "all");
+    const getSpy = vi.spyOn(runtime.database, "get");
+    const listedConversations = runtime.im.listConversations(owner.user.userId);
+    expect(listedConversations.length).toBeGreaterThanOrEqual(4);
+    expect(allSpy).toHaveBeenCalledTimes(7);
+    expect(getSpy).not.toHaveBeenCalled();
+    allSpy.mockRestore();
+    getSpy.mockRestore();
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 

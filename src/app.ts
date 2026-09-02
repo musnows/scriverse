@@ -1956,6 +1956,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const user = requireImUser(request);
     data(response, im.listConversations(user.userId));
   });
+  app.get("/api/im/conversations/:conversationId/summary", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.getConversationSummary(request.params.conversationId, user.userId));
+  });
   app.get("/api/im/events", (request, response) => {
     const user = requireImUser(request);
     let started = false;

@@ -44,6 +44,15 @@ export type ImMessageInput = {
   requestId: string;
 };
 
+type PreparedConversationSummary = {
+  participants: { humans: Record<string, unknown>[]; characters: Record<string, unknown>[] };
+  activeMembership?: Record<string, unknown>;
+  viewerMembership: Record<string, unknown>;
+  latestSequence: number;
+  unreadCount: number;
+  mentionUnreadCount: number;
+};
+
 const IM_MENTION_PATTERN = /mention:\/\/(character|user)\/([A-Za-z0-9_.:-]{1,200})/gu;
 
 function requiredString(value: unknown): string {
@@ -679,9 +688,9 @@ export class ImService {
     };
   }
 
-  private mapConversation(row: Record<string, unknown>, userId: string): Record<string, unknown> {
+  private mapConversation(row: Record<string, unknown>, userId: string, prepared?: PreparedConversationSummary): Record<string, unknown> {
     const conversationId = requiredString(row.id);
-    const participants = this.conversationParticipants(conversationId, userId);
+    const participants = prepared?.participants ?? this.conversationParticipants(conversationId, userId);
     const avatarCharacters = participants.characters
       .filter((membership) => requiredString(membership.status) === "active")
       .slice(0, 3)
@@ -723,8 +732,8 @@ export class ImService {
           username: "username" in member ? member.username : ""
         } : {})
       }));
-    const activeMembership = this.activeMembership(conversationId, userId);
-    const viewerMembership = activeMembership ?? this.db.get(
+    const activeMembership = prepared?.activeMembership ?? (prepared ? undefined : this.activeMembership(conversationId, userId));
+    const viewerMembership = prepared?.viewerMembership ?? activeMembership ?? this.db.get(
       `SELECT * FROM im_human_memberships
        WHERE conversation_id = ? AND user_id = ?
        ORDER BY joined_sequence DESC, joined_at DESC LIMIT 1`,
@@ -735,7 +744,7 @@ export class ImService {
       ? {}
       : json<Record<string, unknown>>(requiredString(viewerMembership?.conversation_snapshot_json), {});
     const conversationValue = (column: string, snapshotKey: string): unknown => historicalSnapshot[snapshotKey] ?? row[column];
-    const conversationLatestSequence = Number(this.db.get(
+    const conversationLatestSequence = prepared?.latestSequence ?? Number(this.db.get(
       "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM im_messages WHERE conversation_id = ?",
       conversationId
     )?.sequence ?? 0);
@@ -743,7 +752,7 @@ export class ImService {
       ? conversationLatestSequence
       : Math.min(conversationLatestSequence, Number(viewerMembership?.left_sequence ?? conversationLatestSequence));
     const lastReadSequence = Number(activeMembership?.last_read_sequence ?? latestSequence);
-    const unread = activeMembership ? Number(this.db.get(
+    const unread = prepared?.unreadCount ?? (activeMembership ? Number(this.db.get(
       `SELECT COUNT(*) AS count FROM im_messages message
        WHERE message.conversation_id = ? AND message.sequence > ?
          AND EXISTS (
@@ -754,8 +763,8 @@ export class ImService {
       conversationId,
       lastReadSequence,
       userId
-    )?.count ?? 0) : 0;
-    const mentionUnread = activeMembership ? Number(this.db.get(
+    )?.count ?? 0) : 0);
+    const mentionUnread = prepared?.mentionUnreadCount ?? (activeMembership ? Number(this.db.get(
       `SELECT COUNT(DISTINCT message.id) AS count FROM im_messages message
        JOIN im_mentions mention ON mention.message_id = message.id
        WHERE message.conversation_id = ? AND message.sequence > ?
@@ -763,7 +772,7 @@ export class ImService {
       conversationId,
       lastReadSequence,
       userId
-    )?.count ?? 0) : 0;
+    )?.count ?? 0) : 0);
     return {
       id: conversationId,
       kind: requiredString(row.kind),
@@ -786,14 +795,137 @@ export class ImService {
   }
 
   listConversations(userId: string): Record<string, unknown>[] {
-    return this.db.all(
+    const conversations = this.db.all(
       `SELECT DISTINCT conversation.* FROM im_conversations conversation
        JOIN im_human_memberships membership ON membership.conversation_id = conversation.id
        WHERE membership.user_id = ?`,
       userId
-    ).map((row) => this.mapConversation(row, userId))
+    );
+    if (conversations.length === 0) return [];
+    const viewerMemberships = this.db.all(
+      `SELECT * FROM im_human_memberships WHERE user_id = ?
+       ORDER BY conversation_id, joined_sequence DESC, joined_at DESC`,
+      userId
+    );
+    const viewerByConversation = new Map<string, Record<string, unknown>>();
+    for (const membership of viewerMemberships) {
+      const conversationId = requiredString(membership.conversation_id);
+      if (!viewerByConversation.has(conversationId)) viewerByConversation.set(conversationId, membership);
+    }
+    const latestByConversation = new Map(this.db.all(
+      `SELECT message.conversation_id, MAX(message.sequence) AS sequence
+       FROM im_messages message
+       WHERE EXISTS (
+         SELECT 1 FROM im_human_memberships viewer
+         WHERE viewer.conversation_id = message.conversation_id AND viewer.user_id = ?
+       ) GROUP BY message.conversation_id`,
+      userId
+    ).map((row) => [requiredString(row.conversation_id), Number(row.sequence)]));
+    const unreadByConversation = new Map(this.db.all(
+      `SELECT membership.conversation_id, COUNT(message.id) AS count
+       FROM im_human_memberships membership
+       JOIN im_messages message ON message.conversation_id = membership.conversation_id
+         AND message.sequence > membership.last_read_sequence
+         AND message.sequence > membership.joined_sequence
+       WHERE membership.user_id = ? AND membership.left_at IS NULL
+       GROUP BY membership.conversation_id`,
+      userId
+    ).map((row) => [requiredString(row.conversation_id), Number(row.count)]));
+    const mentionUnreadByConversation = new Map(this.db.all(
+      `SELECT membership.conversation_id, COUNT(DISTINCT message.id) AS count
+       FROM im_human_memberships membership
+       JOIN im_messages message ON message.conversation_id = membership.conversation_id
+         AND message.sequence > membership.last_read_sequence
+         AND message.sequence > membership.joined_sequence
+       JOIN im_mentions mention ON mention.message_id = message.id
+         AND mention.target_kind = 'user' AND mention.target_id = membership.user_id
+       WHERE membership.user_id = ? AND membership.left_at IS NULL
+       GROUP BY membership.conversation_id`,
+      userId
+    ).map((row) => [requiredString(row.conversation_id), Number(row.count)]));
+    const humanRows = this.db.all(
+      `SELECT membership.id AS membership_id, membership.conversation_id, membership.user_id, membership.role,
+              membership.joined_sequence, membership.left_sequence, membership.joined_at, membership.left_at,
+              user.username, user.display_name, user.avatar_sha256
+       FROM im_human_memberships membership JOIN users user ON user.id = membership.user_id
+       WHERE EXISTS (
+         SELECT 1 FROM im_human_memberships viewer
+         WHERE viewer.conversation_id = membership.conversation_id AND viewer.user_id = ?
+       ) ORDER BY membership.conversation_id, membership.joined_at, membership.id`,
+      userId
+    );
+    const characterRows = this.db.all(
+      `SELECT membership.*, avatar.sha256 AS avatar_sha256
+       FROM im_character_memberships membership
+       LEFT JOIN character_avatars avatar ON avatar.character_id = membership.character_id
+       WHERE EXISTS (
+         SELECT 1 FROM im_human_memberships viewer
+         WHERE viewer.conversation_id = membership.conversation_id AND viewer.user_id = ?
+       ) ORDER BY membership.conversation_id, membership.joined_at, membership.id`,
+      userId
+    );
+    const visibleDuringViewerTenure = (membership: Record<string, unknown>, viewer: Record<string, unknown>): boolean => {
+      if (viewer.left_sequence === null || viewer.left_sequence === undefined) return membership.left_at === null || membership.left_at === undefined;
+      const leftSequence = Number(viewer.left_sequence);
+      const leftAt = requiredString(viewer.left_at);
+      const joinedSequence = Number(membership.joined_sequence);
+      const membershipLeftSequence = membership.left_sequence === null || membership.left_sequence === undefined
+        ? null
+        : Number(membership.left_sequence);
+      return (joinedSequence < leftSequence || (joinedSequence === leftSequence && requiredString(membership.joined_at) <= leftAt))
+        && (membershipLeftSequence === null || membershipLeftSequence > leftSequence
+          || (membershipLeftSequence === leftSequence && requiredString(membership.left_at) >= leftAt));
+    };
+    return conversations.map((row) => {
+      const conversationId = requiredString(row.id);
+      const viewer = viewerByConversation.get(conversationId);
+      if (!viewer) throw new AppError(403, "IM_CONVERSATION_ACCESS_DENIED", "你不是这个 IM 会话的成员");
+      const activeMembership = viewer.left_at === null || viewer.left_at === undefined ? viewer : undefined;
+      const snapshot = activeMembership ? {} : json<Record<string, unknown>>(requiredString(viewer.conversation_snapshot_json), {});
+      const frozen = snapshot.participants && typeof snapshot.participants === "object" && !Array.isArray(snapshot.participants)
+        ? snapshot.participants as Record<string, unknown>
+        : null;
+      let participants: PreparedConversationSummary["participants"];
+      if (frozen && Array.isArray(frozen.humans) && Array.isArray(frozen.characters)) {
+        participants = {
+          humans: frozen.humans.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item))),
+          characters: frozen.characters.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+        };
+      } else {
+        const humans = humanRows.filter((membership) => requiredString(membership.conversation_id) === conversationId
+          && visibleDuringViewerTenure(membership, viewer)).map((membership) => ({
+          ...this.mapHumanMembership(membership),
+          ...(activeMembership ? {} : { leftAt: null })
+        }));
+        const characters = characterRows.filter((membership) => requiredString(membership.conversation_id) === conversationId
+          && visibleDuringViewerTenure(membership, viewer)).map((membership) => {
+          const membershipSnapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
+          const currentAvatarSha256 = optionalString(membership.avatar_sha256);
+          const frozenAvatarSha256 = optionalString(membershipSnapshot.avatarSha256);
+          return {
+            ...this.mapCharacterMembership(activeMembership || (currentAvatarSha256 && currentAvatarSha256 === frozenAvatarSha256)
+              ? membership
+              : { ...membership, avatar_sha256: null }),
+            ...(activeMembership ? {} : { leftAt: null, status: "active" })
+          };
+        });
+        participants = { humans, characters };
+      }
+      return this.mapConversation(row, userId, {
+        participants,
+        activeMembership,
+        viewerMembership: viewer,
+        latestSequence: latestByConversation.get(conversationId) ?? 0,
+        unreadCount: unreadByConversation.get(conversationId) ?? 0,
+        mentionUnreadCount: mentionUnreadByConversation.get(conversationId) ?? 0
+      });
+    })
       .sort((left, right) => requiredString(right.updatedAt).localeCompare(requiredString(left.updatedAt))
         || requiredString(right.createdAt).localeCompare(requiredString(left.createdAt)));
+  }
+
+  getConversationSummary(conversationId: string, userId: string): Record<string, unknown> {
+    return this.mapConversation(this.assertReadableConversation(conversationId, userId), userId);
   }
 
   getConversation(conversationId: string, userId: string, beforeSequence?: number, afterSequence?: number): Record<string, unknown> {
