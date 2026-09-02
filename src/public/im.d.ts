@@ -43,7 +43,8 @@ export function collectImMessageGap(
 ): Promise<Array<Record<string, unknown>>>;
 
 export function createImWorkspace(options: Record<string, unknown>): {
-  start(): Promise<void>;
+  start(): void;
+  activate(): Promise<void>;
   open(): Promise<void>;
   close(): void;
   refreshUnread(): Promise<void>;
