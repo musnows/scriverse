@@ -2122,6 +2122,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const memberUserIds = im.disbandGroup(user, request.params.conversationId);
     imOrchestrator.cancelConversation(request.params.conversationId, "group_disbanded");
     for (const userId of memberUserIds) imOrchestrator.publishConversationToUser(userId, request.params.conversationId);
+    imOrchestrator.forgetConversation(request.params.conversationId);
     noContent(response);
   });
   app.post("/api/im/conversations/:conversationId/messages", (request, response) => {

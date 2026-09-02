@@ -52,6 +52,10 @@ type PreparedConversationSummary = {
   unreadCount: number;
   mentionUnreadCount: number;
 };
+type PreparedMessagePage = {
+  mentionsByMessageId: Map<string, Record<string, unknown>[]>;
+  avatarShaByCharacterId: Map<string, string>;
+};
 
 const IM_MENTION_PATTERN = /mention:\/\/(character|user)\/([A-Za-z0-9_.:-]{1,200})/gu;
 
@@ -626,7 +630,7 @@ export class ImService {
       const activeMembership = this.activeMembership(conversationId, userId);
       const historicalParticipants = activeMembership ? undefined : this.conversationParticipants(conversationId, userId);
       return {
-        messages: rows.slice(0, limit).map((row) => this.mapMessage(row, Boolean(activeMembership), historicalParticipants)),
+        messages: this.mapMessagePage(rows.slice(0, limit), Boolean(activeMembership), historicalParticipants),
         hasMore: false,
         hasMoreAfter
       };
@@ -652,7 +656,7 @@ export class ImService {
     const activeMembership = this.activeMembership(conversationId, userId);
     const historicalParticipants = activeMembership ? undefined : this.conversationParticipants(conversationId, userId);
     return {
-      messages: pageRows.map((row) => this.mapMessage(row, Boolean(activeMembership), historicalParticipants)),
+      messages: this.mapMessagePage(pageRows, Boolean(activeMembership), historicalParticipants),
       hasMore,
       hasMoreAfter: false
     };
@@ -661,15 +665,17 @@ export class ImService {
   private mapMessage(
     row: Record<string, unknown>,
     showCurrentCharacterAvatar = true,
-    historicalParticipants?: { humans: Record<string, unknown>[]; characters: Record<string, unknown>[] }
+    historicalParticipants?: { humans: Record<string, unknown>[]; characters: Record<string, unknown>[] },
+    prepared?: PreparedMessagePage
   ): Record<string, unknown> {
     const messageId = requiredString(row.id);
     const conversationId = requiredString(row.conversation_id);
     const senderCharacterId = optionalString(row.sender_character_id);
     const sender = json<Record<string, unknown>>(requiredString(row.sender_snapshot_json), {});
     if (showCurrentCharacterAvatar && requiredString(row.sender_kind) === "character" && senderCharacterId) {
-      const avatar = this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", senderCharacterId);
-      const avatarSha256 = optionalString(avatar?.sha256);
+      const avatarSha256 = prepared
+        ? prepared.avatarShaByCharacterId.get(senderCharacterId) ?? null
+        : optionalString(this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", senderCharacterId)?.sha256);
       sender.avatarUrl = avatarSha256
         ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(senderCharacterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
         : null;
@@ -687,10 +693,10 @@ export class ImService {
         : optionalString(historicalParticipants?.humans
             .find((human) => optionalString(human.userId) === senderUserId)?.avatarUrl);
     }
-    const mentions = this.db.all(
-      "SELECT * FROM im_mentions WHERE message_id = ? ORDER BY position",
-      messageId
-    ).map((mention) => ({
+    const mentionRows = prepared
+      ? prepared.mentionsByMessageId.get(messageId) ?? []
+      : this.db.all("SELECT * FROM im_mentions WHERE message_id = ? ORDER BY position", messageId);
+    const mentions = mentionRows.map((mention) => ({
       kind: requiredString(mention.target_kind),
       id: requiredString(mention.target_id),
       position: Number(mention.position),
@@ -711,6 +717,41 @@ export class ImService {
       metadata: json(requiredString(row.metadata_json), {}),
       createdAt: requiredString(row.created_at)
     };
+  }
+
+  private mapMessagePage(
+    rows: Record<string, unknown>[],
+    showCurrentCharacterAvatars: boolean,
+    historicalParticipants?: { humans: Record<string, unknown>[]; characters: Record<string, unknown>[] }
+  ): Record<string, unknown>[] {
+    if (rows.length === 0) return [];
+    const messageIds = rows.map((row) => requiredString(row.id));
+    const messagePlaceholders = messageIds.map(() => "?").join(", ");
+    const mentionsByMessageId = new Map<string, Record<string, unknown>[]>();
+    for (const mention of this.db.all(
+      `SELECT * FROM im_mentions WHERE message_id IN (${messagePlaceholders}) ORDER BY message_id, position`,
+      ...messageIds
+    )) {
+      const messageId = requiredString(mention.message_id);
+      const mentions = mentionsByMessageId.get(messageId) ?? [];
+      mentions.push(mention);
+      mentionsByMessageId.set(messageId, mentions);
+    }
+    const characterIds = showCurrentCharacterAvatars
+      ? [...new Set(rows.flatMap((row) => optionalString(row.sender_character_id) ? [requiredString(row.sender_character_id)] : []))]
+      : [];
+    const avatarShaByCharacterId = new Map<string, string>();
+    if (characterIds.length > 0) {
+      const characterPlaceholders = characterIds.map(() => "?").join(", ");
+      for (const avatar of this.db.all(
+        `SELECT character_id, sha256 FROM character_avatars WHERE character_id IN (${characterPlaceholders})`,
+        ...characterIds
+      )) {
+        avatarShaByCharacterId.set(requiredString(avatar.character_id), requiredString(avatar.sha256));
+      }
+    }
+    const prepared = { mentionsByMessageId, avatarShaByCharacterId };
+    return rows.map((row) => this.mapMessage(row, showCurrentCharacterAvatars, historicalParticipants, prepared));
   }
 
   private mapConversation(row: Record<string, unknown>, userId: string, prepared?: PreparedConversationSummary): Record<string, unknown> {
@@ -889,6 +930,20 @@ export class ImService {
        ) ORDER BY membership.conversation_id, membership.joined_at, membership.id`,
       userId
     );
+    const humanRowsByConversation = new Map<string, Record<string, unknown>[]>();
+    for (const membership of humanRows) {
+      const conversationId = requiredString(membership.conversation_id);
+      const memberships = humanRowsByConversation.get(conversationId) ?? [];
+      memberships.push(membership);
+      humanRowsByConversation.set(conversationId, memberships);
+    }
+    const characterRowsByConversation = new Map<string, Record<string, unknown>[]>();
+    for (const membership of characterRows) {
+      const conversationId = requiredString(membership.conversation_id);
+      const memberships = characterRowsByConversation.get(conversationId) ?? [];
+      memberships.push(membership);
+      characterRowsByConversation.set(conversationId, memberships);
+    }
     const visibleDuringViewerTenure = (membership: Record<string, unknown>, viewer: Record<string, unknown>): boolean => {
       if (viewer.left_sequence === null || viewer.left_sequence === undefined) return membership.left_at === null || membership.left_at === undefined;
       const leftSequence = Number(viewer.left_sequence);
@@ -917,13 +972,13 @@ export class ImService {
           characters: frozen.characters.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
         };
       } else {
-        const humans = humanRows.filter((membership) => requiredString(membership.conversation_id) === conversationId
-          && visibleDuringViewerTenure(membership, viewer)).map((membership) => ({
+        const humans = (humanRowsByConversation.get(conversationId) ?? [])
+          .filter((membership) => visibleDuringViewerTenure(membership, viewer)).map((membership) => ({
           ...this.mapHumanMembership(membership),
           ...(activeMembership ? {} : { leftAt: null })
         }));
-        const characters = characterRows.filter((membership) => requiredString(membership.conversation_id) === conversationId
-          && visibleDuringViewerTenure(membership, viewer)).map((membership) => {
+        const characters = (characterRowsByConversation.get(conversationId) ?? [])
+          .filter((membership) => visibleDuringViewerTenure(membership, viewer)).map((membership) => {
           const membershipSnapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
           const currentAvatarSha256 = optionalString(membership.avatar_sha256);
           const frozenAvatarSha256 = optionalString(membershipSnapshot.avatarSha256);

@@ -537,6 +537,12 @@ describe("全局 IM API", () => {
     expect(newestPage.body.data.hasMoreMessages).toBe(true);
     expect(newestPage.body.data.messages).toHaveLength(50);
     expect(newestPage.body.data.messages[0]).toMatchObject({ sequence: 6, content: "分页消息 6" });
+    const pageAllSpy = vi.spyOn(runtime.database, "all");
+    const pageGetSpy = vi.spyOn(runtime.database, "get");
+    expect((runtime.im.getConversation(pagedGroup.body.data.id, owner.user.userId).messages as unknown[])).toHaveLength(50);
+    expect(pageAllSpy.mock.calls.length + pageGetSpy.mock.calls.length).toBeLessThanOrEqual(15);
+    pageAllSpy.mockRestore();
+    pageGetSpy.mockRestore();
     const oldestPage = await owner.agent.get(`/api/im/conversations/${pagedGroup.body.data.id}?beforeSequence=6`).expect(200);
     expect(oldestPage.body.data.hasMoreMessages).toBe(false);
     expect(oldestPage.body.data.messages.map((message: { sequence: number }) => message.sequence)).toEqual([1, 2, 3, 4, 5]);

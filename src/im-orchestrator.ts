@@ -31,6 +31,7 @@ type InvocationResult = {
 const IM_USER_CHAIN_CONCURRENCY = 3;
 const IM_MESSAGE_MAX_CHARACTERS = 20_000;
 const IM_EVENT_CONNECTION_LIMIT_PER_USER = 5;
+const IM_RECIPIENT_CACHE_LIMIT = 1_000;
 const IM_PARTICIPANT_CONTEXT_MAX_TOKENS = 2_048;
 const IM_CONTEXT_FIXED_RESERVE_TOKENS = 8_192;
 
@@ -127,6 +128,13 @@ export class ImOrchestrator {
          WHERE conversation_id = ? AND left_at IS NULL`,
         conversationId
       ).map((row) => requiredString(row.user_id));
+      if (this.recipientCache.size >= IM_RECIPIENT_CACHE_LIMIT) {
+        const oldestConversationId = this.recipientCache.keys().next().value;
+        if (oldestConversationId) this.recipientCache.delete(oldestConversationId);
+      }
+      this.recipientCache.set(conversationId, userIds);
+    } else {
+      this.recipientCache.delete(conversationId);
       this.recipientCache.set(conversationId, userIds);
     }
     for (const userId of userIds) {
@@ -160,6 +168,10 @@ export class ImOrchestrator {
       payload: { membershipChanged: true },
       createdAt: now()
     });
+  }
+
+  forgetConversation(conversationId: string): void {
+    this.recipientCache.delete(conversationId);
   }
 
   publishMessageResult(result: Record<string, unknown>): void {
