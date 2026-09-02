@@ -103,7 +103,7 @@ const mockAi = createServer(async (request, response) => {
   if (latestUserMessage.includes("浏览器工具测试")) {
     if (toolMessages.length === 0) {
       sendToolCalls(response, [
-        { id: "browser-index", name: "story_index", arguments: { offset: 0, limit: 1 } },
+        { id: "browser-index", name: "story_index", arguments: { chapterOffset: 0, limit: 1 } },
         { id: "browser-read", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "both" } },
         { id: "browser-query", name: "search_story_entities", arguments: { query: "跃迁", categories: ["setting"] } }
       ]);
@@ -134,7 +134,7 @@ const mockAi = createServer(async (request, response) => {
   if (latestUserMessage.includes("浏览器思考步骤测试")) {
     if (toolMessages.length === 0) {
       sendToolCalls(response, [
-        { id: "browser-thinking-index", name: "story_index", arguments: { offset: 0, limit: 1 } }
+        { id: "browser-thinking-index", name: "story_index", arguments: { chapterOffset: 0, limit: 1 } }
       ], { content: "我先读取作品目录。", reasoningContent: "需要先确认作品结构和章节范围。" });
       return;
     }
@@ -158,7 +158,7 @@ const mockAi = createServer(async (request, response) => {
       sendToolCalls(response, Array.from({ length: 8 }, (_, index) => ({
         id: `browser-scroll-${index}`,
         name: "story_index",
-        arguments: { offset: index, limit: 1 }
+        arguments: { chapterOffset: index, limit: 1 }
       })));
       return;
     }
@@ -236,7 +236,7 @@ const mockAi = createServer(async (request, response) => {
       sendToolCalls(response, [{ id: "browser-compact-read", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } }]);
       return;
     }
-    sendToolCalls(response, [{ id: "browser-compact-index", name: "story_index", arguments: { offset: 0, limit: 1 } }]);
+    sendToolCalls(response, [{ id: "browser-compact-index", name: "story_index", arguments: { chapterOffset: 0, limit: 1 } }]);
     return;
   }
   if (latestUserMessage.includes("浏览器压缩后测试")) {
