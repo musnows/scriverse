@@ -126,7 +126,9 @@ export class ImService {
   private assertModel(modelId: string): void {
     const model = this.db.get(
       `SELECT model.id FROM models model JOIN providers provider ON provider.id = model.provider_id
-       WHERE model.id = ? AND model.model_kind = 'chat' AND provider.work_id = ?`,
+       WHERE model.id = ? AND model.model_kind = 'chat' AND model.enabled = 1
+         AND provider.status = 'enabled' AND provider.connection_status = 'success'
+         AND provider.work_id = ?`,
       modelId,
       PLATFORM_AI_WORK_ID
     );

@@ -148,6 +148,18 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ primaryModelId: models.primaryModelId, fallbackModelId: models.primaryModelId })
       .expect(400);
+    runtime.database.run("UPDATE models SET enabled = 0 WHERE id = ?", models.fallbackModelId);
+    await owner.agent.patch("/api/im/settings")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ fallbackModelId: models.fallbackModelId })
+      .expect(400);
+    runtime.database.run("UPDATE models SET enabled = 1 WHERE id = ?", models.fallbackModelId);
+    runtime.database.run("UPDATE providers SET connection_status = 'failed' WHERE id = 'provider-im'");
+    await owner.agent.patch("/api/im/settings")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ primaryModelId: models.primaryModelId })
+      .expect(400);
+    runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = 'provider-im'");
 
     const direct = await owner.agent.post("/api/im/conversations/direct")
       .set("X-CSRF-Token", owner.csrfToken)
