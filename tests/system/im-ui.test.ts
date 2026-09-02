@@ -36,6 +36,9 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain('id="im-details"');
     expect(page.text).toContain('id="im-settings-dialog"');
     expect(page.text).toContain("每个模型最大失败次数");
+    expect(page.text).toContain("可先单独保存身份；主模型和 fallback 都配置后，AI 角色才能生成回答");
+    expect(page.text).not.toContain('id="im-setting-primary" name="primaryModelId" required');
+    expect(page.text).not.toContain('id="im-setting-fallback" name="fallbackModelId" required');
     expect(page.text).toContain("主模型最多请求 3 次；全部失败后 fallback 再最多请求 3 次");
     expect(page.text).toContain('id="im-group-dialog"');
     expect(page.text).toContain('id="im-announcement-button"');
@@ -62,14 +65,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v91");
+    expect(page.text).toContain("feature=global-im-v92");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260902-global-im-v91');
+    expect(application.text).toContain('/im.js?v=20260902-global-im-v92');
     expect(application.text).toContain("onRouteChange: schedulePresenceHeartbeat");
     expect(application.text).toContain('confirmDiscardChanges("当前章节有未保存修改，进入 IM 将放弃本地修改。是否继续？")');
     expect(application.text).toMatch(/beforeOpen: async \(\) => \{[\s\S]*?cancelChapterAutoSave\(\);[\s\S]*?state\.dirty = false;/);

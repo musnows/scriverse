@@ -937,6 +937,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     };
     document.querySelector("#im-setting-primary").innerHTML = modelOptions(settings.primaryModelId, "选择主模型");
     document.querySelector("#im-setting-fallback").innerHTML = modelOptions(settings.fallbackModelId, "选择 fallback 模型");
+    document.querySelector("#im-setting-model-note").textContent = settings.primaryModelId && settings.fallbackModelId
+      ? "主模型和 fallback 已配置；保存后 AI 角色将使用这组模型。"
+      : "可先单独保存身份；主模型和 fallback 都配置后，AI 角色才能生成回答。";
     document.querySelector("#im-setting-retries").value = String(settings.retryCount || 3);
     dialog.showModal();
   }
