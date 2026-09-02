@@ -18,6 +18,7 @@ export const IM_DEFAULT_RESPONSE_THRESHOLD = 60;
 export const IM_DEFAULT_MAX_AI_MESSAGES = 20;
 export const IM_DEFAULT_RETRY_COUNT = 3;
 export const IM_MAX_MENTIONS_PER_MESSAGE = 50;
+export const IM_MAX_CHARACTER_DIRECTORY_RESULTS = 100;
 
 export type ImReplyMode = "mention" | "proactive";
 export type ImMention = {
@@ -324,7 +325,8 @@ export class ImService {
            SELECT 1 FROM character_names name
            WHERE name.character_id = character.id AND name.display_name LIKE '%' || ? || '%' COLLATE NOCASE
          ))
-       ORDER BY work.updated_at DESC, is_pinned DESC, user_is_favorite DESC, character.name`,
+       ORDER BY work.updated_at DESC, is_pinned DESC, user_is_favorite DESC, character.name
+       LIMIT ?`,
       user.userId,
       user.userId,
       user.role === "admin" ? 1 : 0,
@@ -334,7 +336,8 @@ export class ImService {
       selectedWorkId ?? null,
       normalizedQuery,
       normalizedQuery,
-      normalizedQuery
+      normalizedQuery,
+      IM_MAX_CHARACTER_DIRECTORY_RESULTS
     );
     return rows.flatMap((row) => {
       const workId = requiredString(row.work_id);

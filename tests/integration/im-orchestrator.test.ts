@@ -885,6 +885,25 @@ describe("IM AI 调度", () => {
     getSpy.mockRestore();
   });
 
+  it("角色目录单次查询结果有硬上限", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-character-directory-limit-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "character_directory_limit_owner", password: "secure-password-123" }).session.user;
+    const work = runWithRequestActor(actor(owner), () => {
+      const createdWork = runtime.store.createWork({ title: "角色目录上限作品" });
+      for (let index = 0; index < 105; index += 1) {
+        runtime.store.createCharacter(String(createdWork.id), { name: `目录上限角色 ${String(index).padStart(3, "0")}` });
+      }
+      return createdWork;
+    });
+
+    expect(runtime.im.listAvailableCharacters(owner, "", String(work.id))).toHaveLength(100);
+    expect(runtime.im.listAvailableCharacters(owner, "目录上限角色 104", String(work.id))).toHaveLength(1);
+  });
+
   it("SSE 重连时重放正在生成气泡的完整流式快照", async () => {
     const encoder = new TextEncoder();
     let releaseStream: (() => void) | null = null;
