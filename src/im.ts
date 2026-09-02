@@ -128,16 +128,22 @@ export class ImService {
     return user;
   }
 
-  private assertWorkMembership(userId: string, workId: string): void {
+  private assertWorkMembership(user: Pick<AuthUser, "userId" | "role">, workId: string): void {
+    if (user.role === "admin") {
+      if (!this.db.get("SELECT 1 AS present FROM works WHERE id = ? AND deleted_at IS NULL AND COALESCE(is_internal, 0) = 0", workId)) {
+        throw new AppError(403, "IM_CHARACTER_ACCESS_DENIED", "你不能在 IM 中使用这个角色");
+      }
+      return;
+    }
     const membership = this.db.get(
       `SELECT 1 AS present FROM works work
        LEFT JOIN work_memberships membership ON membership.work_id = work.id AND membership.user_id = ?
-       WHERE work.id = ? AND work.deleted_at IS NULL
+       WHERE work.id = ? AND work.deleted_at IS NULL AND COALESCE(work.is_internal, 0) = 0
          AND (work.owner_user_id = ? OR membership.user_id = ?)`,
-      userId,
+      user.userId,
       workId,
-      userId,
-      userId
+      user.userId,
+      user.userId
     );
     if (!membership) throw new AppError(403, "IM_CHARACTER_ACCESS_DENIED", "你不能在 IM 中使用这个角色");
   }
@@ -145,7 +151,7 @@ export class ImService {
   assertCharacterAvailable(user: AuthUser, characterId: string): Record<string, unknown> {
     const character = this.store.getCharacter(characterId);
     const workId = requiredString(character.workId);
-    this.assertWorkMembership(user.userId, workId);
+    this.assertWorkMembership(user, workId);
     const permissions = this.auth.workModulePermissions(user, workId, true);
     if (!permissions || !canReadWorkModule(permissions, "characters") || !canWriteWorkModule(permissions, "ai-chat")) {
       throw new AppError(403, "IM_CHARACTER_ACCESS_DENIED", "需要角色读取和 AI 对话写入权限才能在 IM 中使用这个角色");
@@ -260,9 +266,10 @@ export class ImService {
        ) AS character_count FROM works work
        LEFT JOIN work_memberships membership ON membership.work_id = work.id AND membership.user_id = ?
        WHERE work.deleted_at IS NULL AND COALESCE(work.is_internal, 0) = 0
-         AND (work.owner_user_id = ? OR membership.user_id = ?)
+         AND (? = 1 OR work.owner_user_id = ? OR membership.user_id = ?)
        ORDER BY work.updated_at DESC, work.title`,
       user.userId,
+      user.role === "admin" ? 1 : 0,
       user.userId,
       user.userId
     ).flatMap((work) => {
@@ -280,7 +287,7 @@ export class ImService {
   listAvailableCharacters(user: AuthUser, query = "", selectedWorkId?: string): Record<string, unknown>[] {
     const normalizedQuery = query.normalize("NFKC").trim();
     if (selectedWorkId) {
-      this.assertWorkMembership(user.userId, selectedWorkId);
+      this.assertWorkMembership(user, selectedWorkId);
       const permissions = this.auth.workModulePermissions(user, selectedWorkId, true);
       if (!permissions || !canReadWorkModule(permissions, "characters") || !canWriteWorkModule(permissions, "ai-chat")) {
         throw new AppError(403, "IM_CHARACTER_ACCESS_DENIED", "需要角色读取和 AI 对话写入权限才能浏览这本书的角色");
@@ -306,8 +313,9 @@ export class ImService {
        FROM characters character JOIN works work ON work.id = character.work_id
        LEFT JOIN character_avatars avatar ON avatar.character_id = character.id
        LEFT JOIN work_memberships membership ON membership.work_id = work.id AND membership.user_id = ?
-       WHERE work.deleted_at IS NULL AND character.merged_into_character_id IS NULL
-         AND (work.owner_user_id = ? OR membership.user_id = ?)
+       WHERE work.deleted_at IS NULL AND COALESCE(work.is_internal, 0) = 0
+         AND character.merged_into_character_id IS NULL
+         AND (? = 1 OR work.owner_user_id = ? OR membership.user_id = ?)
          AND (? IS NULL OR character.work_id = ?)
          AND (? = '' OR character.name LIKE '%' || ? || '%' COLLATE NOCASE OR EXISTS (
            SELECT 1 FROM character_names name
@@ -316,6 +324,7 @@ export class ImService {
        ORDER BY work.updated_at DESC, is_pinned DESC, user_is_favorite DESC, character.name`,
       user.userId,
       user.userId,
+      user.role === "admin" ? 1 : 0,
       user.userId,
       user.userId,
       selectedWorkId ?? null,

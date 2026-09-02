@@ -121,6 +121,34 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ isPinned: true })
       .expect(200);
+    const internalWork = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "IM 内部作品" })
+      .expect(201);
+    const internalCharacter = await owner.agent.post(`/api/works/${internalWork.body.data.id}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "内部角色" })
+      .expect(201);
+    runtime.database.run("UPDATE works SET is_internal = 1 WHERE id = ?", internalWork.body.data.id);
+
+    const adminWorks = (await admin.agent.get("/api/im/works").expect(200)).body.data;
+    expect(adminWorks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: work.body.data.id })
+    ]));
+    expect(adminWorks).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: internalWork.body.data.id })
+    ]));
+    expect((await admin.agent.get(`/api/im/characters?workId=${work.body.data.id}`).expect(200)).body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: character.body.data.id })
+    ]));
+    await admin.agent.post("/api/im/conversations/direct")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ characterId: character.body.data.id })
+      .expect(201);
+    await admin.agent.post("/api/im/conversations/direct")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ characterId: internalCharacter.body.data.id })
+      .expect(403);
 
     const imWorks = await owner.agent.get("/api/im/works").expect(200);
     expect(imWorks.body.data).toEqual([
