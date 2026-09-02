@@ -1437,6 +1437,53 @@ describe("IM AI 调度", () => {
     )).toEqual({ content: "前半后半" });
   });
 
+  it("取消旧链后 SSE 重连不再重放旧回复气泡", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-cancelled-stream-replay-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        markStarted?.();
+        await responseGate;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return completion("取消后的迟到回复。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "cancelled_stream_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "取消流快照作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "取消流快照角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "开始后取消流快照。",
+      requestId: "im-cancelled-stream-replay-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    expect(runtime.imOrchestrator.streamingReplySnapshots(String(direct.id))).toHaveLength(1);
+    runtime.im.stopChain(owner.userId, String(direct.id));
+    runtime.imOrchestrator.cancelConversation(String(direct.id), "stopped_by_user");
+    expect(runtime.imOrchestrator.streamingReplySnapshots(String(direct.id))).toEqual([]);
+    const replayed: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => replayed.push({ type: event.type, payload: event.payload }));
+    expect(replayed).toEqual([]);
+    unsubscribe();
+    responseControl.release?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+
   it("按实际送入模型的最早完整历史推进角色压缩游标", async () => {
     let compactPrompt = "";
     let primaryCompactCalls = 0;

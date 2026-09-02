@@ -19,6 +19,8 @@ export function sameImGroupSettings(left: Record<string, unknown>, right: Record
 
 export function imDiagnosticStatusLabel(turn: Record<string, unknown>): string;
 
+export function isImRealtimeChainCurrent(activeChain: Record<string, unknown> | null, payload: Record<string, unknown>): boolean;
+
 export function findImMentionQuery(text: string, caretOffset?: number): {
   query: string;
   startOffset: number;

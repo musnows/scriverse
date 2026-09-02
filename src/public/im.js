@@ -92,6 +92,12 @@ export function imDiagnosticStatusLabel(turn) {
   return labels[String(turn?.status || "")] ?? "状态未知";
 }
 
+export function isImRealtimeChainCurrent(activeChain, payload) {
+  const activeChainId = String(activeChain?.id || "");
+  const eventChainId = String(payload?.chainId || "");
+  return Boolean(activeChainId && eventChainId && activeChainId === eventChainId);
+}
+
 export function findImMentionQuery(text, caretOffset = String(text).length) {
   const source = String(text);
   const offset = Math.max(0, Math.min(source.length, Number(caretOffset) || 0));
@@ -1325,9 +1331,11 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       return;
     }
     if (envelope.type === "message" && current?.id === eventConversationId && envelope.payload.message) {
+      if (Object.prototype.hasOwnProperty.call(envelope.payload, "chain")) current.activeChain = envelope.payload.chain ?? null;
       commitRealtimeMessage(envelope.payload.message);
     }
     if (envelope.type === "turn" && current?.id === eventConversationId && envelope.payload.kind === "reply") {
+      if (!isImRealtimeChainCurrent(current.activeChain, envelope.payload)) return;
       const status = String(envelope.payload.status || "");
       const turnId = String(envelope.payload.turnId || "");
       if (status === "completed" || status === "cancelled") {
@@ -1341,12 +1349,14 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       return;
     }
     if (envelope.type === "delta" && current?.id === eventConversationId) {
+      if (!isImRealtimeChainCurrent(current.activeChain, envelope.payload)) return;
       const provisional = upsertProvisionalReply({ ...envelope.payload, status: "running" });
       if (provisional) provisional.content += envelope.payload.delta || "";
       if (provisional) updateProvisionalReplyElement(provisional);
       return;
     }
     if (envelope.type === "reset" && current?.id === eventConversationId) {
+      if (!isImRealtimeChainCurrent(current.activeChain, envelope.payload)) return;
       for (const reply of provisionalReplies.values()) {
         if (reply.chainId !== String(envelope.payload.chainId || "")) continue;
         if (envelope.payload.turnId && reply.turnId !== envelope.payload.turnId) continue;

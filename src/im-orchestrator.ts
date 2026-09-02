@@ -109,7 +109,19 @@ export class ImOrchestrator {
       subscription.expirationTimer.unref();
     };
     scheduleExpiration();
-    for (const event of this.streamingReplies.values()) {
+    for (const [turnId, event] of this.streamingReplies) {
+      const chainId = optionalString(event.payload.chainId);
+      const active = chainId ? this.db.get(
+        `SELECT chain.status AS chain_status, turn.status AS turn_status
+         FROM im_chains chain JOIN im_chain_turns turn ON turn.chain_id = chain.id
+         WHERE chain.id = ? AND turn.id = ?`,
+        chainId,
+        turnId
+      ) : null;
+      if (requiredString(active?.chain_status) !== "running" || requiredString(active?.turn_status) !== "running") {
+        this.streamingReplies.delete(turnId);
+        continue;
+      }
       const membership = this.db.get(
         `SELECT 1 AS present FROM im_human_memberships
          WHERE conversation_id = ? AND user_id = ? AND left_at IS NULL`,
@@ -236,6 +248,7 @@ export class ImOrchestrator {
 
   cancelConversation(conversationId: string, reason = "human_message_received"): void {
     this.recipientCache.delete(conversationId);
+    this.clearStreamingReplies(conversationId);
     for (const [chainId, controller] of this.controllers) {
       const chain = this.db.get("SELECT conversation_id FROM im_chains WHERE id = ?", chainId);
       if (requiredString(chain?.conversation_id) === conversationId) {
@@ -265,6 +278,7 @@ export class ImOrchestrator {
 
   abortConversationRuns(conversationId: string, reason: string, preservedChainId: string | null): void {
     this.recipientCache.delete(conversationId);
+    this.clearStreamingReplies(conversationId, preservedChainId);
     for (const [chainId, controller] of this.controllers) {
       if (chainId === preservedChainId) continue;
       const chain = this.db.get("SELECT conversation_id FROM im_chains WHERE id = ?", chainId);
@@ -279,6 +293,13 @@ export class ImOrchestrator {
       if (requiredString(chain?.conversation_id) !== conversationId) continue;
       this.queuedChainIds.splice(index, 1);
       this.queuedChainSet.delete(chainId);
+    }
+  }
+
+  private clearStreamingReplies(conversationId: string, preservedChainId: string | null = null): void {
+    for (const [turnId, event] of this.streamingReplies) {
+      if (event.conversationId !== conversationId || optionalString(event.payload.chainId) === preservedChainId) continue;
+      this.streamingReplies.delete(turnId);
     }
   }
 
