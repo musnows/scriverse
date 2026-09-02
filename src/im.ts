@@ -1426,16 +1426,27 @@ export class ImService {
   updateGroup(owner: AuthUser, conversationId: string, input: Partial<Pick<ImGroupInput, "title" | "replyMode" | "responseThreshold" | "maxAiMessages">>): Record<string, unknown> {
     const conversation = this.assertOwner(conversationId, owner.userId);
     if (requiredString(conversation.kind) !== "group") throw new AppError(400, "IM_GROUP_REQUIRED", "单聊不能修改群设置");
+    const next = {
+      title: input.title ?? requiredString(conversation.title),
+      replyMode: input.replyMode ?? requiredString(conversation.reply_mode),
+      responseThreshold: input.responseThreshold ?? Number(conversation.response_threshold),
+      maxAiMessages: input.maxAiMessages ?? Number(conversation.max_ai_messages)
+    };
+    const changed = next.title !== requiredString(conversation.title)
+      || next.replyMode !== requiredString(conversation.reply_mode)
+      || next.responseThreshold !== Number(conversation.response_threshold)
+      || next.maxAiMessages !== Number(conversation.max_ai_messages);
+    if (!changed) return this.getConversation(conversationId, owner.userId);
     const timestamp = now();
     this.db.transaction(() => {
       this.cancelActiveChain(conversationId, "group_settings_changed");
       this.db.run(
         `UPDATE im_conversations SET title = ?, reply_mode = ?, response_threshold = ?,
          max_ai_messages = ?, updated_at = ? WHERE id = ?`,
-        input.title ?? requiredString(conversation.title),
-        input.replyMode ?? requiredString(conversation.reply_mode),
-        input.responseThreshold ?? Number(conversation.response_threshold),
-        input.maxAiMessages ?? Number(conversation.max_ai_messages),
+        next.title,
+        next.replyMode,
+        next.responseThreshold,
+        next.maxAiMessages,
         timestamp,
         conversationId
       );

@@ -835,6 +835,39 @@ describe("IM AI 调度", () => {
     )).toEqual({ chain_id: null });
   });
 
+  it("重复保存相同群设置不会取消活动链", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-noop-group-settings-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "noop_group_settings_owner", password: "secure-password-123" }).session.user;
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "重复群设置作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "重复群设置角色" });
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "重复群设置群",
+      characterIds: [String(character.id)],
+      replyMode: "mention",
+      responseThreshold: 60,
+      maxAiMessages: 20
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://character/${character.id} 保持排队。`,
+      requestId: "im-noop-group-settings-0001"
+    });
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+
+    runtime.im.updateGroup(owner, String(group.id), {
+      title: "重复群设置群",
+      replyMode: "mention",
+      responseThreshold: 60,
+      maxAiMessages: 20
+    });
+    expect(runtime.database.get("SELECT status FROM im_chains WHERE id = ?", chainId)).toEqual({ status: "waiting_config" });
+  });
+
   it("失效角色墓碑不占群容量且不能绕过至少一个可用角色约束", () => {
     runtime = createRuntime({
       databasePath: ":memory:",

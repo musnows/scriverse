@@ -1931,7 +1931,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     replyMode: true,
     responseThreshold: true,
     maxAiMessages: true
-  }).partial().strict();
+  }).partial().strict().refine((value) => Object.keys(value).length > 0, "至少提供一项要修改的群设置");
 
   app.get("/api/im/settings", (request, response) => {
     const user = requireImUser(request);

@@ -268,6 +268,10 @@ describe("全局 IM API", () => {
       characterId: character.body.data.id,
       avatarUrl: `/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar?v=${characterAvatarSha256}`
     });
+    await owner.agent.patch(`/api/im/conversations/${groupId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({})
+      .expect(400);
 
     await member.agent.post(`/api/im/conversations/${groupId}/announcements`)
       .set("X-CSRF-Token", member.csrfToken)
