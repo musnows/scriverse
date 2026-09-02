@@ -667,6 +667,7 @@ export class ImService {
   private visibleMessagePage(
     conversationId: string,
     userId: string,
+    viewerActive: boolean,
     limit = 50,
     beforeSequence?: number,
     afterSequence?: number
@@ -688,10 +689,9 @@ export class ImService {
         limit + 1
       );
       const hasMoreAfter = rows.length > limit;
-      const activeMembership = this.activeMembership(conversationId, userId);
-      const historicalParticipants = activeMembership ? undefined : this.conversationParticipants(conversationId, userId);
+      const historicalParticipants = viewerActive ? undefined : this.conversationParticipants(conversationId, userId);
       return {
-        messages: this.mapMessagePage(rows.slice(0, limit), Boolean(activeMembership), historicalParticipants),
+        messages: this.mapMessagePage(rows.slice(0, limit), viewerActive, historicalParticipants),
         hasMore: false,
         hasMoreAfter
       };
@@ -714,10 +714,9 @@ export class ImService {
     ).reverse();
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(rows.length - limit) : rows;
-    const activeMembership = this.activeMembership(conversationId, userId);
-    const historicalParticipants = activeMembership ? undefined : this.conversationParticipants(conversationId, userId);
+    const historicalParticipants = viewerActive ? undefined : this.conversationParticipants(conversationId, userId);
     return {
-      messages: this.mapMessagePage(pageRows, Boolean(activeMembership), historicalParticipants),
+      messages: this.mapMessagePage(pageRows, viewerActive, historicalParticipants),
       hasMore,
       hasMoreAfter: false
     };
@@ -1223,7 +1222,7 @@ export class ImService {
         completedAt: optionalString(turn.completed_at)
       };
     });
-    const messagePage = this.visibleMessagePage(conversationId, userId, 50, beforeSequence, afterSequence);
+    const messagePage = this.visibleMessagePage(conversationId, userId, viewerLeftSequence === null, 50, beforeSequence, afterSequence);
     const visibleMessageIds = messagePage.messages.map((message) => requiredString(message.id));
     const failedReplyRows = visibleMessageIds.length > 0 ? this.db.all(
       `SELECT turn.*, chain.id AS chain_id, chain.trigger_message_id, trigger.sequence AS trigger_sequence,
