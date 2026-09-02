@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
+import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, matchImProvisionalReplyTurn, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -33,6 +33,17 @@ describe("IM 编辑区域尺寸", () => {
     expect(shouldRefreshImConversationListForEvent("delta")).toBe(false);
     expect(shouldRefreshImConversationListForEvent("turn")).toBe(false);
     expect(shouldRefreshImConversationListForEvent("reset")).toBe(false);
+  });
+
+  it("按链路和角色把最终消息匹配到正在生成的临时气泡", () => {
+    const replies = [
+      { turnId: "turn-waiting", chainId: "chain-1", characterId: "character-1", status: "pending" },
+      { turnId: "turn-running", chainId: "chain-1", characterId: "character-1", status: "running" },
+      { turnId: "turn-other", chainId: "chain-1", characterId: "character-2", status: "running" }
+    ];
+    expect(matchImProvisionalReplyTurn(replies, { chainId: "chain-1", senderCharacterId: "character-1" })).toBe("turn-running");
+    expect(matchImProvisionalReplyTurn(replies, { chainId: "chain-1", senderCharacterId: "character-3" })).toBeNull();
+    expect(matchImProvisionalReplyTurn(replies, { senderCharacterId: "character-1" })).toBeNull();
   });
 
   it("按当前文本节点的光标位置识别 mention 查询", () => {

@@ -62,6 +62,16 @@ export function shouldRefreshImConversationListForEvent(type) {
   return ["conversation", "message", "chain"].includes(String(type));
 }
 
+export function matchImProvisionalReplyTurn(replies, message) {
+  const chainId = String(message?.chainId || "");
+  const characterId = String(message?.senderCharacterId || "");
+  if (!chainId || !characterId) return null;
+  const matches = array(replies).filter((reply) => reply.chainId === chainId
+    && reply.characterId === characterId
+    && ["pending", "running"].includes(String(reply.status)));
+  return matches.find((reply) => reply.status === "running")?.turnId ?? matches[0]?.turnId ?? null;
+}
+
 export function findImMentionQuery(text, caretOffset = String(text).length) {
   const source = String(text);
   const offset = Math.max(0, Math.min(source.length, Number(caretOffset) || 0));
@@ -469,6 +479,15 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     article.querySelector(".im-message-body").innerHTML = provisionalReplyBodyHtml(reply);
     syncGeneratingSummary();
     if (follow) feed.scrollTop = feed.scrollHeight;
+  }
+
+  function commitRealtimeMessage(message) {
+    if (!message?.id) return;
+    current.messages = mergeImMessagePages(current.messages, [message]);
+    current.latestSequence = Math.max(Number(current.latestSequence || 0), Number(message.sequence || 0));
+    const turnId = matchImProvisionalReplyTurn([...provisionalReplies.values()], message);
+    if (turnId) provisionalReplies.delete(turnId);
+    renderMessages();
   }
 
   function renderMessages({ scrollToBottom = false } = {}) {
@@ -1203,6 +1222,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     if (!opened) {
       if (shouldRefreshImConversationListForEvent(envelope.type)) await refreshConversationSummary(eventConversationId);
       return;
+    }
+    if (envelope.type === "message" && current?.id === eventConversationId && envelope.payload.message) {
+      commitRealtimeMessage(envelope.payload.message);
     }
     if (envelope.type === "turn" && current?.id === eventConversationId && envelope.payload.kind === "reply") {
       const status = String(envelope.payload.status || "");
