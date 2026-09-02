@@ -111,7 +111,7 @@ export async function collectImMessageGap(previousMessages, nextMessages, loadPa
   return gapMessages;
 }
 
-export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf }) {
+export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf, onRouteChange }) {
   const workspace = document.querySelector("#im-view");
   const listHost = document.querySelector("#im-conversation-list");
   const feed = document.querySelector("#im-message-feed");
@@ -1243,6 +1243,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#top-search-button").disabled = true;
     document.title = "IM · 叙界";
     window.history.replaceState(null, "", "#view=im");
+    onRouteChange?.();
     await Promise.all([loadCatalogs(), refreshConversations()]);
     if (!eventSource) connectEvents();
     if (current) await openConversation(current.id);

@@ -1,7 +1,7 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1";
 import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260830-adjacent-blockquotes-v1";
-import { createImWorkspace } from "/im.js?v=20260902-global-im-v66";
+import { createImWorkspace } from "/im.js?v=20260902-global-im-v67";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { applyAiSkillCommand, findAiSkillCommand, listAiSkillOptions } from "/ai-skill-menu.js?v=20260830-ai-skill-slash-menu-v1";
 import {
@@ -80,7 +80,7 @@ import {
   characterGenderLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260816-character-gender-v1&feature=global-replace-volume-v1&feature=ai-provider-responses-v1";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1&feature=global-im-return-v1";
 import {
   READING_PREFERENCES_STORAGE_KEY,
   READING_PREFERENCES_VERSION,
@@ -1032,7 +1032,7 @@ function replacePageRoute(route) {
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
-  if (!state.work || route.view === "shelf" || route.view === "platform-ai" || route.view === "platform-usage") return null;
+  if (!state.work || route.view === "shelf" || route.view === "im" || route.view === "platform-ai" || route.view === "platform-usage") return null;
   if (route.view === "reader") return { kind: "welcome" };
   if (relationshipPresenceId) return { kind: "entity-editor", module: "relationship", resourceId: relationshipPresenceId };
   if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
@@ -6770,6 +6770,7 @@ async function loadWorks(preferredId) {
 }
 
 function restoredSettingsReturnContext(route) {
+  if (route.returnView === "im") return { view: "im" };
   if (route.returnView === "module" && route.returnModule) return { view: "module", module: route.returnModule };
   if (route.returnView === "editor" && route.returnChapterId) return { view: "editor", chapterId: route.returnChapterId };
   if (route.returnView === "welcome") return { view: "welcome" };
@@ -6924,6 +6925,7 @@ function showShelf() {
 }
 
 function captureSettingsReturnContext() {
+  if (imWorkspace.opened) return { view: "im" };
   if (!$("#shelf-view").classList.contains("hidden")) return { view: "shelf" };
   if (!$("#editor-view").classList.contains("hidden")) return { view: "editor", chapterId: state.chapter?.id ?? null };
   if (!$("#module-view").classList.contains("hidden")) return { view: "module", module: state.module };
@@ -8224,7 +8226,6 @@ async function openSearchResult(result) {
 }
 
 async function showSettingsHub() {
-  imWorkspace.close();
   const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden")
     || !$("#platform-ai-view").classList.contains("hidden")
     || !$("#platform-usage-view").classList.contains("hidden")
@@ -8234,6 +8235,7 @@ async function showSettingsHub() {
     settingsReturnContext = captureSettingsReturnContext();
     state.dirty = false;
   }
+  imWorkspace.close();
   dismissChapterInsightToast();
   dismissTokenUsageDetails({ restoreFocus: false });
   dismissDeleteToasts();
@@ -8270,6 +8272,7 @@ async function returnFromSettings() {
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
+  if (context.view === "im") return imWorkspace.open();
   if (context.view === "shelf" || !state.work) return showShelf();
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -21253,7 +21256,7 @@ window.addEventListener("resize", () => {
   });
 });
 
-const imWorkspace = createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf });
+const imWorkspace = createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf, onRouteChange: schedulePresenceHeartbeat });
 
 initializeAiChatTabs();
 imWorkspace.start();

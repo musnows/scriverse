@@ -62,6 +62,8 @@ describe("页面刷新路由", () => {
   it("往返保存全局 IM 工作区路由", () => {
     expect(serializePageRoute({ view: "im" })).toBe("#view=im");
     expect(parsePageRoute("#view=im")).toEqual({ view: "im" });
+    const settingsHash = serializePageRoute({ view: "settings", workId: "work-1", returnView: "im" });
+    expect(parsePageRoute(settingsHash)).toEqual({ view: "settings", workId: "work-1", returnView: "im" });
   });
 
   it("往返保存设定、角色、种族和组织全屏编辑页", () => {
