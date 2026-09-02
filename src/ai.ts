@@ -8292,7 +8292,12 @@ export class AiManager {
     ])];
     if (call.name === "recall_relationship") return ["characters", "relationships"];
     if (call.name === "recall_other") return ["characters", ...readable(["relationships", "organizations", "timeline"])];
-    if (call.name === "recall_known") return ["characters", ...readable(["relationships", "organizations", "timeline", "races", "settings"])];
+    if (call.name === "recall_known") return [
+      "characters",
+      ...(categories.includes("setting") ? ["settings" as const] : []),
+      ...(categories.includes("race") ? ["races" as const] : []),
+      ...(categories.includes("organization") ? ["organizations" as const] : [])
+    ];
     if (call.name === "recall_story") return ["characters", "prose", ...readable(["timeline"])];
     if (call.name === "recall_roleplay_memory") return ["characters", "ai-chat"];
     if (call.name === "image") return [];
