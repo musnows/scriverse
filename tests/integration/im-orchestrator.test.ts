@@ -592,6 +592,7 @@ describe("IM AI 调度", () => {
   });
 
   it("主模型和 fallback 都返回空白摘要时不推进压缩游标", async () => {
+    let replyPrompt = "";
     runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "im-empty-compaction-secret-with-enough-length",
@@ -600,7 +601,9 @@ describe("IM AI 调度", () => {
         const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
         const messages = body.messages as Array<{ role: string; content: string }>;
         const compact = messages.some((message) => message.content.includes("只把已送达给当前角色的 IM 历史压缩"));
-        return completion(compact ? " \n " : "压缩失败后仍正常回复。", body.stream === true);
+        if (compact) return completion(" \n ", body.stream === true);
+        replyPrompt = messages.map((message) => message.content).join("\n");
+        return completion("压缩失败后仍正常回复。", body.stream === true);
       },
       aiRetrySleep: async () => undefined
     });
@@ -621,7 +624,7 @@ describe("IM AI 调度", () => {
       replyMode: "mention",
       maxAiMessages: 1
     });
-    for (let index = 1; index <= 61; index += 1) {
+    for (let index = 1; index <= 81; index += 1) {
       runtime.im.publishAnnouncement(owner, String(group.id), {
         content: `空白压缩公告 ${index}`,
         requestId: `im-empty-compaction-announcement-${index}`
@@ -635,6 +638,8 @@ describe("IM AI 调度", () => {
     const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
 
     expect(chain.generated_count).toBe(1);
+    expect(replyPrompt).toContain("空白压缩公告 1");
+    expect(replyPrompt).toContain("空白压缩公告 81");
     expect(runtime.database.get(
       `SELECT COUNT(*) AS count FROM im_character_contexts context
        JOIN im_character_memberships membership ON membership.id = context.character_membership_id

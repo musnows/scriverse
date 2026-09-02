@@ -341,7 +341,7 @@ export class ImOrchestrator {
        JOIN im_messages message ON message.id = delivery.message_id
        WHERE delivery.character_membership_id = ? AND message.context_epoch = ?
          AND message.sequence > ? AND message.sequence <= ?
-       ORDER BY message.sequence DESC LIMIT 80`,
+       ORDER BY message.sequence DESC`,
       membershipId,
       contextEpoch,
       summarizedThroughSequence,
@@ -476,6 +476,9 @@ export class ImOrchestrator {
       } catch (error) {
         this.failTurn(turnId, error);
         if (signal.aborted) throw error;
+        if (totalTokens > historyLimit) {
+          throw new AppError(502, "IM_CONTEXT_COMPACTION_FAILED", "角色上下文压缩失败，无法在不丢失历史的情况下继续回答");
+        }
         return;
       }
     }
