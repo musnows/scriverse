@@ -138,7 +138,7 @@ describe("全局 IM API", () => {
     expect(adminWorks).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ id: internalWork.body.data.id })
     ]));
-    expect((await admin.agent.get(`/api/im/characters?workId=${work.body.data.id}`).expect(200)).body.data).toEqual(expect.arrayContaining([
+    expect((await admin.agent.get(`/api/im/characters?workId=${work.body.data.id}`).expect(200)).body.data.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: character.body.data.id })
     ]));
     await admin.agent.post("/api/im/conversations/direct")
@@ -155,12 +155,12 @@ describe("全局 IM API", () => {
       expect.objectContaining({ id: work.body.data.id, title: "IM 来源作品", characterCount: 3 })
     ]);
     const imCharacters = await owner.agent.get(`/api/im/characters?workId=${work.body.data.id}`).expect(200);
-    expect(imCharacters.body.data.slice(0, 2)).toEqual([
+    expect(imCharacters.body.data.items.slice(0, 2)).toEqual([
       expect.objectContaining({ id: pinnedCharacter.body.data.id, isPinned: true }),
       expect.objectContaining({ id: favoriteCharacter.body.data.id, isFavorite: true })
     ]);
     const searchedCharacters = await owner.agent.get(`/api/im/characters?workId=${work.body.data.id}&q=${encodeURIComponent("林舟")}`).expect(200);
-    expect(searchedCharacters.body.data).toEqual([
+    expect(searchedCharacters.body.data.items).toEqual([
       expect.objectContaining({
         id: character.body.data.id,
         name: "林舟",

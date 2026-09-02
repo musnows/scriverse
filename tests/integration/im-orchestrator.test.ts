@@ -1892,6 +1892,7 @@ describe("IM AI 调度", () => {
     });
 
     expect(runtime.im.listAvailableCharacters(owner, "", String(work.id))).toHaveLength(100);
+    expect(runtime.im.listAvailableCharacters(owner, "", String(work.id), 100, 100)).toHaveLength(5);
     expect(runtime.im.listAvailableCharacters(owner, "目录上限角色 104", String(work.id))).toHaveLength(1);
   });
 

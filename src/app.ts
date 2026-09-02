@@ -1953,9 +1953,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const user = requireImUser(request);
     const query = parse(z.object({
       q: z.string().trim().max(100).default(""),
-      workId: identifier.optional()
+      workId: identifier.optional(),
+      cursor: z.coerce.number().int().nonnegative().default(0),
+      limit: z.coerce.number().int().min(1).max(100).default(50)
     }).strict(), request.query);
-    data(response, im.listAvailableCharacters(user, query.q, query.workId));
+    const characters = im.listAvailableCharacters(user, query.q, query.workId, query.limit + 1, query.cursor);
+    const hasMore = characters.length > query.limit;
+    data(response, {
+      items: characters.slice(0, query.limit),
+      nextCursor: hasMore ? query.cursor + query.limit : null
+    });
   });
   app.get("/api/im/conversations", (request, response) => {
     const user = requireImUser(request);

@@ -290,7 +290,7 @@ export class ImService {
     }).filter((work) => Number(work.characterCount) > 0);
   }
 
-  listAvailableCharacters(user: AuthUser, query = "", selectedWorkId?: string): Record<string, unknown>[] {
+  listAvailableCharacters(user: AuthUser, query = "", selectedWorkId?: string, limit = IM_MAX_CHARACTER_DIRECTORY_RESULTS, offset = 0): Record<string, unknown>[] {
     const normalizedQuery = query.normalize("NFKC").trim();
     if (selectedWorkId) {
       this.assertWorkMembership(user, selectedWorkId);
@@ -327,8 +327,8 @@ export class ImService {
            SELECT 1 FROM character_names name
            WHERE name.character_id = character.id AND name.display_name LIKE '%' || ? || '%' COLLATE NOCASE
          ))
-       ORDER BY work.updated_at DESC, is_pinned DESC, user_is_favorite DESC, character.name
-       LIMIT ?`,
+       ORDER BY work.updated_at DESC, is_pinned DESC, user_is_favorite DESC, character.name COLLATE NOCASE, character.id
+       LIMIT ? OFFSET ?`,
       user.userId,
       user.userId,
       user.role === "admin" ? 1 : 0,
@@ -339,7 +339,8 @@ export class ImService {
       normalizedQuery,
       normalizedQuery,
       normalizedQuery,
-      IM_MAX_CHARACTER_DIRECTORY_RESULTS
+      Math.max(1, Math.min(IM_MAX_CHARACTER_DIRECTORY_RESULTS + 1, limit)),
+      Math.max(0, offset)
     );
     return rows.flatMap((row) => {
       const workId = requiredString(row.work_id);

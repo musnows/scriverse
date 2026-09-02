@@ -166,6 +166,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let current = null;
   let works = [];
   let createCharacters = [];
+  let createCharacterNextCursor = null;
   const createSelectedCharacters = new Map();
   let createHumans = [];
   const createSelectedHumans = new Map();
@@ -175,6 +176,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let createHumanSearchRequest = 0;
   let memberAddKind = null;
   let memberAddCandidates = [];
+  let memberAddCharacterNextCursor = null;
   let memberAddSelectedId = "";
   let memberAddSearchTimer = null;
   let memberAddRequest = 0;
@@ -958,7 +960,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const host = document.querySelector("#im-member-add-options");
     const emptyText = memberAddKind === "character" ? "没有可添加的角色。" : "没有匹配的可添加用户。";
     host.setAttribute("aria-label", memberAddKind === "character" ? "可添加 AI 角色" : "可添加人类成员");
-    host.innerHTML = memberAddCandidates.length
+    const options = memberAddCandidates.length
       ? memberAddCandidates.map((item) => {
           const candidateId = memberAddKind === "character" ? item.id : item.userId;
           const selected = candidateId === memberAddSelectedId;
@@ -968,6 +970,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
           return `<button class="im-member-picker-option" type="button" aria-pressed="${selected}" data-im-member-add-candidate="${esc(candidateId)}">${imAvatarHtml(item, memberAddKind === "character" ? "character" : "user", "im-member-picker-avatar")}<span><strong>${esc(memberAddKind === "character" ? item.name : item.displayName)}</strong><small>${detail}</small></span></button>`;
         }).join("")
       : `<p class="im-empty">${emptyText}</p>`;
+    const loadMore = memberAddKind === "character" && memberAddCharacterNextCursor !== null
+      ? '<button class="im-button im-button-secondary im-load-more-options" type="button" data-im-load-more-member-characters>加载更多角色</button>'
+      : "";
+    host.innerHTML = options + loadMore;
     bindImAvatarFallbacks(host);
     syncMemberAddSelection();
   }
@@ -981,12 +987,13 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     submit.textContent = memberAddKind === "character" ? "添加角色" : "添加用户";
   }
 
-  async function loadMemberAddCharacters() {
+  async function loadMemberAddCharacters(append = false) {
     const workId = document.querySelector("#im-member-add-work").value;
     const search = document.querySelector("#im-member-add-character-search");
     const requestGeneration = ++memberAddRequest;
     if (!workId) {
       memberAddCandidates = [];
+      memberAddCharacterNextCursor = null;
       memberAddSelectedId = "";
       search.disabled = true;
       document.querySelector("#im-member-add-options").innerHTML = '<p class="im-empty">选择书籍后显示可添加角色。</p>';
@@ -994,13 +1001,19 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       return;
     }
     search.disabled = false;
+    if (append && memberAddCharacterNextCursor === null) return;
     const query = search.value.trim();
+    const cursor = append ? memberAddCharacterNextCursor : 0;
     const activeCharacterIds = new Set(activeCharacters().map((item) => item.characterId));
-    const candidates = array(await api(`/api/im/characters?workId=${encodeURIComponent(workId)}&q=${encodeURIComponent(query)}`))
+    const page = await api(`/api/im/characters?workId=${encodeURIComponent(workId)}&q=${encodeURIComponent(query)}&limit=50&cursor=${encodeURIComponent(cursor)}`);
+    const candidates = array(page.items ?? page)
       .filter((item) => !activeCharacterIds.has(item.id));
     if (requestGeneration !== memberAddRequest) return;
-    memberAddCandidates = candidates;
-    if (!candidates.some((item) => item.id === memberAddSelectedId)) memberAddSelectedId = "";
+    memberAddCandidates = append
+      ? [...new Map([...memberAddCandidates, ...candidates].map((item) => [item.id, item])).values()]
+      : candidates;
+    memberAddCharacterNextCursor = page.nextCursor ?? null;
+    if (!memberAddCandidates.some((item) => item.id === memberAddSelectedId)) memberAddSelectedId = "";
     renderMemberAddOptions();
   }
 
@@ -1020,6 +1033,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     if (!current?.active || current.kind !== "group" || current.ownerUserId !== currentUserId()) return;
     memberAddKind = kind === "human" ? "human" : "character";
     memberAddCandidates = [];
+    memberAddCharacterNextCursor = null;
     memberAddSelectedId = "";
     memberAddRequest += 1;
     if (memberAddSearchTimer !== null) window.clearTimeout(memberAddSearchTimer);
@@ -1054,9 +1068,12 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
 
   function renderCreateCharacterOptions() {
     const host = document.querySelector("#im-group-character-options");
-    host.innerHTML = createCharacters.length
+    const options = createCharacters.length
       ? createCharacters.map((item) => `<label class="im-character-option"><input type="checkbox" value="${esc(item.id)}" ${createSelectedCharacters.has(item.id) ? "checked" : ""}>${imAvatarHtml(item, "character", "im-option-avatar")}<span><strong>${esc(item.name)}</strong><small>${characterPreferenceBadges(item)}${item.code ? `<em>${esc(item.code)}</em>` : ""}</small></span></label>`).join("")
       : '<p class="im-empty">没有匹配的角色。</p>';
+    host.innerHTML = options + (createCharacterNextCursor === null
+      ? ""
+      : '<button class="im-button im-button-secondary im-load-more-options" type="button" data-im-load-more-create-characters>加载更多角色</button>');
     bindImAvatarFallbacks(host);
   }
 
@@ -1131,21 +1148,28 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
           : `将创建包含 ${count} 个角色的群聊，可继续添加人类成员。`;
   }
 
-  async function loadCreateCharacters() {
+  async function loadCreateCharacters(append = false) {
     const workId = document.querySelector("#im-create-work").value;
     const search = document.querySelector("#im-create-search");
     const requestId = ++createSearchRequest;
     if (!workId) {
       createCharacters = [];
+      createCharacterNextCursor = null;
       search.disabled = true;
       document.querySelector("#im-group-character-options").innerHTML = '<p class="im-empty">选择书籍后显示角色。</p>';
       return;
     }
     search.disabled = false;
+    if (append && createCharacterNextCursor === null) return;
     const query = search.value.trim();
-    const nextCharacters = array(await api(`/api/im/characters?workId=${encodeURIComponent(workId)}&q=${encodeURIComponent(query)}`));
+    const cursor = append ? createCharacterNextCursor : 0;
+    const page = await api(`/api/im/characters?workId=${encodeURIComponent(workId)}&q=${encodeURIComponent(query)}&limit=50&cursor=${encodeURIComponent(cursor)}`);
+    const nextCharacters = array(page.items ?? page);
     if (requestId !== createSearchRequest) return;
-    createCharacters = nextCharacters;
+    createCharacters = append
+      ? [...new Map([...createCharacters, ...nextCharacters].map((item) => [item.id, item])).values()]
+      : nextCharacters;
+    createCharacterNextCursor = page.nextCursor ?? null;
     renderCreateCharacterOptions();
   }
 
@@ -1161,6 +1185,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     createSelectedCharacters.clear();
     createSelectedHumans.clear();
     createCharacters = [];
+    createCharacterNextCursor = null;
     createHumans = [];
     const workSelect = document.querySelector("#im-create-work");
     workSelect.innerHTML = '<option value="">请选择书籍</option>' + works.map((work) => `<option value="${esc(work.id)}">${esc(work.title)} · ${Number(work.characterCount)} 个角色</option>`).join("");
@@ -1439,6 +1464,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#im-new-conversation").addEventListener("click", openConversationDialog);
     document.querySelector("#im-create-work").addEventListener("change", () => {
       createCharacters = [];
+      createCharacterNextCursor = null;
       document.querySelector("#im-create-search").value = "";
       document.querySelector("#im-group-character-options").innerHTML = document.querySelector("#im-create-work").value
         ? '<p class="im-empty">正在载入角色…</p>'
@@ -1475,6 +1501,11 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       if (checkbox.checked) createSelectedCharacters.set(item.id, item);
       else createSelectedCharacters.delete(item.id);
       syncCreateSelection();
+    });
+    document.querySelector("#im-group-character-options").addEventListener("click", (event) => {
+      if (event.target.closest("[data-im-load-more-create-characters]")) {
+        void loadCreateCharacters(true).catch((error) => toast(error.message, "error"));
+      }
     });
     document.querySelector("#im-create-selected").addEventListener("click", (event) => {
       const button = event.target.closest("[data-im-remove-selected]");
@@ -1513,6 +1544,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     });
     document.querySelector("#im-member-add-work").addEventListener("change", () => {
       memberAddCandidates = [];
+      memberAddCharacterNextCursor = null;
       memberAddSelectedId = "";
       document.querySelector("#im-member-add-character-search").value = "";
       document.querySelector("#im-member-add-options").innerHTML = document.querySelector("#im-member-add-work").value
@@ -1536,6 +1568,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       }, 160);
     });
     document.querySelector("#im-member-add-options").addEventListener("click", (event) => {
+      if (event.target.closest("[data-im-load-more-member-characters]")) {
+        void loadMemberAddCharacters(true).catch((error) => toast(error.message, "error"));
+        return;
+      }
       const button = event.target.closest("[data-im-member-add-candidate]");
       if (!button) return;
       memberAddSelectedId = button.dataset.imMemberAddCandidate;
