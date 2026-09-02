@@ -145,6 +145,19 @@ export class ImOrchestrator {
   private publishToUser(userId: string, event: ImRealtimeEvent): void {
     const listeners = this.listeners.get(userId);
     if (!listeners) return;
+    const membershipCondition = event.payload.membershipChanged === true
+      ? "EXISTS (SELECT 1 FROM im_human_memberships membership WHERE membership.conversation_id = ? AND membership.user_id = user.id)"
+      : "EXISTS (SELECT 1 FROM im_human_memberships membership WHERE membership.conversation_id = ? AND membership.user_id = user.id AND membership.left_at IS NULL)";
+    const authorized = this.db.get(
+      `SELECT 1 AS present FROM users user
+       WHERE user.id = ? AND user.status = 'active' AND ${membershipCondition}`,
+      userId,
+      event.conversationId
+    );
+    if (!authorized) {
+      this.listeners.delete(userId);
+      return;
+    }
     for (const listener of [...listeners]) {
       try {
         listener(event);
