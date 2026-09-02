@@ -336,6 +336,29 @@ describe("IM AI 调度", () => {
     expect(() => runtime.im.retryChain(owner, String(direct.id), waitingChainId, () => { cancellationCalled = true; }))
       .toThrowError("群成员或上下文已经变化，不能重试旧上下文中的交流链");
     expect(cancellationCalled).toBe(false);
+
+    const member = runtime.auth.register({ username: "retry_topology_member", password: "secure-password-123" }).session.user;
+    const secondCharacter = runWithRequestActor(actor(owner), () => runtime.store.createCharacter(String(character.workId), { name: "拓扑变更角色" }));
+    const group = runtime.im.createGroup(owner, {
+      title: "重试拓扑群",
+      characterIds: [String(character.id)],
+      humanUserIds: [member.userId],
+      replyMode: "proactive"
+    });
+    const topologyMessage = runtime.im.sendMessage(owner, String(group.id), {
+      content: "拓扑变化前的消息",
+      requestId: "im-retry-topology-0001"
+    });
+    const topologyChainId = String((topologyMessage.chain as Record<string, unknown>).id);
+    runtime.database.run("UPDATE im_chains SET status = 'failed' WHERE id = ?", topologyChainId);
+    runtime.im.addCharacter(owner, String(group.id), String(secondCharacter.id));
+    expect(runtime.database.get("SELECT context_epoch FROM im_conversations WHERE id = ?", String(group.id))).toEqual({ context_epoch: 2 });
+    expect(() => runtime.im.retryChain(owner, String(group.id), topologyChainId))
+      .toThrowError("群成员或上下文已经变化，不能重试旧上下文中的交流链");
+    runtime.im.removeCharacter(owner, String(group.id), String(secondCharacter.id));
+    expect(runtime.database.get("SELECT context_epoch FROM im_conversations WHERE id = ?", String(group.id))).toEqual({ context_epoch: 3 });
+    runtime.im.leaveGroup(member, String(group.id));
+    expect(runtime.database.get("SELECT context_epoch FROM im_conversations WHERE id = ?", String(group.id))).toEqual({ context_epoch: 4 });
   });
 
   it("SSE 重连时重放正在生成气泡的完整流式快照", async () => {

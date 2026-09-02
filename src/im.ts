@@ -364,6 +364,14 @@ export class ImService {
     )?.sequence ?? 1);
   }
 
+  private advanceContextEpoch(conversationId: string, timestamp = now()): void {
+    this.db.run(
+      "UPDATE im_conversations SET context_epoch = context_epoch + 1, updated_at = ? WHERE id = ?",
+      timestamp,
+      conversationId
+    );
+  }
+
   private insertHumanMembership(conversationId: string, user: AuthUser, role: "owner" | "member", joinedSequence: number): void {
     this.db.run(
       `INSERT INTO im_human_memberships (
@@ -893,14 +901,11 @@ export class ImService {
     if (activeCount >= IM_MAX_HUMAN_PARTICIPANTS) throw new AppError(409, "IM_HUMAN_LIMIT_REACHED", "群聊人类成员已达到上限");
     const user = this.assertActiveUser(userId);
     this.db.transaction(() => {
+      const timestamp = now();
       const joinedSequence = this.nextSequence(conversationId) - 1;
       this.cancelActiveChain(conversationId, "human_member_joined");
       this.insertHumanMembership(conversationId, user, "member", joinedSequence);
-      this.db.run(
-        "UPDATE im_conversations SET context_epoch = context_epoch + 1, updated_at = ? WHERE id = ?",
-        now(),
-        conversationId
-      );
+      this.advanceContextEpoch(conversationId, timestamp);
       this.insertSystemMessage(conversationId, `${user.displayName} 加入了群聊`, { type: "human-joined", user: this.humanSnapshot(user) });
       this.store.audit(null, "im.human-added", "im-conversation", conversationId, { userId });
     });
@@ -933,7 +938,7 @@ export class ImService {
       requiredString(membership.id)
     );
     this.cancelActiveChain(conversationId, `human_member_${action}`);
-    this.db.run("UPDATE im_conversations SET updated_at = ? WHERE id = ?", timestamp, conversationId);
+    this.advanceContextEpoch(conversationId, timestamp);
     this.store.audit(null, action === "left" ? "im.human-left" : "im.human-removed", "im-conversation", conversationId, {
       userId,
       actorUserId
@@ -969,8 +974,10 @@ export class ImService {
     )) throw new AppError(409, "IM_CHARACTER_EXISTS", "该角色已经在群聊中");
     const character = this.assertCharacterAvailable(owner, characterId);
     this.db.transaction(() => {
+      const timestamp = now();
       this.cancelActiveChain(conversationId, "character_member_joined");
       this.insertCharacterMembership(conversationId, character, this.nextSequence(conversationId) - 1);
+      this.advanceContextEpoch(conversationId, timestamp);
       this.insertSystemMessage(conversationId, `${requiredString(character.name)} 加入了群聊`, {
         type: "character-joined",
         character: this.characterSnapshot(character)
@@ -999,7 +1006,7 @@ export class ImService {
         timestamp,
         requiredString(membership.id)
       );
-      this.db.run("UPDATE im_conversations SET updated_at = ? WHERE id = ?", timestamp, conversationId);
+      this.advanceContextEpoch(conversationId, timestamp);
       this.store.audit(optionalString(membership.source_work_id), "im.character-removed", "im-conversation", conversationId, { characterId });
     });
   }
@@ -1015,10 +1022,16 @@ export class ImService {
     ).map((row) => requiredString(row.character_id));
     for (const characterId of characterIds) this.assertCharacterAvailable(nextOwner, characterId);
     this.db.transaction(() => {
+      const timestamp = now();
       this.cancelActiveChain(conversationId, "group_owner_transferred");
       this.db.run("UPDATE im_human_memberships SET role = 'member' WHERE conversation_id = ? AND user_id = ? AND left_at IS NULL", conversationId, owner.userId);
       this.db.run("UPDATE im_human_memberships SET role = 'owner' WHERE conversation_id = ? AND user_id = ? AND left_at IS NULL", conversationId, nextOwnerUserId);
-      this.db.run("UPDATE im_conversations SET owner_user_id = ?, updated_at = ? WHERE id = ?", nextOwnerUserId, now(), conversationId);
+      this.db.run(
+        "UPDATE im_conversations SET owner_user_id = ?, context_epoch = context_epoch + 1, updated_at = ? WHERE id = ?",
+        nextOwnerUserId,
+        timestamp,
+        conversationId
+      );
       this.store.audit(null, "im.group-transferred", "im-conversation", conversationId, { previousOwnerUserId: owner.userId, nextOwnerUserId });
     });
     return this.getConversation(conversationId, owner.userId);
