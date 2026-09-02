@@ -1358,6 +1358,71 @@ describe("IM AI 调度", () => {
     expect(events.some((event) => event.type === "turn" && event.payload.kind === "judge" && event.payload.score === 100)).toBe(false);
   });
 
+  it("主动判断返回后发起人失权时不保存分数或排队回复", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-judge-final-authorization-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async () => {
+        markStarted?.();
+        await responseGate;
+        return completion('{"score":100}', false);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const workOwner = runtime.auth.register({ username: "judge_final_work_owner", password: "secure-password-123" }).session.user;
+    const initiator = runtime.auth.register({ username: "judge_final_initiator", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const { work, character } = runWithRequestActor(actor(workOwner), () => {
+      const work = runtime.store.createWork({ title: "判断最终授权作品" });
+      return { work, character: runtime.store.createCharacter(String(work.id), { name: "判断最终授权角色" }) };
+    });
+    runtime.auth.addMember(String(work.id), initiator.userId, { role: "editor" }, workOwner.userId);
+    runtime.im.updateSettings(initiator.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(workOwner, {
+      title: "判断最终授权群",
+      characterIds: [String(character.id)],
+      humanUserIds: [initiator.userId],
+      replyMode: "proactive",
+      responseThreshold: 0,
+      maxAiMessages: 1
+    });
+    const sent = runtime.im.sendMessage(initiator, String(group.id), {
+      content: "触发主动判断。",
+      requestId: "im-judge-final-authorization-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    runtime.auth.updateMemberPermissions(String(work.id), initiator.userId, {
+      permissions: {
+        prose: "read", comments: "read", todos: "read", drafts: "read", settings: "read",
+        characters: "none", races: "read", organizations: "read", timeline: "read", relationships: "read",
+        outlines: "read", reviews: "read", "ai-chat": "none", "ai-analysis": "read", "ai-settings": "read"
+      }
+    });
+    responseControl.release?.();
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+
+    expect(chain).toMatchObject({ status: "failed", error_code: "IM_CHARACTER_ACCESS_DENIED", generated_count: 0 });
+    expect(runtime.database.get(
+      "SELECT status, score FROM im_chain_turns WHERE chain_id = ? AND kind = 'judge'",
+      chainId
+    )).toEqual({ status: "failed", score: null });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
+      chainId
+    )).toEqual({ count: 0 });
+  });
+
   it("停止后不写入忽略 abort 的迟到上下文压缩结果", async () => {
     const responseControl: { release?: () => void } = {};
     let markStarted: (() => void) | null = null;

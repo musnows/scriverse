@@ -1129,6 +1129,9 @@ export class ImOrchestrator {
       const score = scoreFromContent(result.content);
       if (score === null) throw new AppError(502, "IM_JUDGE_INVALID_SCORE", "AI 没有返回有效的发言意愿分数");
       this.assertGenerationStillCurrent(chain, sourceMessage, signal);
+      const currentMembership = this.characterMembership(requiredString(membership.id));
+      const currentAuthorization = this.assertCharacterAuthorization(chain, currentMembership);
+      this.assertInvocationInitiatorPermissions(currentAuthorization.initiatorPermissions, result);
       this.finishTurn(turnId, result, score, false);
       this.publishToUser(requiredString(chain.authorization_user_id), {
         id: id("imEvent"),
@@ -1148,6 +1151,12 @@ export class ImOrchestrator {
       const effectiveError = effectiveAbortError(signal, error);
       this.failTurn(turnId, effectiveError, signal.aborted ? "cancelled" : "failed");
       if (signal.aborted) throw effectiveError;
+      if (effectiveError instanceof AppError && [
+        "IM_CHARACTER_ACCESS_DENIED",
+        "IM_CHARACTER_UNAVAILABLE",
+        "IM_OWNER_DISABLED",
+        "IM_INITIATOR_DISABLED"
+      ].includes(effectiveError.code)) throw effectiveError;
       return null;
     }
   }
