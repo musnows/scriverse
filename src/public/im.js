@@ -111,7 +111,7 @@ export async function collectImMessageGap(previousMessages, nextMessages, loadPa
   return gapMessages;
 }
 
-export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf, onRouteChange }) {
+export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf, onRouteChange, beforeOpen }) {
   const workspace = document.querySelector("#im-view");
   const listHost = document.querySelector("#im-conversation-list");
   const feed = document.querySelector("#im-message-feed");
@@ -1255,6 +1255,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
 
   async function open() {
     start();
+    if (!opened && beforeOpen && !await beforeOpen()) return false;
     opened = true;
     hideMainViews();
     document.querySelector("#app").classList.add("shelf-mode", "im-mode");
