@@ -4747,6 +4747,9 @@ body.is-im-conversations-resizing { cursor: ew-resize; user-select: none; }
 .im-chat-header .im-button { min-height: 28px; padding: 4px 8px; border-radius: 5px; font-size: 9px; }
 .im-mobile-back { display: none; }
 .im-message-feed { min-height: 0; overflow-y: auto; padding: 20px clamp(14px, 4vw, 54px); scroll-behavior: smooth; }
+.im-load-older { display: block; margin: 0 auto 18px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font: 500 10px/1.4 var(--font-sans); cursor: pointer; }
+.im-load-older:hover, .im-load-older:focus-visible { border-color: var(--accent); color: var(--accent-dark); }
+.im-load-older:disabled { opacity: .55; cursor: wait; }
 .im-message { width: min(78%, 720px); margin: 0 auto 16px 0; }
 .im-message.is-human.is-own { margin-left: auto; margin-right: 0; }
 .im-message.is-system { width: 100%; color: var(--muted); text-align: center; }

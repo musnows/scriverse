@@ -358,6 +358,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       feed.innerHTML = '<p class="im-feed-empty">从一条消息开始。角色单聊会直接回复；群聊按当前回复模式调度 AI。</p>';
       return;
     }
+    const loadOlder = current?.hasMoreMessages
+      ? '<button class="im-load-older" type="button" data-im-load-older>加载更早消息</button>'
+      : "";
     const generatingCount = provisional.filter((reply) => ['pending', 'running'].includes(reply.status)).length;
     const generatingSummary = generatingCount
       ? `<div class="im-generating-summary" role="status">${generatingCount} 个角色正在生成回答</div>`
@@ -370,7 +373,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         <div class="im-message-body message-body">${provisionalReplyBodyHtml(reply)}</div>
       </article>`;
     }).join("");
-    feed.innerHTML = messages.map((message) => {
+    feed.innerHTML = loadOlder + messages.map((message) => {
       const sender = value(message, "sender", {});
       const model = value(message, "metadata", {});
       const announcement = model.type === "announcement";
@@ -387,6 +390,31 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     }).join("") + generatingSummary + provisionalHtml;
     bindImAvatarFallbacks(feed);
     feed.scrollTop = feed.scrollHeight;
+  }
+
+  async function loadOlderMessages() {
+    const conversationId = current?.id;
+    const oldestSequence = Math.min(...array(current?.messages).map((message) => Number(message.sequence)).filter(Number.isFinite));
+    if (!conversationId || !Number.isFinite(oldestSequence) || !current?.hasMoreMessages) return;
+    const button = feed.querySelector("[data-im-load-older]");
+    if (button) button.disabled = true;
+    const previousHeight = feed.scrollHeight;
+    const previousTop = feed.scrollTop;
+    try {
+      const page = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}?beforeSequence=${encodeURIComponent(oldestSequence)}`);
+      if (current?.id !== conversationId) return;
+      const messagesById = new Map([
+        ...array(page.messages),
+        ...array(current.messages)
+      ].map((message) => [message.id, message]));
+      current.messages = [...messagesById.values()].sort((left, right) => Number(left.sequence) - Number(right.sequence));
+      current.hasMoreMessages = page.hasMoreMessages === true;
+      renderMessages();
+      feed.scrollTop = previousTop + Math.max(0, feed.scrollHeight - previousHeight);
+    } catch (error) {
+      if (button) button.disabled = false;
+      toast(error.message, "error");
+    }
   }
 
   function activeHumans() {
@@ -1034,6 +1062,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     listHost.addEventListener("click", (event) => {
       const button = event.target.closest("[data-im-conversation]");
       if (button) void openConversation(button.dataset.imConversation, true).catch((error) => toast(error.message, "error"));
+    });
+    feed.addEventListener("click", (event) => {
+      if (event.target.closest("[data-im-load-older]")) void loadOlderMessages();
     });
     document.querySelector("#im-send").addEventListener("click", () => void send());
     document.querySelector("#im-stop").addEventListener("click", async () => {

@@ -546,11 +546,16 @@ export class ImService {
     return { humans, characters };
   }
 
-  private visibleMessages(conversationId: string, userId: string, limit = 50, beforeSequence?: number): Record<string, unknown>[] {
+  private visibleMessagePage(
+    conversationId: string,
+    userId: string,
+    limit = 50,
+    beforeSequence?: number
+  ): { messages: Record<string, unknown>[]; hasMore: boolean } {
     const params: SQLInputValue[] = [conversationId, userId];
     const before = beforeSequence === undefined ? "" : " AND message.sequence < ?";
     if (beforeSequence !== undefined) params.push(beforeSequence);
-    params.push(limit);
+    params.push(limit + 1);
     const rows = this.db.all(
       `SELECT message.* FROM im_messages message
        WHERE message.conversation_id = ?
@@ -563,7 +568,9 @@ export class ImService {
        ORDER BY message.sequence DESC LIMIT ?`,
       ...params
     ).reverse();
-    return rows.map((row) => this.mapMessage(row));
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(rows.length - limit) : rows;
+    return { messages: pageRows.map((row) => this.mapMessage(row)), hasMore };
   }
 
   private mapMessage(row: Record<string, unknown>): Record<string, unknown> {
@@ -768,10 +775,12 @@ export class ImService {
         completedAt: optionalString(turn.completed_at)
       };
     }) : [];
+    const messagePage = this.visibleMessagePage(conversationId, userId, 50, beforeSequence);
     return {
       ...this.mapConversation(row, userId),
       participants: this.conversationParticipants(conversationId, userId),
-      messages: this.visibleMessages(conversationId, userId, 50, beforeSequence),
+      messages: messagePage.messages,
+      hasMoreMessages: messagePage.hasMore,
       activeChain: activeChain ? {
         id: activeChain.id,
         status: activeChain.status,

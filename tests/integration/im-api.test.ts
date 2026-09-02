@@ -392,6 +392,35 @@ describe("全局 IM API", () => {
     ]));
     expect(zeroMessageHistory.body.data.participants.characters.map((item: { characterId: string }) => item.characterId)).toContain(character.body.data.id);
 
+    const pagedGroup = await owner.agent.post("/api/im/conversations/group")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        title: "分页群",
+        characterIds: [character.body.data.id],
+        replyMode: "mention",
+        responseThreshold: 60,
+        maxAiMessages: 20
+      })
+      .expect(201);
+    for (let sequence = 1; sequence <= 55; sequence += 1) {
+      runtime.database.run(
+        `INSERT INTO im_messages (id, conversation_id, sequence, context_epoch, sender_kind, content, created_at)
+         VALUES (?, ?, ?, 1, 'system', ?, ?)`,
+        `im-page-message-${sequence}`,
+        pagedGroup.body.data.id,
+        sequence,
+        `分页消息 ${sequence}`,
+        new Date(sequence * 1000).toISOString()
+      );
+    }
+    const newestPage = await owner.agent.get(`/api/im/conversations/${pagedGroup.body.data.id}`).expect(200);
+    expect(newestPage.body.data.hasMoreMessages).toBe(true);
+    expect(newestPage.body.data.messages).toHaveLength(50);
+    expect(newestPage.body.data.messages[0]).toMatchObject({ sequence: 6, content: "分页消息 6" });
+    const oldestPage = await owner.agent.get(`/api/im/conversations/${pagedGroup.body.data.id}?beforeSequence=6`).expect(200);
+    expect(oldestPage.body.data.hasMoreMessages).toBe(false);
+    expect(oldestPage.body.data.messages.map((message: { sequence: number }) => message.sequence)).toEqual([1, 2, 3, 4, 5]);
+
     await owner.agent.post(`/api/im/conversations/${groupId}/transfer`)
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ userId: member.user.userId })
