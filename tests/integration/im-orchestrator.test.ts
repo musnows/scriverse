@@ -263,6 +263,47 @@ describe("IM AI 调度", () => {
     expect(fallbackCalls).toBe(1);
   });
 
+  it("fallback 失败时持久化真实模型阶段、尝试次数和调用记录", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-fallback-diagnostics-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async () => new Response("upstream failed", { status: 500 }),
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "fallback_diagnostics_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "失败诊断来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "失败诊断角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 3
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "触发双模型失败。",
+      requestId: "im-fallback-diagnostics-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "failed", model_stage: "fallback" });
+    const turn = runtime.database.get(
+      "SELECT status, model_id, model_stage, attempt_count, ai_call_ids_json FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
+      String(chain.id)
+    );
+    expect(turn).toMatchObject({
+      status: "failed",
+      model_id: models.fallbackModelId,
+      model_stage: "fallback",
+      attempt_count: 6
+    });
+    expect(JSON.parse(String(turn?.ai_call_ids_json))).toHaveLength(2);
+  });
+
   it("无效重试链不会执行取消当前链的回调", () => {
     runtime = createRuntime({
       databasePath: ":memory:",
@@ -759,6 +800,12 @@ describe("IM AI 调度", () => {
     expect(chain).toMatchObject({ status: "quiet", generated_count: 1 });
     expect(primaryJudgeCalls).toBe(3);
     expect(fallbackJudgeCalls).toBe(1);
+    const judgeTurn = runtime.database.get(
+      "SELECT model_stage, attempt_count, ai_call_ids_json FROM im_chain_turns WHERE chain_id = ? AND kind = 'judge'",
+      String(chain.id)
+    );
+    expect(judgeTurn).toMatchObject({ model_stage: "fallback", attempt_count: 4 });
+    expect(JSON.parse(String(judgeTurn?.ai_call_ids_json))).toHaveLength(4);
   });
 
   it("主动模式中的 mention 角色优先回复且完全跳过自身发言判断", async () => {

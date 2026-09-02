@@ -19,6 +19,7 @@ type EventListener = (event: ImRealtimeEvent) => void;
 
 type InvocationResult = {
   callId: string;
+  callIds: string[];
   attemptCount: number;
   primaryAttemptCount: number;
   content: string;
@@ -505,9 +506,24 @@ export class ImOrchestrator {
           characterId: membership.character_id
         });
       } : undefined));
-      validateContent?.(result.content);
+      try {
+        validateContent?.(result.content);
+      } catch (error) {
+        if (error instanceof AppError) {
+          throw new AppError(error.status, error.code, error.message, {
+            ...(error.details && typeof error.details === "object" ? error.details : {}),
+            callId: result.callId,
+            callIds: [result.callId],
+            attemptCount: result.attemptCount,
+            modelRecordId: result.model.id,
+            modelStage: stage
+          });
+        }
+        throw error;
+      }
       return {
         callId: result.callId,
+        callIds: [result.callId],
         attemptCount: result.attemptCount,
         primaryAttemptCount: 0,
         content: result.content,
@@ -516,13 +532,60 @@ export class ImOrchestrator {
         durationMs: Math.round(Number(process.hrtime.bigint() - started) / 1_000_000)
       };
     };
+    const errorDetails = (error: unknown): Record<string, unknown> => error instanceof AppError
+      && error.details && typeof error.details === "object" && !Array.isArray(error.details)
+      ? error.details as Record<string, unknown>
+      : {};
+    const errorCallIds = (error: unknown): string[] => {
+      const details = errorDetails(error);
+      return [...new Set([
+        ...(Array.isArray(details.callIds) ? details.callIds.filter((callId): callId is string => typeof callId === "string") : []),
+        ...(typeof details.callId === "string" ? [details.callId] : [])
+      ])];
+    };
+    const enrichedError = (
+      error: unknown,
+      stage: "primary" | "fallback",
+      callIds: string[],
+      attemptCount: number,
+      primaryAttemptCount: number,
+      modelRecordId: string
+    ): AppError => {
+      const details = errorDetails(error);
+      const source = error instanceof AppError
+        ? error
+        : new AppError(502, "IM_AI_CHAIN_FAILED", error instanceof Error ? error.message : "IM AI 交流链失败");
+      return new AppError(source.status, source.code, source.message, {
+        ...details,
+        callId: callIds.at(-1) ?? details.callId,
+        callIds,
+        attemptCount,
+        primaryAttemptCount,
+        fallbackAttemptCount: stage === "fallback" ? Math.max(0, attemptCount - primaryAttemptCount) : 0,
+        modelRecordId,
+        modelStage: stage
+      });
+    };
     const invokeValidatedModel = async (modelId: string, stage: "primary" | "fallback"): Promise<InvocationResult> => {
       const semanticAttemptLimit = Math.max(1, Number(chain.retry_count));
+      const started = process.hrtime.bigint();
+      const callIds: string[] = [];
+      let attemptCount = 0;
       for (let semanticAttempt = 1; semanticAttempt <= semanticAttemptLimit; semanticAttempt += 1) {
         try {
-          return await invokeModel(modelId, stage);
+          const result = await invokeModel(modelId, stage);
+          return {
+            ...result,
+            callIds: [...callIds, ...result.callIds],
+            attemptCount: attemptCount + result.attemptCount,
+            durationMs: Math.round(Number(process.hrtime.bigint() - started) / 1_000_000)
+          };
         } catch (error) {
-          if (!(error instanceof AppError) || error.code !== "IM_JUDGE_INVALID_SCORE" || semanticAttempt >= semanticAttemptLimit) throw error;
+          const details = errorDetails(error);
+          for (const callId of errorCallIds(error)) if (!callIds.includes(callId)) callIds.push(callId);
+          attemptCount += Math.max(0, Number(details.attemptCount) || 0);
+          if (error instanceof AppError && error.code === "IM_JUDGE_INVALID_SCORE" && semanticAttempt < semanticAttemptLimit) continue;
+          throw enrichedError(error, stage, callIds, attemptCount, 0, modelId);
         }
       }
       throw new AppError(502, "IM_JUDGE_INVALID_SCORE", "AI 没有返回有效的发言意愿分数");
@@ -544,12 +607,30 @@ export class ImOrchestrator {
         kind,
         characterId: membership.character_id
       });
-      const fallback = await invokeValidatedModel(fallbackModelId, "fallback");
       this.db.run("UPDATE im_chains SET model_stage = 'fallback', updated_at = ? WHERE id = ?", now(), requiredString(chain.id));
-      const details = error instanceof AppError && error.details && typeof error.details === "object"
-        ? error.details as Record<string, unknown>
-        : {};
-      return { ...fallback, primaryAttemptCount: Number(details.attemptCount) || Number(chain.retry_count) + 1 };
+      const primaryDetails = errorDetails(error);
+      const primaryCallIds = errorCallIds(error);
+      const primaryAttemptCount = Number(primaryDetails.attemptCount) || Number(chain.retry_count);
+      try {
+        const fallback = await invokeValidatedModel(fallbackModelId, "fallback");
+        return {
+          ...fallback,
+          callIds: [...primaryCallIds, ...fallback.callIds],
+          primaryAttemptCount
+        };
+      } catch (fallbackError) {
+        const fallbackDetails = errorDetails(fallbackError);
+        const fallbackCallIds = errorCallIds(fallbackError);
+        const fallbackAttemptCount = Number(fallbackDetails.attemptCount) || Number(chain.retry_count);
+        throw enrichedError(
+          fallbackError,
+          "fallback",
+          [...primaryCallIds, ...fallbackCallIds],
+          primaryAttemptCount + fallbackAttemptCount,
+          primaryAttemptCount,
+          fallbackModelId
+        );
+      }
     }
   }
 
@@ -656,7 +737,7 @@ export class ImOrchestrator {
       result.stage,
       result.primaryAttemptCount + result.attemptCount,
       result.durationMs,
-      JSON.stringify([result.callId]),
+      JSON.stringify(result.callIds),
       now(),
       turnId
     );
@@ -664,10 +745,22 @@ export class ImOrchestrator {
 
   private failTurn(turnId: string, error: unknown, status: "failed" | "cancelled" = "failed"): void {
     const failure = publicError(error);
+    const details = error instanceof AppError && error.details && typeof error.details === "object" && !Array.isArray(error.details)
+      ? error.details as Record<string, unknown>
+      : {};
+    const callIds = [...new Set([
+      ...(Array.isArray(details.callIds) ? details.callIds.filter((callId): callId is string => typeof callId === "string") : []),
+      ...(typeof details.callId === "string" ? [details.callId] : [])
+    ])];
     this.db.run(
-      "UPDATE im_chain_turns SET status = ?, failure = ?, completed_at = ? WHERE id = ?",
+      `UPDATE im_chain_turns SET status = ?, failure = ?, model_id = ?, model_stage = ?, attempt_count = ?,
+       ai_call_ids_json = ?, completed_at = ? WHERE id = ?`,
       status,
       `${failure.code}: ${failure.message}`.slice(0, 2000),
+      optionalString(details.modelRecordId),
+      optionalString(details.modelStage),
+      Math.max(0, Number(details.attemptCount) || 0),
+      JSON.stringify(callIds),
       now(),
       turnId
     );
@@ -780,6 +873,7 @@ export class ImOrchestrator {
       modelStage: invocation.stage,
       durationMs: invocation.durationMs,
       callId: invocation.callId,
+      callIds: invocation.callIds,
       retryCount: Number(chain.retry_count),
       attemptCount: invocation.primaryAttemptCount + invocation.attemptCount,
       primaryAttemptCount: invocation.primaryAttemptCount,
