@@ -529,7 +529,7 @@ export class ImOrchestrator {
       createdByUserId: requiredString(chain.initiator_user_id),
       signal
     } satisfies Omit<ImAiPromptInput, "modelId">;
-    const invokeModel = async (modelId: string, stage: "primary" | "fallback"): Promise<InvocationResult> => {
+    const invokeModel = async (modelId: string, stage: "primary" | "fallback", attemptLimit = Number(chain.retry_count)): Promise<InvocationResult> => {
       const started = process.hrtime.bigint();
       const result = await runWithRequestActor({
         userId: authorization.initiator.userId,
@@ -537,7 +537,7 @@ export class ImOrchestrator {
         displayName: authorization.initiator.displayName,
         role: authorization.initiator.role,
         authentication: "session"
-      }, () => this.ai.generateIm({ ...common, modelId }, onDelta, streamTurnId ? () => {
+      }, () => this.ai.generateIm({ ...common, modelId, retryCount: attemptLimit }, onDelta, streamTurnId ? () => {
         this.resetStreamingReply(streamTurnId);
         this.publish(requiredString(chain.conversation_id), "reset", {
           chainId: requiredString(chain.id),
@@ -613,9 +613,9 @@ export class ImOrchestrator {
       const started = process.hrtime.bigint();
       const callIds: string[] = [];
       let attemptCount = 0;
-      for (let semanticAttempt = 1; semanticAttempt <= semanticAttemptLimit; semanticAttempt += 1) {
+      for (let semanticAttempt = 1; attemptCount < semanticAttemptLimit; semanticAttempt += 1) {
         try {
-          const result = await invokeModel(modelId, stage);
+          const result = await invokeModel(modelId, stage, semanticAttemptLimit - attemptCount);
           return {
             ...result,
             callIds: [...callIds, ...result.callIds],

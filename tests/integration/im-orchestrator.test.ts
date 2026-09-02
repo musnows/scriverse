@@ -1220,6 +1220,59 @@ describe("IM AI 调度", () => {
     expect(events.filter((event) => event.type === "reset")).toEqual([]);
   });
 
+  it("judge 传输与语义混合失败共享每模型总尝试预算", async () => {
+    let primaryJudgeCalls = 0;
+    let fallbackJudgeCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-judge-shared-budget-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const judge = messages[0]?.content.includes("只判断当前角色现在是否有必要发送一条新消息");
+        if (!judge) return completion("共享预算后的回复。", body.stream === true);
+        if (body.model === "primary-model") {
+          primaryJudgeCalls += 1;
+          return primaryJudgeCalls === 1
+            ? new Response("temporary", { status: 500 })
+            : completion("无效分数", false);
+        }
+        fallbackJudgeCalls += 1;
+        return completion('{"score":100}', false);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "judge_shared_budget_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "判断共享预算来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "判断共享预算角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 3
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "判断共享预算群",
+      characterIds: [String(character.id)],
+      replyMode: "proactive",
+      responseThreshold: 60,
+      maxAiMessages: 1
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "验证共享失败预算。",
+      requestId: "im-judge-shared-budget-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain.generated_count).toBe(1);
+    expect(primaryJudgeCalls).toBe(3);
+    expect(fallbackJudgeCalls).toBe(1);
+  });
+
   it("主动模式中的 mention 角色优先回复且完全跳过自身发言判断", async () => {
     const requestPrompts: string[] = [];
     runtime = createRuntime({
