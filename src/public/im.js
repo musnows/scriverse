@@ -1181,7 +1181,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         } else {
           const draft = document.createElement("div");
           draft.textContent = content;
-          conversationDrafts.set(conversationId, draft.innerHTML);
+          const savedDraft = conversationDrafts.get(conversationId) ?? "";
+          conversationDrafts.set(conversationId, savedDraft ? `${draft.innerHTML}<br><br>${savedDraft}` : draft.innerHTML);
         }
       }
       toast(committed ? `消息已发送，但刷新会话失败：${error.message}` : error.message, "error");
