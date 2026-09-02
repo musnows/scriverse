@@ -814,6 +814,46 @@ describe("IM AI 调度", () => {
     });
   });
 
+  it("同一毫秒退出并重入时优先使用当前有效成员任期", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-membership-rowid-order-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "membership_rowid_owner", password: "secure-password-123" }).session.user;
+    const member = runtime.auth.register({ username: "membership_rowid_member", password: "secure-password-123" }).session.user;
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "成员任期排序作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "成员任期排序角色" });
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "成员任期排序群",
+      characterIds: [String(character.id)],
+      humanUserIds: [member.userId]
+    });
+    runtime.im.removeHuman(owner, String(group.id), member.userId);
+    runtime.im.addHuman(owner, String(group.id), member.userId);
+    const memberships = runtime.database.all(
+      "SELECT id, left_at FROM im_human_memberships WHERE conversation_id = ? AND user_id = ? ORDER BY rowid",
+      String(group.id),
+      member.userId
+    );
+    const activeMembershipId = String(memberships.find((membership) => membership.left_at === null)?.id);
+    runtime.database.run(
+      "UPDATE im_human_memberships SET joined_sequence = 0, joined_at = ? WHERE conversation_id = ? AND user_id = ?",
+      "2026-09-03T00:00:00.000Z",
+      String(group.id),
+      member.userId
+    );
+
+    const detail = runtime.im.getConversation(String(group.id), member.userId);
+    expect(detail).toMatchObject({ active: true });
+    expect((detail.participants as { humans: Array<{ userId: string; membershipId: string }> }).humans
+      .find((human) => human.userId === member.userId)).toMatchObject({ membershipId: activeMembershipId });
+    expect(runtime.im.listConversations(member.userId).find((conversation) => conversation.id === group.id))
+      .toMatchObject({ active: true });
+  });
+
   it("停止后不接受忽略 abort 的迟到主动判断结果", async () => {
     const responseControl: { release?: () => void } = {};
     let markStarted: (() => void) | null = null;

@@ -599,7 +599,7 @@ export class ImService {
     const viewerMembership = this.db.get(
       `SELECT joined_sequence, left_sequence, left_at, conversation_snapshot_json FROM im_human_memberships
        WHERE conversation_id = ? AND user_id = ?
-       ORDER BY joined_sequence DESC, joined_at DESC LIMIT 1`,
+       ORDER BY (left_at IS NULL) DESC, joined_sequence DESC, joined_at DESC, rowid DESC LIMIT 1`,
       conversationId,
       viewerUserId
     );
@@ -863,7 +863,7 @@ export class ImService {
     const viewerMembership = prepared?.viewerMembership ?? activeMembership ?? this.db.get(
       `SELECT * FROM im_human_memberships
        WHERE conversation_id = ? AND user_id = ?
-       ORDER BY joined_sequence DESC, joined_at DESC LIMIT 1`,
+       ORDER BY (left_at IS NULL) DESC, joined_sequence DESC, joined_at DESC, rowid DESC LIMIT 1`,
       conversationId,
       userId
     );
@@ -938,7 +938,8 @@ export class ImService {
          SELECT membership.*,
                 ROW_NUMBER() OVER (
                   PARTITION BY membership.conversation_id
-                  ORDER BY membership.joined_sequence DESC, membership.joined_at DESC
+                  ORDER BY (membership.left_at IS NULL) DESC, membership.joined_sequence DESC,
+                           membership.joined_at DESC, membership.rowid DESC
                 ) AS rank
          FROM im_human_memberships membership
          WHERE membership.user_id = ?
@@ -968,7 +969,7 @@ export class ImService {
     const viewerMemberships = this.db.all(
       `SELECT * FROM im_human_memberships WHERE user_id = ?
        AND conversation_id IN (${placeholders})
-       ORDER BY conversation_id, joined_sequence DESC, joined_at DESC`,
+       ORDER BY conversation_id, (left_at IS NULL) DESC, joined_sequence DESC, joined_at DESC, rowid DESC`,
       userId,
       ...conversationIds
     );
@@ -1139,7 +1140,7 @@ export class ImService {
     const viewerMembership = this.db.get(
       `SELECT joined_sequence, left_sequence, joined_at, left_at, conversation_snapshot_json FROM im_human_memberships
        WHERE conversation_id = ? AND user_id = ?
-       ORDER BY joined_sequence DESC, joined_at DESC LIMIT 1`,
+       ORDER BY (left_at IS NULL) DESC, joined_sequence DESC, joined_at DESC, rowid DESC LIMIT 1`,
       conversationId,
       userId
     );
