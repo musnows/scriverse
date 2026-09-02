@@ -639,6 +639,70 @@ describe("IM AI 调度", () => {
     )).toEqual({ count: 0 });
   });
 
+  it("角色授权在压缩期间失效时不写入迟到摘要", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-mid-compaction-authorization-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async () => {
+        markStarted?.();
+        await responseGate;
+        return completion("授权失效后不应写入的摘要。", false);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const workOwner = runtime.auth.register({ username: "compact_auth_work_owner", password: "secure-password-123" }).session.user;
+    const chatOwner = runtime.auth.register({ username: "compact_auth_chat_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const { work, character } = runWithRequestActor(actor(workOwner), () => {
+      const work = runtime.store.createWork({ title: "压缩授权失效作品" });
+      return { work, character: runtime.store.createCharacter(String(work.id), { name: "压缩授权失效角色" }) };
+    });
+    runtime.auth.addMember(String(work.id), chatOwner.userId, { role: "editor" }, workOwner.userId);
+    runtime.im.updateSettings(chatOwner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(chatOwner, {
+      title: "压缩授权失效群",
+      characterIds: [String(character.id)],
+      replyMode: "proactive",
+      responseThreshold: 0,
+      maxAiMessages: 1
+    });
+    for (let index = 1; index <= 61; index += 1) {
+      runtime.im.publishAnnouncement(chatOwner, String(group.id), {
+        content: `压缩授权公告 ${index}`,
+        requestId: `im-mid-compaction-authorization-announcement-${index}`
+      });
+    }
+    const sent = runtime.im.sendMessage(chatOwner, String(group.id), {
+      content: "等待压缩授权复核。",
+      requestId: "im-mid-compaction-authorization-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    runtime.auth.updateMemberPermissions(String(work.id), chatOwner.userId, { role: "viewer" });
+    responseControl.release?.();
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+
+    expect(chain).toMatchObject({ status: "failed", error_code: "IM_CHARACTER_ACCESS_DENIED", generated_count: 0 });
+    expect(runtime.database.get(
+      "SELECT status FROM im_chain_turns WHERE chain_id = ? AND kind = 'compact'",
+      chainId
+    )).toEqual({ status: "failed" });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_character_contexts WHERE character_membership_id IN (SELECT id FROM im_character_memberships WHERE conversation_id = ?)",
+      String(group.id)
+    )).toEqual({ count: 0 });
+  });
+
   it("优雅关闭把运行链保留为可重试的中断状态", async () => {
     let markStarted: (() => void) | null = null;
     const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });

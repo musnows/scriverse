@@ -556,6 +556,7 @@ export class ImOrchestrator {
           { history: compactLines.join("\n\n"), summary: requiredString(context?.summary) }
         );
         this.assertGenerationStillCurrent(chain, sourceMessage, signal);
+        this.assertCharacterAuthorization(chain, this.characterMembership(requiredString(membership.id)));
         this.db.run(
           `INSERT INTO im_character_contexts (
              character_membership_id, context_epoch, summary, summarized_through_sequence, updated_at
@@ -575,6 +576,12 @@ export class ImOrchestrator {
         const effectiveError = effectiveAbortError(signal, error);
         this.failTurn(turnId, effectiveError, signal.aborted ? "cancelled" : "failed");
         if (signal.aborted) throw effectiveError;
+        if (effectiveError instanceof AppError && [
+          "IM_CHARACTER_ACCESS_DENIED",
+          "IM_CHARACTER_UNAVAILABLE",
+          "IM_OWNER_DISABLED",
+          "IM_INITIATOR_DISABLED"
+        ].includes(effectiveError.code)) throw effectiveError;
         if (totalTokens > historyLimit) {
           throw new AppError(502, "IM_CONTEXT_COMPACTION_FAILED", "角色上下文压缩失败，无法在不丢失历史的情况下继续回答");
         }
