@@ -790,7 +790,11 @@ export class ImService {
       const snapshot = json<Record<string, unknown>>(requiredString(turn.snapshot_json), {});
       const characterId = optionalString(turn.character_id) ?? requiredString(snapshot.id);
       const avatar = characterId ? this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", characterId) : null;
-      const avatarSha256 = optionalString(avatar?.sha256);
+      const currentAvatarSha256 = optionalString(avatar?.sha256);
+      const frozenAvatarSha256 = optionalString(snapshot.avatarSha256);
+      const avatarSha256 = viewerLeftSequence === null || currentAvatarSha256 === frozenAvatarSha256
+        ? currentAvatarSha256
+        : null;
       return {
         id: requiredString(turn.id),
         chainId: requiredString(activeChain.id),

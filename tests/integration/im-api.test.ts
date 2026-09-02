@@ -294,7 +294,7 @@ describe("全局 IM API", () => {
     expect(lateView.body.data.messages[0].metadata).toMatchObject({ type: "human-joined" });
     expect(lateView.body.data.messages[0].content).not.toContain("我们出发");
 
-    await lateMember.agent.post(`/api/im/conversations/${groupId}/messages`)
+    const lateMessage = await lateMember.agent.post(`/api/im/conversations/${groupId}/messages`)
       .set("X-CSRF-Token", lateMember.csrfToken)
       .send({ content: "我已登舰。", requestId: "im-message-request-0002" })
       .expect(201);
@@ -321,16 +321,34 @@ describe("全局 IM API", () => {
       .expect(204);
     const readOnly = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(readOnly.body.data.active).toBe(false);
-    runtime.database.run(
-      "UPDATE im_chains SET status = 'waiting_config', created_at = ?, updated_at = ? WHERE id = ?",
-      "9999-12-31T23:59:59.999Z",
-      "9999-12-31T23:59:59.999Z",
-      firstMessage.body.data.chain.id
+    const originalCharacterMembership = runtime.database.get(
+      "SELECT id FROM im_character_memberships WHERE conversation_id = ? AND character_id = ? ORDER BY joined_at LIMIT 1",
+      groupId,
+      character.body.data.id
     );
-    const ownerRetryView = await owner.agent.get(`/api/im/conversations/${groupId}`).expect(200);
-    expect(ownerRetryView.body.data.activeChain?.id).toBe(firstMessage.body.data.chain.id);
-    const departedRetryView = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
-    expect(departedRetryView.body.data.activeChain).toBeNull();
+    runtime.database.run(
+      `INSERT INTO im_chains (
+         id, conversation_id, initiator_user_id, authorization_user_id, trigger_message_id,
+         mode, threshold, max_ai_messages, retry_count, primary_model_id, fallback_model_id,
+         status, created_at, updated_at, completed_at
+       ) VALUES ('im-departed-avatar-chain', ?, ?, ?, ?, 'mention', 60, 20, 3, ?, ?, 'failed', ?, ?, ?)`,
+      groupId,
+      lateMember.user.userId,
+      owner.user.userId,
+      lateMessage.body.data.message.id,
+      models.primaryModelId,
+      models.fallbackModelId,
+      lateMessage.body.data.message.createdAt,
+      lateMessage.body.data.message.createdAt,
+      lateMessage.body.data.message.createdAt
+    );
+    runtime.database.run(
+      `INSERT INTO im_chain_turns (id, chain_id, character_membership_id, kind, status, failure, created_at, completed_at)
+       VALUES ('im-departed-avatar-turn', 'im-departed-avatar-chain', ?, 'reply', 'failed', 'test failure', ?, ?)`,
+      String(originalCharacterMembership?.id),
+      "2026-09-02T00:00:00.000Z",
+      "2026-09-02T00:00:00.000Z"
+    );
     const updatedExistingAvatarSha256 = "e".repeat(64);
     runtime.store.setCharacterAvatar(character.body.data.id, {
       mimeType: "image/png",
@@ -344,7 +362,23 @@ describe("全局 IM API", () => {
     expect(ownerAvatarView.body.data.participants.characters[0].avatarUrl).toContain(updatedExistingAvatarSha256);
     const departedAvatarView = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(departedAvatarView.body.data.participants.characters[0].avatarUrl).toBeNull();
+    expect(departedAvatarView.body.data.activeChain?.turns?.length ?? 0).toBeGreaterThan(0);
+    expect(departedAvatarView.body.data.activeChain?.turns ?? []).toEqual(
+      expect.arrayContaining((departedAvatarView.body.data.activeChain?.turns ?? []).map(() => (
+        expect.objectContaining({ character: expect.objectContaining({ avatarUrl: null }) })
+      )))
+    );
     await lateMember.agent.get(`/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar`).expect(404);
+    runtime.database.run(
+      "UPDATE im_chains SET status = 'waiting_config', created_at = ?, updated_at = ? WHERE id = ?",
+      "9999-12-31T23:59:59.999Z",
+      "9999-12-31T23:59:59.999Z",
+      firstMessage.body.data.chain.id
+    );
+    const ownerRetryView = await owner.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(ownerRetryView.body.data.activeChain?.id).toBe(firstMessage.body.data.chain.id);
+    const departedRetryView = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(departedRetryView.body.data.activeChain?.id).toBe("im-departed-avatar-chain");
     const postDepartureAvatarSha256 = "d".repeat(64);
     runtime.store.setCharacterAvatar(pinnedCharacter.body.data.id, {
       mimeType: "image/png",
