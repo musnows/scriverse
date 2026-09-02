@@ -263,17 +263,17 @@ describe("story_index 目录读取", () => {
         maximumResultChars?: number
       ) => Promise<StoryIndexExecution>;
     };
-    const readPage = (chapterOffset: number, cursor = 0): Promise<StoryIndexExecution> => internalAi.executeAgentTool(String(work.id), {
+    const readPage = (chapterOffset: number, cursor = 0, maximumResultChars = 1_000): Promise<StoryIndexExecution> => internalAi.executeAgentTool(String(work.id), {
       id: `index-${chapterOffset}-${cursor}`,
       type: "function",
       function: { name: "story_index", arguments: { chapterOffset, limit: 1, ...(cursor > 0 ? { cursor } : {}) } }
-    }, 1_000);
+    }, maximumResultChars);
 
     const firstChapterIds: unknown[] = [];
     let cursor = 0;
     let finalFirstPage: StoryIndexExecution | null = null;
     for (let pageCount = 0; pageCount < 10; pageCount += 1) {
-      const execution = await readPage(0, cursor);
+      const execution = await readPage(0, cursor, cursor === 0 ? 1_000 : 10_000);
       expect(execution.arguments).toMatchObject({ chapterOffset: 0, limit: 1 });
       expect(execution.result.data.chapterOffset).toBe(0);
       firstChapterIds.push(...execution.result.data.chapters.map((chapter) => chapter.id));
@@ -291,13 +291,13 @@ describe("story_index 目录读取", () => {
     expect(firstChapterIds).toEqual([chapters[0]?.id]);
     expect(finalFirstPage?.result.data).toMatchObject({
       nextChapterOffset: 1,
-      continuationRule: expect.stringContaining("reset cursor")
+      continuationRule: expect.stringContaining("把 cursor 重置为 0")
     });
 
     const secondChapterIds: unknown[] = [];
     cursor = 0;
     for (let pageCount = 0; pageCount < 10; pageCount += 1) {
-      const execution = await readPage(1, cursor);
+      const execution = await readPage(1, cursor, cursor === 0 ? 1_000 : 10_000);
       secondChapterIds.push(...execution.result.data.chapters.map((chapter) => chapter.id));
       const nextCursor = execution.result.pagination.nextCursor;
       if (nextCursor === null) break;

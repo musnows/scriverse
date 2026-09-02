@@ -20,6 +20,7 @@ let characterSectionId = "";
 let matrixVerified = false;
 let matrixInitialResultsVerified = false;
 let matrixExpectedCursor: number | null = null;
+let matrixContinuationCalls = 0;
 const matrixBothChapterRecords: JsonObject[] = [];
 let failureFeedbackVerified = false;
 let multiTurnVerified = false;
@@ -96,7 +97,7 @@ const mockAi = createServer(async (incoming, outgoing) => {
           { id: "chapter-both", name: "read_chapters", arguments: { chapterIds, include: "both" } },
           { id: "chapter-errors", name: "read_chapters", arguments: { chapterIds: [chapterIds[0], "missing-chapter", otherWorkChapterId] } },
           { id: "knowledge-default", name: "search_story_entities", arguments: { query: "跃迁" } },
-          { id: "knowledge-all", name: "search_story_entities", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } },
+          { id: "knowledge-all", name: "search_story_entities", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"], includePhonetic: true } },
           { id: "character-section", name: "read_character_sections", arguments: { sectionIds: [characterSectionId], include: "both" } }
         ]);
         return;
@@ -115,7 +116,7 @@ const mockAi = createServer(async (incoming, outgoing) => {
         assert.equal(object(errorChapters[1]?.error).message, "The requested chapter was not found.");
         assert.equal(object(errorChapters[2]?.error).message, "The requested chapter belongs to a different work.");
         assert.deepEqual(object(results.get("knowledge-default")).ok, true);
-        assert.equal(object(object(results.get("knowledge-default")).data).matchMode, "hybrid_exact_phonetic");
+        assert.equal(object(object(results.get("knowledge-default")).data).matchMode, "hybrid_exact");
         const defaultMatches = array(object(object(results.get("knowledge-default")).data).matches).map(object);
         assert.equal(defaultMatches.some((item) => String(item.type) === "setting" && String(item.title).includes("跃迁")), true);
         assert.equal(array(object(object(results.get("knowledge-all")).data).matches).length >= 1, true);
@@ -134,6 +135,7 @@ const mockAi = createServer(async (incoming, outgoing) => {
       if (typeof nextCursor === "number") {
         assert.ok(nextCursor > (matrixExpectedCursor ?? 0));
         matrixExpectedCursor = nextCursor;
+        matrixContinuationCalls += 1;
         toolCalls(outgoing, [{
           id: `chapter-both-cursor-${nextCursor}`,
           name: "read_chapters",
@@ -264,7 +266,7 @@ try {
   const work = await api<JsonObject>("POST", "/works", { title: "AI 工具 E2E" });
   const workId = String(work.id);
   const volume = await api<JsonObject>("POST", `/works/${workId}/volumes`, { title: "第一卷" });
-  for (const [index, content] of ["林舟启动跃迁。", "飞船进入冷却阶段。", "北港记录了返回信标。"].entries()) {
+  for (const [index, content] of ["林舟启动跃迁。", "飞船进入冷却阶段。", "北港记录了返回信标。".repeat(400)].entries()) {
     const chapter = await api<JsonObject>("POST", `/works/${workId}/chapters`, {
       volumeId: String(volume.id),
       title: `第${index + 1}章`,
@@ -308,11 +310,12 @@ try {
   const matrix = await api<JsonObject>("POST", `/works/${workId}/suggestions`, {
     taskType: "chat",
     instruction: "E2E_TOOL_MATRIX",
-    scope: { type: "chapter", chapterId: chapterIds[0] },
+    scope: { type: "none" },
     modelId
   });
   assert.equal(matrix.content, "模型已读取并正确处理全部九组工具结果。");
-  assert.equal(array(matrix.toolCalls).length, 9);
+  assert.ok(matrixContinuationCalls > 0);
+  assert.equal(array(matrix.toolCalls).length, 9 + matrixContinuationCalls);
   assert.equal(matrixVerified, true);
   checked("tool-arguments", "all optional/default/boundary parameter combinations reached the model as structured results");
 

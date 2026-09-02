@@ -1474,6 +1474,8 @@ const TOOL_CONTEXT_COMPACT_MAX_TOKENS = 1_024;
 const TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS = MIN_OUTPUT_RESERVE_TOKENS;
 const IMAGE_TOOL_MAX_BYTES = 30 * 1024 * 1024;
 const IMAGE_TOOL_MAX_OUTPUT_TOKENS = 8_192;
+// 工具轮次的可用结果预算会变化；固定分片上限，确保数值 cursor 始终指向同一条结构记录。
+const AGENT_TOOL_STABLE_RECORD_MAX_CHARS = 500;
 const agentToolCursor = z.number().int().min(0).max(100_000).default(0);
 const storyIndexArguments = z.object({
   chapterOffset: z.number().int().min(0).max(10_000).optional(),
@@ -8495,7 +8497,7 @@ export class AiManager {
     const name = toolCall.function.name;
     const calledAt = now();
     const conversationId = chatContext?.conversationId ?? null;
-    const maximumRecordChars = Math.max(128, Math.min(6_000, maximumResultChars - 500));
+    const maximumRecordChars = AGENT_TOOL_STABLE_RECORD_MAX_CHARS;
     let rawArguments: unknown = toolCall.function.arguments;
     if (typeof rawArguments === "string") {
       try {
