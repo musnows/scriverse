@@ -579,21 +579,23 @@ export class ImOrchestrator {
         );
         this.assertGenerationStillCurrent(chain, sourceMessage, signal);
         this.assertCharacterAuthorization(chain, this.characterMembership(requiredString(membership.id)));
-        this.db.run(
-          `INSERT INTO im_character_contexts (
-             character_membership_id, context_epoch, summary, summarized_through_sequence, updated_at
-           ) VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(character_membership_id, context_epoch) DO UPDATE SET
-             summary = excluded.summary,
-             summarized_through_sequence = excluded.summarized_through_sequence,
-             updated_at = excluded.updated_at`,
-          requiredString(membership.id),
-          contextEpoch,
-          result.content.slice(0, 20_000),
-          compactThrough,
-          now()
-        );
-        this.finishTurn(turnId, result);
+        this.db.transaction(() => {
+          this.db.run(
+            `INSERT INTO im_character_contexts (
+               character_membership_id, context_epoch, summary, summarized_through_sequence, updated_at
+             ) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(character_membership_id, context_epoch) DO UPDATE SET
+               summary = excluded.summary,
+               summarized_through_sequence = excluded.summarized_through_sequence,
+               updated_at = excluded.updated_at`,
+            requiredString(membership.id),
+            contextEpoch,
+            result.content.slice(0, 20_000),
+            compactThrough,
+            now()
+          );
+          this.finishTurn(turnId, result);
+        });
       } catch (error) {
         const effectiveError = effectiveAbortError(signal, error);
         this.failTurn(turnId, effectiveError, signal.aborted ? "cancelled" : "failed");

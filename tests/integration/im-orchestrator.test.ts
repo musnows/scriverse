@@ -1927,6 +1927,70 @@ describe("IM AI 调度", () => {
     )).toEqual({ failure: expect.any(String) });
   });
 
+  it("compact turn 完成失败时回滚摘要和压缩游标", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-atomic-compaction-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const compact = messages.some((message) => message.content.includes("只把已送达给当前角色的 IM 历史压缩"));
+        const judge = messages.some((message) => message.content.includes("只判断当前角色现在是否有必要发送一条新消息"));
+        if (compact) return completion("这条摘要必须随 turn 一起回滚。", false);
+        if (judge) return completion('{"score":0}', false);
+        return completion("不应生成回复。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "atomic_compaction_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "压缩原子事务作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "压缩原子事务角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "压缩原子事务群",
+      characterIds: [String(character.id)],
+      replyMode: "proactive",
+      responseThreshold: 100,
+      maxAiMessages: 1
+    });
+    for (let index = 1; index <= 61; index += 1) {
+      runtime.im.publishAnnouncement(owner, String(group.id), {
+        content: `压缩原子事务公告 ${index}`,
+        requestId: `im-atomic-compaction-announcement-${index}`
+      });
+    }
+    runtime.database.run(
+      `CREATE TRIGGER fail_compact_turn_completion
+       BEFORE UPDATE OF status ON im_chain_turns
+       WHEN OLD.kind = 'compact' AND NEW.status = 'completed'
+       BEGIN SELECT RAISE(ABORT, 'forced compact turn completion failure'); END;`
+    );
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "触发压缩原子事务。",
+      requestId: "im-atomic-compaction-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    await waitForChain(runtime, chainId);
+
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_character_contexts WHERE character_membership_id IN (SELECT id FROM im_character_memberships WHERE conversation_id = ?)",
+      String(group.id)
+    )).toEqual({ count: 0 });
+    expect(runtime.database.get(
+      "SELECT status FROM im_chain_turns WHERE chain_id = ? AND kind = 'compact'",
+      chainId
+    )).toEqual({ status: "failed" });
+  });
+
   it("长消息以完整原子进入压缩和普通角色历史", async () => {
     let compactPrompt = "";
     let replyPrompt = "";
