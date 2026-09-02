@@ -2051,9 +2051,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/im/conversations/direct", (request, response) => {
     const user = requireImUser(request);
     const input = parse(z.object({ characterId: identifier }).strict(), request.body);
-    const conversation = im.createDirect(user, input.characterId);
-    imOrchestrator.publishConversation(String(conversation.id));
-    data(response, conversation, 201);
+    const result = im.createDirectResult(user, input.characterId);
+    if (result.created || result.changed) imOrchestrator.publishConversation(String(result.conversation.id));
+    data(response, result.conversation, result.created ? 201 : 200);
   });
   app.post("/api/im/conversations/group", (request, response) => {
     const user = requireImUser(request);

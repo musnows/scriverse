@@ -480,6 +480,10 @@ export class ImService {
   }
 
   createDirect(user: AuthUser, characterId: string): Record<string, unknown> {
+    return this.createDirectResult(user, characterId).conversation;
+  }
+
+  createDirectResult(user: AuthUser, characterId: string): { conversation: Record<string, unknown>; created: boolean; changed: boolean } {
     const character = this.assertCharacterAvailable(user, characterId);
     const existing = this.db.get(
       "SELECT id FROM im_conversations WHERE kind = 'direct' AND owner_user_id = ? AND direct_character_id = ?",
@@ -488,8 +492,8 @@ export class ImService {
     );
     if (existing) {
       const existingConversationId = requiredString(existing.id);
-      this.refreshCharacterAvailability(existingConversationId);
-      return this.getConversation(existingConversationId, user.userId);
+      const changed = this.refreshCharacterAvailability(existingConversationId);
+      return { conversation: this.getConversation(existingConversationId, user.userId), created: false, changed };
     }
     const conversationId = id("imConversation");
     const timestamp = now();
@@ -512,7 +516,7 @@ export class ImService {
       this.insertCharacterMembership(conversationId, character, 0);
       this.store.audit(requiredString(character.workId), "im.direct-created", "im-conversation", conversationId, { characterId });
     });
-    return this.getConversation(conversationId, user.userId);
+    return { conversation: this.getConversation(conversationId, user.userId), created: true, changed: true };
   }
 
   createGroup(owner: AuthUser, input: ImGroupInput): Record<string, unknown> {
@@ -1239,13 +1243,13 @@ export class ImService {
     };
   }
 
-  refreshCharacterAvailability(conversationId: string, knownOwnerUserId?: string): void {
+  refreshCharacterAvailability(conversationId: string, knownOwnerUserId?: string): boolean {
     const ownerUserId = optionalString(knownOwnerUserId) ?? optionalString(
       this.db.get("SELECT owner_user_id FROM im_conversations WHERE id = ?", conversationId)?.owner_user_id
     );
     if (!ownerUserId) throw notFound("IM 会话");
     const memberships = this.db.all(
-      `SELECT membership.id, membership.character_id, membership.source_work_id, membership.snapshot_json,
+      `SELECT membership.id, membership.character_id, membership.source_work_id, membership.snapshot_json, membership.status,
               character.id AS available_character_id, character.work_id AS available_work_id,
               work.owner_user_id, work_member.user_id AS membership_user_id,
               work_member.role AS membership_role, work_member.permissions_json AS membership_permissions_json,
@@ -1269,6 +1273,7 @@ export class ImService {
       role: requiredString(memberships[0]?.conversation_owner_role) === "admin" ? "admin" as const : "user" as const
     };
     let availableCharacterCount = 0;
+    let changed = false;
     for (const membership of memberships) {
       const snapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
       const currentCharacterId = optionalString(membership.character_id);
@@ -1299,7 +1304,9 @@ export class ImService {
         status,
         requiredString(membership.id)
       );
+      if ((!currentCharacterId && restoredCharacterId) || requiredString(membership.status) !== status) changed = true;
     }
+    return changed;
   }
 
   getCharacterAvatarAccess(userId: string, conversationId: string, characterId: string): Record<string, unknown> {

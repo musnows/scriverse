@@ -236,11 +236,13 @@ describe("全局 IM API", () => {
       })
     ]);
     expect(ownerConversationEvents).toContain(direct.body.data.id);
+    const directEventCount = ownerConversationEvents.filter((conversationId) => conversationId === direct.body.data.id).length;
     const duplicateDirect = await owner.agent.post("/api/im/conversations/direct")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ characterId: character.body.data.id })
-      .expect(201);
+      .expect(200);
     expect(duplicateDirect.body.data.id).toBe(direct.body.data.id);
+    expect(ownerConversationEvents.filter((conversationId) => conversationId === direct.body.data.id)).toHaveLength(directEventCount);
 
     const invitedConversationEvents: string[] = [];
     const unsubscribeInvitedConversations = runtime.imOrchestrator.subscribe(member.user.userId, (event) => {
