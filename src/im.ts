@@ -1301,27 +1301,33 @@ export class ImService {
     senderId: string,
     sha256: string
   ): boolean {
-    const senderCondition = senderKind === "character"
-      ? "(message.sender_character_id = ? OR (message.sender_character_id IS NULL AND json_extract(message.sender_snapshot_json, '$.id') = ?))"
-      : "message.sender_user_id = ?";
-    return this.db.all(
-      `SELECT message.sender_snapshot_json FROM im_messages message
+    const visibleMessage = (senderCondition: string, senderParams: SQLInputValue[]): boolean => Boolean(this.db.get(
+      `SELECT 1 AS present FROM im_messages message
        WHERE message.conversation_id = ? AND message.sender_kind = ? AND ${senderCondition}
+         AND COALESCE(
+           NULLIF(json_extract(message.sender_snapshot_json, '$.avatarSha256'), ''),
+           CASE WHEN instr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), '?v=') > 0
+             THEN substr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), instr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), '?v=') + 3)
+           END
+         ) = ?
          AND EXISTS (
            SELECT 1 FROM im_human_memberships membership
            WHERE membership.conversation_id = message.conversation_id AND membership.user_id = ?
              AND message.sequence > membership.joined_sequence
              AND (membership.left_sequence IS NULL OR message.sequence <= membership.left_sequence)
-         )`,
+         ) LIMIT 1`,
       conversationId,
       senderKind,
-      senderId,
-      ...(senderKind === "character" ? [senderId] : []),
+      ...senderParams,
+      sha256,
       userId
-    ).some((message) => {
-      const snapshot = json<Record<string, unknown>>(requiredString(message.sender_snapshot_json), {});
-      return (optionalString(snapshot.avatarSha256) ?? avatarVersionFromUrl(snapshot.avatarUrl)) === sha256;
-    });
+    ));
+    if (senderKind === "human") return visibleMessage("message.sender_user_id = ?", [senderId]);
+    return visibleMessage("message.sender_character_id = ?", [senderId])
+      || visibleMessage(
+        "message.sender_character_id IS NULL AND json_extract(message.sender_snapshot_json, '$.id') = ?",
+        [senderId]
+      );
   }
 
   updateGroup(owner: AuthUser, conversationId: string, input: Partial<Pick<ImGroupInput, "title" | "replyMode" | "responseThreshold" | "maxAiMessages">>): Record<string, unknown> {

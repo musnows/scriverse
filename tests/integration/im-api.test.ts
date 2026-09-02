@@ -683,6 +683,21 @@ describe("全局 IM API", () => {
     const deletedCharacterMessageUrl = deletedCharacterView.body.data.messages[0].sender.avatarUrl;
     expect(deletedCharacterMessageUrl).toBe(deletedCharacterAvatarUrl);
     expect(Buffer.from((await member.agent.get(deletedCharacterMessageUrl).expect(200)).body)).toEqual(avatarSecondPng);
+    const visibilityAllSpy = vi.spyOn(runtime.database, "all");
+    const visibilityGetSpy = vi.spyOn(runtime.database, "get");
+    expect((runtime.im as unknown as {
+      messageAvatarVersionVisible: (userId: string, conversationId: string, kind: "character", senderId: string, sha256: string) => boolean;
+    }).messageAvatarVersionVisible(
+      member.user.userId,
+      deletedCharacterGroup.body.data.id,
+      "character",
+      deletedCharacter.body.data.id,
+      String(deletedCharacterMessageUrl).split("v=")[1] ?? ""
+    )).toBe(true);
+    expect(visibilityAllSpy).not.toHaveBeenCalled();
+    expect(visibilityGetSpy).toHaveBeenCalledTimes(2);
+    visibilityAllSpy.mockRestore();
+    visibilityGetSpy.mockRestore();
     await owner.agent.post(`/api/im/conversations/${deletedCharacterGroup.body.data.id}/humans`)
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ userId: lateMember.user.userId })

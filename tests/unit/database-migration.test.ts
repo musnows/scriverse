@@ -164,6 +164,10 @@ describe("数据库版本化迁移", () => {
     current.run("DROP INDEX idx_im_human_memberships_conversation");
     current.run("DROP INDEX idx_im_character_memberships_conversation");
     current.run("DELETE FROM schema_migrations WHERE version = 132");
+    current.run("DROP INDEX idx_im_messages_human_avatar");
+    current.run("DROP INDEX idx_im_messages_character_avatar");
+    current.run("DROP INDEX idx_im_messages_character_snapshot_avatar");
+    current.run("DELETE FROM schema_migrations WHERE version = 133");
     current.close();
 
     const migrated = new Database(filename);
@@ -173,12 +177,19 @@ describe("数据库版本化迁移", () => {
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 130")).toEqual({ count: 1 });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 131")).toEqual({ count: 1 });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 132")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 133")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA table_info(im_human_memberships)").map((column) => column.name)).toContain("conversation_snapshot_json");
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'im_avatar_versions'")).toEqual({ name: "im_avatar_versions" });
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_human_memberships_conversation'"))
       .toEqual({ name: "idx_im_human_memberships_conversation" });
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_character_memberships_conversation'"))
       .toEqual({ name: "idx_im_character_memberships_conversation" });
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_messages_human_avatar'"))
+      .toEqual({ name: "idx_im_messages_human_avatar" });
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_messages_character_avatar'"))
+      .toEqual({ name: "idx_im_messages_character_avatar" });
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_messages_character_snapshot_avatar'"))
+      .toEqual({ name: "idx_im_messages_character_snapshot_avatar" });
     expect(migrated.get(
       `SELECT storage_key FROM im_avatar_versions
        WHERE conversation_id = 'im-conversation' AND participant_kind = 'character'
