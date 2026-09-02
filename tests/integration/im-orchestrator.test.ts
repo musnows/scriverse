@@ -1423,6 +1423,10 @@ describe("IM AI 调度", () => {
     const memberRetry = runtime.im.retryChain(member, String(group.id), topologyChainId, () => { crossMemberCancellationCount += 1; });
     const ownerDuplicateRetry = runtime.im.retryChain(owner, String(group.id), topologyChainId, () => { crossMemberCancellationCount += 1; });
     expect(ownerDuplicateRetry.id).toBe(memberRetry.id);
+    expect(ownerDuplicateRetry).not.toHaveProperty("primary_model_id");
+    expect(ownerDuplicateRetry).not.toHaveProperty("fallback_model_id");
+    expect(ownerDuplicateRetry).not.toHaveProperty("retry_count");
+    expect(ownerDuplicateRetry).not.toHaveProperty("initiator_user_id");
     expect(crossMemberCancellationCount).toBe(1);
     runtime.im.addCharacter(owner, String(group.id), String(secondCharacter.id));
     expect(runtime.database.get("SELECT context_epoch FROM im_conversations WHERE id = ?", String(group.id))).toEqual({ context_epoch: 2 });

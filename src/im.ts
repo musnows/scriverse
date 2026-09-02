@@ -2066,6 +2066,19 @@ export class ImService {
     this.db.transaction(() => this.cancelActiveChain(conversationId, "stopped_by_user"));
   }
 
+  private publicChainSummary(chain: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: requiredString(chain.id),
+      status: requiredString(chain.status),
+      modelStage: requiredString(chain.model_stage),
+      generatedCount: Number(chain.generated_count),
+      errorCode: optionalString(chain.error_code),
+      errorMessage: optionalString(chain.error_message),
+      createdAt: requiredString(chain.created_at),
+      updatedAt: requiredString(chain.updated_at)
+    };
+  }
+
   retryChain(user: AuthUser, conversationId: string, sourceChainId: string, afterCreate?: (chainId: string) => void): Record<string, unknown> {
     const conversation = this.assertActiveMembership(conversationId, user.userId);
     const source = this.db.get("SELECT * FROM im_chains WHERE id = ? AND conversation_id = ?", sourceChainId, conversationId);
@@ -2093,7 +2106,7 @@ export class ImService {
       conversationId,
       sourceChainId
     );
-    if (existingRetry) return existingRetry;
+    if (existingRetry) return this.publicChainSummary(existingRetry);
     if (!["failed", "interrupted", "waiting_config"].includes(requiredString(source.status))) {
       throw new AppError(409, "IM_CHAIN_NOT_RETRYABLE", "只有失败、中断或等待模型配置的 IM 交流链可以重试");
     }
@@ -2133,7 +2146,7 @@ export class ImService {
       return this.db.get("SELECT * FROM im_chains WHERE id = ?", chainId) ?? {};
     });
     afterCreate?.(chainId);
-    return result;
+    return this.publicChainSummary(result);
   }
 
   getDiagnostics(owner: AuthUser, conversationId: string): Record<string, unknown> {
