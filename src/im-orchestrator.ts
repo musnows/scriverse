@@ -1397,10 +1397,12 @@ export class ImOrchestrator {
           lastReplyFailure = failure;
           continue;
         }
-        forcedQueue = forcedQueue.map((queuedReply) => ({
-          ...queuedReply,
-          sourceMessageId: requiredString(sourceMessage.id)
-        }));
+        if (requiredString(chain.mode) === "proactive") {
+          forcedQueue = forcedQueue.map((queuedReply) => ({
+            ...queuedReply,
+            sourceMessageId: requiredString(sourceMessage.id)
+          }));
+        }
         const newMentions = this.mentionedCharacterMembershipIds(
           requiredString(sourceMessage.id),
           conversationId,

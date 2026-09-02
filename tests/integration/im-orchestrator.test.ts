@@ -2578,4 +2578,54 @@ describe("IM AI 调度", () => {
     expect(JSON.stringify(secondRequestBodies)).not.toContain("recall_roleplay_memory");
     expect(JSON.stringify(secondRequestBodies)).toContain("群主邀请角色时冻结的公开角色资料");
   });
+
+  it("Mention 模式为最初同时被提及的角色保留各自已送达的触发消息", async () => {
+    const requestPrompts: string[] = [];
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-parallel-mention-source-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const system = messages[0]?.content ?? "";
+        requestPrompts.push(system);
+        const firstSpeaker = system.indexOf("并行甲") < system.indexOf("并行乙");
+        return completion(firstSpeaker ? "甲已收到。" : "乙也已收到。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "parallel_mention_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const characters = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "并行 Mention 来源" });
+      return [
+        runtime.store.createCharacter(String(work.id), { name: "并行甲" }),
+        runtime.store.createCharacter(String(work.id), { name: "并行乙" })
+      ];
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "并行 Mention 群",
+      characterIds: characters.map((character) => String(character.id)),
+      replyMode: "mention",
+      maxAiMessages: 4
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://character/${characters[0]?.id} mention://character/${characters[1]?.id} 请分别确认。`,
+      requestId: "im-parallel-mention-source-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "completed", generated_count: 2 });
+    expect(requestPrompts).toHaveLength(2);
+    expect(requestPrompts[1]).toContain(`"currentSender":{"userId":"${owner.userId}"`);
+    expect(requestPrompts[1]).not.toContain('"currentSender":{"id":');
+    expect(requestPrompts[1]).not.toContain("甲已收到。");
+  });
 });
