@@ -369,8 +369,11 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   function renderConversationList() {
+    const focusedConversationId = listHost.contains(document.activeElement)
+      ? document.activeElement.closest?.("[data-im-conversation]")?.dataset.imConversation
+      : null;
     const items = conversations.length
-      ? conversations.map((item) => `<button class="im-conversation-item${current?.id === item.id ? " is-active" : ""}" type="button" data-im-conversation="${esc(item.id)}" aria-label="${esc(`${item.title}，${conversationSubtitle(item)}`)}" title="${esc(item.title)}">
+      ? conversations.map((item) => `<button class="im-conversation-item${current?.id === item.id ? " is-active" : ""}" type="button" data-im-conversation="${esc(item.id)}"${current?.id === item.id ? ' aria-current="true"' : ""} aria-label="${esc(`${item.title}，${conversationSubtitle(item)}`)}" title="${esc(item.title)}">
           ${conversationAvatarHtml(item)}
           <span><strong>${esc(item.title)}</strong><small>${esc(conversationSubtitle(item))}</small></span>
           ${item.mentionUnreadCount ? `<b class="im-mention-unread">@${Number(item.mentionUnreadCount)}</b>` : item.unreadCount ? `<b class="im-item-unread">${Number(item.unreadCount)}</b>` : ""}
@@ -378,6 +381,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       : '<p class="im-empty">还没有 IM 会话。点击“新建会话”，先选书籍，再选择一个或多个角色。</p>';
     listHost.innerHTML = `${items}${conversationNextCursor === null ? "" : '<button class="im-button im-button-secondary im-load-more-conversations" type="button" data-im-load-more-conversations>加载更多会话</button>'}`;
     bindImAvatarFallbacks(listHost);
+    if (focusedConversationId) {
+      [...listHost.querySelectorAll("[data-im-conversation]")]
+        .find((button) => button.dataset.imConversation === focusedConversationId)?.focus();
+    }
   }
 
   function mentionLabel(mention) {
