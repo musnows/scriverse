@@ -54,7 +54,7 @@ export function collectImMessageGap(
 export function createImWorkspace(options: Record<string, unknown>): {
   start(): void;
   activate(): Promise<void>;
-  open(): Promise<void>;
+  open(): Promise<boolean>;
   close(): void;
   refreshUnread(): Promise<void>;
   readonly opened: boolean;
