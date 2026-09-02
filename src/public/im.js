@@ -597,21 +597,27 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const userId = document.querySelector("#im-transfer-select").value;
       if (!userId) return;
       const nextOwner = activeHumans().find((item) => item.userId === userId);
+      const conversationId = current.id;
+      const conversationTitle = current.title;
       if (!await confirmToast(
-        `确认把群聊“${current.title}”的群主转让给“${nextOwner?.displayName || nextOwner?.username || "所选成员"}”吗？转让后你将失去群主专属操作权限。`,
+        `确认把群聊“${conversationTitle}”的群主转让给“${nextOwner?.displayName || nextOwner?.username || "所选成员"}”吗？转让后你将失去群主专属操作权限。`,
         { title: "转让群主", confirmLabel: "确认转让" }
       )) return;
-      await api(`/api/im/conversations/${encodeURIComponent(current.id)}/transfer`, { method: "POST", body: { userId } });
-      await openConversation(current.id);
+      await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/transfer`, { method: "POST", body: { userId } });
+      if (current?.id === conversationId) await openConversation(conversationId);
+      else await loadConversations();
       toast("群主已转让", "success");
     });
     document.querySelector("#im-disband")?.addEventListener("click", async () => {
+      const conversationId = current.id;
+      const conversationTitle = current.title;
       if (!await confirmToast(
-        `确认解散群聊“${current.title}”吗？解散后所有成员只能查看各自可见的历史，群聊不能恢复。`,
+        `确认解散群聊“${conversationTitle}”吗？解散后所有成员只能查看各自可见的历史，群聊不能恢复。`,
         { title: "解散群聊", confirmLabel: "确认解散" }
       )) return;
-      await api(`/api/im/conversations/${encodeURIComponent(current.id)}/disband`, { method: "POST", body: {} });
-      await openConversation(current.id);
+      await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/disband`, { method: "POST", body: {} });
+      if (current?.id === conversationId) await openConversation(conversationId);
+      else await loadConversations();
       toast("群聊已解散", "success");
     });
     document.querySelector("#im-leave")?.addEventListener("click", async () => {
