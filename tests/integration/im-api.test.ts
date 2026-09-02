@@ -369,6 +369,27 @@ describe("全局 IM API", () => {
     expect(historicalView.body.data.participants.humans.map((item: { userId: string }) => item.userId)).not.toContain(admin.user.userId);
     expect(historicalView.body.data.avatarMembers.map((item: { participantId: string }) => item.participantId)).not.toContain(admin.user.userId);
     expect(historicalView.body.data.messages.some((item: { content: string }) => item.content.includes("im_admin 加入了群聊"))).toBe(false);
+    expect(historicalView.body.data.latestSequence).toBe(readOnly.body.data.latestSequence);
+    expect(historicalView.body.data.updatedAt).toBe(readOnly.body.data.updatedAt);
+    await owner.agent.patch(`/api/im/conversations/${groupId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "退出后修改的群名", responseThreshold: 5, maxAiMessages: 99 })
+      .expect(200);
+    const frozenDetails = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(frozenDetails.body.data).toMatchObject({
+      title: readOnly.body.data.title,
+      responseThreshold: readOnly.body.data.responseThreshold,
+      maxAiMessages: readOnly.body.data.maxAiMessages,
+      latestSequence: readOnly.body.data.latestSequence,
+      updatedAt: readOnly.body.data.updatedAt
+    });
+    const frozenListItem = (await lateMember.agent.get("/api/im/conversations").expect(200)).body.data
+      .find((conversation: { id: string }) => conversation.id === groupId);
+    expect(frozenListItem).toMatchObject({
+      title: readOnly.body.data.title,
+      latestSequence: readOnly.body.data.latestSequence,
+      updatedAt: readOnly.body.data.updatedAt
+    });
     const removedMemberEvents: Array<{ type: string; conversationId: string }> = [];
     const unsubscribeRemovedMember = runtime.imOrchestrator.subscribe(admin.user.userId, (event) => {
       removedMemberEvents.push({ type: event.type, conversationId: event.conversationId });

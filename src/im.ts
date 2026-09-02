@@ -667,10 +667,24 @@ export class ImService {
         } : {})
       }));
     const activeMembership = this.activeMembership(conversationId, userId);
-    const latestSequence = Number(this.db.get(
+    const viewerMembership = activeMembership ?? this.db.get(
+      `SELECT * FROM im_human_memberships
+       WHERE conversation_id = ? AND user_id = ?
+       ORDER BY joined_sequence DESC, joined_at DESC LIMIT 1`,
+      conversationId,
+      userId
+    );
+    const historicalSnapshot: Record<string, unknown> = activeMembership
+      ? {}
+      : json<Record<string, unknown>>(requiredString(viewerMembership?.conversation_snapshot_json), {});
+    const conversationValue = (column: string, snapshotKey: string): unknown => historicalSnapshot[snapshotKey] ?? row[column];
+    const conversationLatestSequence = Number(this.db.get(
       "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM im_messages WHERE conversation_id = ?",
       conversationId
     )?.sequence ?? 0);
+    const latestSequence = activeMembership
+      ? conversationLatestSequence
+      : Math.min(conversationLatestSequence, Number(viewerMembership?.left_sequence ?? conversationLatestSequence));
     const lastReadSequence = Number(activeMembership?.last_read_sequence ?? latestSequence);
     const unread = activeMembership ? Number(this.db.get(
       `SELECT COUNT(*) AS count FROM im_messages message
@@ -696,13 +710,13 @@ export class ImService {
     return {
       id: conversationId,
       kind: requiredString(row.kind),
-      ownerUserId: requiredString(row.owner_user_id),
-      title: requiredString(row.title),
-      replyMode: requiredString(row.reply_mode),
-      responseThreshold: Number(row.response_threshold),
-      maxAiMessages: Number(row.max_ai_messages),
-      contextEpoch: Number(row.context_epoch),
-      status: requiredString(row.status),
+      ownerUserId: requiredString(conversationValue("owner_user_id", "ownerUserId")),
+      title: requiredString(conversationValue("title", "title")),
+      replyMode: requiredString(conversationValue("reply_mode", "replyMode")),
+      responseThreshold: Number(conversationValue("response_threshold", "responseThreshold")),
+      maxAiMessages: Number(conversationValue("max_ai_messages", "maxAiMessages")),
+      contextEpoch: Number(conversationValue("context_epoch", "contextEpoch")),
+      status: requiredString(conversationValue("status", "status")),
       avatarCharacters,
       avatarMembers,
       active: Boolean(activeMembership) && requiredString(row.status) === "active",
@@ -710,7 +724,7 @@ export class ImService {
       mentionUnreadCount: mentionUnread,
       latestSequence,
       createdAt: requiredString(row.created_at),
-      updatedAt: requiredString(row.updated_at)
+      updatedAt: requiredString(historicalSnapshot.updatedAt ?? viewerMembership?.left_at ?? row.updated_at)
     };
   }
 
@@ -718,10 +732,11 @@ export class ImService {
     return this.db.all(
       `SELECT DISTINCT conversation.* FROM im_conversations conversation
        JOIN im_human_memberships membership ON membership.conversation_id = conversation.id
-       WHERE membership.user_id = ?
-       ORDER BY conversation.updated_at DESC, conversation.created_at DESC`,
+       WHERE membership.user_id = ?`,
       userId
-    ).map((row) => this.mapConversation(row, userId));
+    ).map((row) => this.mapConversation(row, userId))
+      .sort((left, right) => requiredString(right.updatedAt).localeCompare(requiredString(left.updatedAt))
+        || requiredString(right.createdAt).localeCompare(requiredString(left.createdAt)));
   }
 
   getConversation(conversationId: string, userId: string, beforeSequence?: number): Record<string, unknown> {
@@ -895,13 +910,26 @@ export class ImService {
   private finishMembership(conversationId: string, userId: string, actorUserId: string, action: "left" | "removed"): void {
     const membership = this.activeMembership(conversationId, userId);
     if (!membership) throw notFound("IM 群成员");
+    const conversation = this.db.get("SELECT * FROM im_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("IM 会话");
     const sequence = this.nextSequence(conversationId) - 1;
     const timestamp = now();
+    const conversationSnapshot = {
+      ownerUserId: requiredString(conversation.owner_user_id),
+      title: requiredString(conversation.title),
+      replyMode: requiredString(conversation.reply_mode),
+      responseThreshold: Number(conversation.response_threshold),
+      maxAiMessages: Number(conversation.max_ai_messages),
+      contextEpoch: Number(conversation.context_epoch),
+      status: requiredString(conversation.status),
+      updatedAt: timestamp
+    };
     this.db.run(
-      `UPDATE im_human_memberships SET left_sequence = ?, left_at = ?
+      `UPDATE im_human_memberships SET left_sequence = ?, left_at = ?, conversation_snapshot_json = ?
        WHERE id = ?`,
       sequence,
       timestamp,
+      JSON.stringify(conversationSnapshot),
       requiredString(membership.id)
     );
     this.cancelActiveChain(conversationId, `human_member_${action}`);

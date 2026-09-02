@@ -79,7 +79,7 @@ function insertSystemOwnedWork(database: Database, workId: string, title: string
 }
 
 describe("数据库版本化迁移", () => {
-  it("迁移 127 创建 IM 持久化结构并恢复中断链路", () => {
+  it("迁移 127 和 128 创建 IM 持久化结构、会话快照并恢复中断链路", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-im-"));
     roots.push(root);
     const filename = join(root, "im.db");
@@ -126,12 +126,16 @@ describe("数据库版本化迁移", () => {
     current.run(
       `INSERT INTO im_chain_turns (
          id, chain_id, character_membership_id, kind, status, created_at
-       ) VALUES ('im-turn', 'im-chain', 'im-character-membership', 'reply', 'running', '2026-08-31T00:00:00.000Z')`
+      ) VALUES ('im-turn', 'im-chain', 'im-character-membership', 'reply', 'running', '2026-08-31T00:00:00.000Z')`
     );
+    current.run("ALTER TABLE im_human_memberships DROP COLUMN conversation_snapshot_json");
+    current.run("DELETE FROM schema_migrations WHERE version = 128");
     current.close();
 
     const migrated = new Database(filename);
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 127")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 128")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA table_info(im_human_memberships)").map((column) => column.name)).toContain("conversation_snapshot_json");
     expect(migrated.all("PRAGMA table_info(im_user_settings)").map((column) => column.name)).toEqual([
       "user_id",
       "preferred_name",
