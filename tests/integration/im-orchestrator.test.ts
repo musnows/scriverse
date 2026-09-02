@@ -304,6 +304,48 @@ describe("IM AI 调度", () => {
     expect(JSON.parse(String(turn?.ai_call_ids_json))).toHaveLength(2);
   });
 
+  it("HTTP 403 和 404 也遵守主模型与 fallback 的配置失败次数", async () => {
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-http-permission-retry-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (body.model === "primary-model") {
+          primaryCalls += 1;
+          return new Response("forbidden", { status: 403 });
+        }
+        fallbackCalls += 1;
+        return new Response("not found", { status: 404 });
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "http_permission_retry_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "HTTP 权限失败来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "HTTP 权限失败角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 3
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "测试 403 和 404 重试。",
+      requestId: "im-http-permission-retry-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "failed", model_stage: "fallback" });
+    expect(primaryCalls).toBe(3);
+    expect(fallbackCalls).toBe(3);
+  });
+
   it("无效重试链不会执行取消当前链的回调", () => {
     runtime = createRuntime({
       databasePath: ":memory:",

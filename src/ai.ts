@@ -10348,7 +10348,9 @@ export class AiManager {
             traceAttempt.httpStatus = candidate.status;
             traceAttempt.failure = redactProviderSecretsText(`HTTP ${candidate.status}: ${candidate.body.slice(0, 2_000)}`, ...activeSecrets);
             saveTrace();
-            retryLimit = aiHttpRetryCount(candidate.status, requestRetryPolicy);
+            retryLimit = requestAttemptLimit === null
+              ? aiHttpRetryCount(candidate.status, requestRetryPolicy)
+              : requestAttemptLimit - 1;
             retryDelayMs = aiHttpRetryDelayMs(candidate.status, attempt, candidate.retryAfter);
             if (attempt > retryLimit) {
               retryable = false;
@@ -10357,7 +10359,9 @@ export class AiManager {
           } catch (error) {
             lastFailure = error;
             if (error instanceof AppError && error.code === "AI_STREAM_NETWORK_ERROR") {
-              retryLimit = aiHttpRetryCount(error.status, requestRetryPolicy);
+              retryLimit = requestAttemptLimit === null
+                ? aiHttpRetryCount(error.status, requestRetryPolicy)
+                : requestAttemptLimit - 1;
               retryDelayMs = aiHttpRetryDelayMs(error.status, attempt);
             } else if (isInteractiveStreamError(error)) {
               retryable = Boolean(onStreamReset) && error.code !== "AI_STREAM_REQUEST_CANCELLED";
