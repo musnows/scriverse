@@ -36,6 +36,10 @@ export function mergeImMessagePages(
   ...nextPages: Array<Array<Record<string, unknown>>>
 ): Array<Record<string, unknown>>;
 
+export function mergeImFailedReplyPages(
+  ...pages: Array<Array<Record<string, unknown>>>
+): Array<Record<string, unknown>>;
+
 export function imMessageSequenceBounds(messages: Array<Record<string, unknown>>): {
   minimum: number;
   maximum: number;

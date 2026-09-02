@@ -1224,10 +1224,45 @@ export class ImService {
       };
     });
     const messagePage = this.visibleMessagePage(conversationId, userId, 50, beforeSequence, afterSequence);
+    const visibleMessageIds = messagePage.messages.map((message) => requiredString(message.id));
+    const failedReplyRows = visibleMessageIds.length > 0 ? this.db.all(
+      `SELECT turn.*, chain.id AS chain_id, chain.trigger_message_id, trigger.sequence AS trigger_sequence,
+              membership.character_id, membership.snapshot_json
+       FROM im_chain_turns turn
+       JOIN im_chains chain ON chain.id = turn.chain_id
+       JOIN im_messages trigger ON trigger.id = chain.trigger_message_id
+       JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
+       WHERE chain.conversation_id = ? AND chain.trigger_message_id IN (${visibleMessageIds.map(() => "?").join(", ")})
+         AND turn.kind = 'reply' AND turn.status IN ('failed', 'skipped')
+       ORDER BY trigger.sequence, turn.created_at, turn.id`,
+      conversationId,
+      ...visibleMessageIds
+    ) : [];
+    const failedReplies = failedReplyRows.map((turn) => {
+      const snapshot = json<Record<string, unknown>>(requiredString(turn.snapshot_json), {});
+      const characterId = optionalString(turn.character_id) ?? requiredString(snapshot.id);
+      return {
+        id: requiredString(turn.id),
+        chainId: requiredString(turn.chain_id),
+        triggerMessageId: requiredString(turn.trigger_message_id),
+        triggerSequence: Number(turn.trigger_sequence),
+        characterId,
+        character: {
+          characterId,
+          name: snapshot.name ?? "角色",
+          avatarUrl: optionalString(snapshot.avatarUrl)
+        },
+        status: requiredString(turn.status),
+        failure: optionalString(turn.failure),
+        createdAt: requiredString(turn.created_at),
+        completedAt: optionalString(turn.completed_at)
+      };
+    });
     return {
       ...this.mapConversation(row, userId),
       participants: this.conversationParticipants(conversationId, userId),
       messages: messagePage.messages,
+      failedReplies,
       hasMoreMessages: messagePage.hasMore,
       hasMoreMessagesAfter: messagePage.hasMoreAfter,
       activeChain: activeChain ? {

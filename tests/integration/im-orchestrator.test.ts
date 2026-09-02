@@ -2822,6 +2822,22 @@ describe("IM AI 调度", () => {
     expect(activeChain.turns).toEqual([
       expect.objectContaining({ characterId: character.id, status: "failed", failure: expect.stringContaining("AI_CALL_FAILED") })
     ]);
+    const followUp = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "发送后续消息，旧失败仍应可见。",
+      requestId: "im-reply-failure-request-0002"
+    });
+    const refreshed = runtime.im.getConversation(String(direct.id), owner.userId);
+    expect((refreshed.activeChain as Record<string, unknown>).id).toBe((followUp.chain as Record<string, unknown>).id);
+    expect(refreshed.failedReplies).toEqual([
+      expect.objectContaining({
+        id: expect.any(String),
+        chainId: chain.id,
+        triggerMessageId: (sent.message as Record<string, unknown>).id,
+        characterId: character.id,
+        status: "failed",
+        failure: expect.stringContaining("AI_CALL_FAILED")
+      })
+    ]);
   });
 
   it("未知模型异常不会把内部错误文本写入链路或 turn", async () => {

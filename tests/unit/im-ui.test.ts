@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, imConversationAccessibleLabel, imDiagnosticStatusLabel, isImRealtimeChainCurrent, matchImProvisionalReplyTurn, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, sameImGroupSettings, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
+import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, imConversationAccessibleLabel, imDiagnosticStatusLabel, isImRealtimeChainCurrent, matchImProvisionalReplyTurn, mergeImFailedReplyPages, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, sameImGroupSettings, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -92,6 +92,17 @@ describe("IM 编辑区域尺寸", () => {
     expect(mergeImMessagePages(previous, latest).map((message) => message.sequence)).toEqual(
       Array.from({ length: 60 }, (_, index) => index + 1)
     );
+  });
+
+  it("按触发消息顺序合并并去重历史失败回答", () => {
+    expect(mergeImFailedReplyPages(
+      [{ id: "failure-2", triggerSequence: 4, createdAt: "2026-09-03T00:00:02.000Z" }],
+      [{ id: "failure-1", triggerSequence: 2, createdAt: "2026-09-03T00:00:01.000Z" }],
+      [{ id: "failure-2", triggerSequence: 4, createdAt: "2026-09-03T00:00:02.000Z", failure: "latest" }]
+    )).toEqual([
+      expect.objectContaining({ id: "failure-1" }),
+      expect.objectContaining({ id: "failure-2", failure: "latest" })
+    ]);
   });
 
   it("识别断线期间超过一页的新消息缺口", () => {

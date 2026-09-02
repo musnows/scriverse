@@ -127,6 +127,15 @@ export function mergeImMessagePages(previousMessages, ...nextPages) {
   return [...byId.values()].sort((left, right) => Number(left.sequence) - Number(right.sequence));
 }
 
+export function mergeImFailedReplyPages(...pages) {
+  const byId = new Map();
+  for (const reply of pages.flatMap(array)) byId.set(String(reply?.id || ""), reply);
+  byId.delete("");
+  return [...byId.values()].sort((left, right) => Number(left.triggerSequence) - Number(right.triggerSequence)
+    || String(left.createdAt || "").localeCompare(String(right.createdAt || ""))
+    || String(left.id || "").localeCompare(String(right.id || "")));
+}
+
 export function imMessageSequenceBounds(messages) {
   const sequences = array(messages).map((message) => Number(message?.sequence)).filter(Number.isFinite);
   return sequences.length ? { minimum: Math.min(...sequences), maximum: Math.max(...sequences) } : null;
@@ -486,7 +495,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const streaming = new Map(array(current?.streamingReplies).map((reply) => [String(reply.turnId || ""), reply]));
     provisionalReplies.clear();
     for (const turn of array(current?.activeChain?.turns)) {
-      if (!['pending', 'running', 'failed', 'skipped'].includes(String(turn.status))) continue;
+      if (!['pending', 'running'].includes(String(turn.status))) continue;
       const retained = previous.get(String(turn.id));
       const snapshot = streaming.get(String(turn.id));
       const next = upsertProvisionalReply({ ...turn, ...snapshot, turnId: turn.id });
@@ -542,7 +551,15 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const previousTop = feed.scrollTop;
     const messages = array(current?.messages);
     const provisional = [...provisionalReplies.values()];
-    if (!messages.length && !provisional.length) {
+    const failedRepliesByMessage = new Map();
+    for (const reply of array(current?.failedReplies)) {
+      const triggerMessageId = String(reply.triggerMessageId || "");
+      if (!triggerMessageId) continue;
+      const replies = failedRepliesByMessage.get(triggerMessageId) ?? [];
+      replies.push(reply);
+      failedRepliesByMessage.set(triggerMessageId, replies);
+    }
+    if (!messages.length && !provisional.length && failedRepliesByMessage.size === 0) {
       feed.innerHTML = '<p class="im-feed-empty">从一条消息开始。角色单聊会直接回复；群聊按当前回复模式调度 AI。</p>';
       return;
     }
@@ -570,11 +587,18 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const avatar = announcement || message.senderKind === "system"
         ? ""
         : imAvatarHtml(sender, message.senderKind === "character" ? "character" : "user", "im-message-avatar");
+      const failedReplies = array(failedRepliesByMessage.get(String(message.id))).map((reply) => {
+        const character = value(reply, "character", {});
+        return `<article class="im-message is-character is-provisional is-failed" data-im-failed-turn="${esc(reply.id)}">
+          <header>${imAvatarHtml(character, "character", "im-message-avatar")}<strong>${esc(character.name || "角色")}</strong><span class="im-provisional-status">${reply.status === "skipped" ? "未生成" : "生成失败"}</span></header>
+          <div class="im-message-body message-body">${provisionalReplyBodyHtml({ status: reply.status, error: reply.failure || "角色回答生成失败", content: "" })}</div>
+        </article>`;
+      }).join("");
       return `<article class="im-message is-${esc(message.senderKind)}${announcement ? " is-announcement" : ""}${own ? " is-own" : ""}" data-im-message="${esc(message.id)}">
         <header>${avatar}<strong>${esc(label)}</strong><time>${esc(new Date(message.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }))}</time></header>
         <div class="im-message-body message-body">${messageHtml(message)}</div>
         ${message.senderKind === "character" ? `<details class="im-model-details"><summary>调用详情</summary><span>${esc(model.modelDisplayName || model.modelId || "未知模型")} · ${model.modelStage === "fallback" ? "fallback" : "主模型"} · ${Number(model.attemptCount || 1)} 次请求 · ${Number(model.durationMs || 0)} ms</span></details>` : ""}
-      </article>`;
+      </article>${failedReplies}`;
     }).join("") + generatingSummary + provisionalHtml;
     bindImAvatarFallbacks(feed);
     feed.scrollTop = follow ? feed.scrollHeight : previousTop;
@@ -596,6 +620,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         ...array(current.messages)
       ].map((message) => [message.id, message]));
       current.messages = [...messagesById.values()].sort((left, right) => Number(left.sequence) - Number(right.sequence));
+      current.failedReplies = mergeImFailedReplyPages(page.failedReplies, current.failedReplies);
       current.hasMoreMessages = page.hasMoreMessages === true;
       renderMessages();
       feed.scrollTop = previousTop + Math.max(0, feed.scrollHeight - previousHeight);
@@ -897,15 +922,18 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const previousConversation = current?.id === conversationId ? current : null;
     const conversationChanged = !previousConversation;
     if (previousConversation) {
+      const gapFailedReplies = [];
       const gapMessages = await collectImMessageGap(previousConversation.messages, nextConversation.messages, async (cursor) => {
         const page = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}?afterSequence=${encodeURIComponent(cursor)}`);
         if (request !== conversationRequest || (requestedConversationId && requestedConversationId !== conversationId)) {
           throw new Error("IM 会话请求已失效");
         }
+        gapFailedReplies.push(...array(page.failedReplies));
         return page;
       });
       if (request !== conversationRequest || (requestedConversationId && requestedConversationId !== conversationId)) return;
       nextConversation.messages = mergeImMessagePages(previousConversation.messages, gapMessages, nextConversation.messages);
+      nextConversation.failedReplies = mergeImFailedReplyPages(previousConversation.failedReplies, gapFailedReplies, nextConversation.failedReplies);
       nextConversation.hasMoreMessages = previousConversation.hasMoreMessages === true;
     }
     if (current?.id && current.id !== conversationId) {
