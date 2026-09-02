@@ -4560,6 +4560,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .im-details { transition: none !important; }
   .dialog-submit-progress > span { width: 100%; transform: none; }
 }
 

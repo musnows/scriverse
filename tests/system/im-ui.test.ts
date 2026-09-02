@@ -65,14 +65,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v94");
+    expect(page.text).toContain("feature=global-im-v95");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260902-global-im-v94');
+    expect(application.text).toContain('/im.js?v=20260902-global-im-v95');
     expect(application.text).toContain("onRouteChange: schedulePresenceHeartbeat");
     expect(application.text).toContain('confirmDiscardChanges("当前章节有未保存修改，进入 IM 将放弃本地修改。是否继续？")');
     expect(application.text).toMatch(/beforeOpen: async \(\) => \{[\s\S]*?cancelChapterAutoSave\(\);[\s\S]*?state\.dirty = false;/);
@@ -273,6 +273,7 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain(".im-member-section-actions");
     expect(styles.text).toContain('.im-member-edit-button[aria-pressed="true"]');
     expect(styles.text).toContain(".im-member-add-dialog");
+    expect(styles.text).toContain(".im-details { transition: none !important; }");
     expect(styles.text).toContain(".im-member-picker-option");
     expect(styles.text).toContain(".im-chat-header .im-button { min-height: 28px;");
     expect(styles.text).toContain(".im-owner-action-buttons { display: grid; grid-template-columns: repeat(2");
