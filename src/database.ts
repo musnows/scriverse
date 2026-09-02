@@ -88,9 +88,11 @@ export class Database {
 
   constructor(readonly filename: string) {
     logger.info("database.opening", { databasePath: filename, inMemory: filename === ":memory:" });
+    let raw: DatabaseSync | null = null;
     try {
       if (filename !== ":memory:") mkdirSync(dirname(filename), { recursive: true });
-      this.raw = new DatabaseSync(filename);
+      raw = new DatabaseSync(filename);
+      this.raw = raw;
       this.raw.exec("PRAGMA foreign_keys = ON");
       this.raw.exec("PRAGMA busy_timeout = 5000");
       if (filename !== ":memory:") this.raw.exec("PRAGMA journal_mode = WAL");
@@ -104,6 +106,11 @@ export class Database {
       const migration = this.get<{ version: number }>("SELECT MAX(version) AS version FROM schema_migrations");
       logger.info("database.ready", { inMemory: filename === ":memory:", schemaVersion: Number(migration?.version ?? 0) });
     } catch (error) {
+      try {
+        raw?.close();
+      } catch (closeError) {
+        logger.warn("database.open_failure_close_failed", { databasePath: filename, error: sanitizeError(closeError) });
+      }
       logSqliteDiskIoError(filename, error);
       logger.error("database.open_failed", { databasePath: filename, error: sanitizeError(error) });
       throw error;
