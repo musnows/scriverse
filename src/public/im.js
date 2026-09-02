@@ -927,19 +927,34 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     mentionOptions = [
       ...activeCharacters().map((item) => ({ ...item, kind: "character", id: item.characterId, label: item.name, detail: item.workTitle })),
       ...activeHumans().map((item) => ({ ...item, kind: "user", id: item.userId, label: item.displayName, detail: `@${item.username}` }))
-    ].filter((item) => item.label.toLocaleLowerCase("zh-CN").includes(query)).slice(0, 12);
+    ].filter((item) => [item.label, item.kind === "user" ? item.username : ""]
+      .some((value) => String(value || "").toLocaleLowerCase("zh-CN").includes(query))).slice(0, 12);
     mentionIndex = mentionOptions.length ? 0 : -1;
     mentionMenu.innerHTML = mentionOptions.length
-      ? mentionOptions.map((item, index) => `<button type="button" role="option" aria-selected="${index === mentionIndex}" data-im-mention-index="${index}">${imAvatarHtml(item, item.kind, "im-mention-avatar")}<span><strong>${esc(item.label)}</strong><em>${item.kind === "character" ? "角色" : "用户"} · ${esc(item.detail)}</em></span></button>`).join("")
+      ? mentionOptions.map((item, index) => `<button id="im-mention-option-${index}" type="button" role="option" aria-selected="${index === mentionIndex}" data-im-mention-index="${index}">${imAvatarHtml(item, item.kind, "im-mention-avatar")}<span><strong>${esc(item.label)}</strong><em>${item.kind === "character" ? "角色" : "用户"} · ${esc(item.detail)}</em></span></button>`).join("")
       : '<p class="im-empty">没有匹配的群成员</p>';
     bindImAvatarFallbacks(mentionMenu);
     mentionMenu.classList.remove("hidden");
     composer.setAttribute("aria-expanded", "true");
+    syncMentionSelection();
+  }
+
+  function syncMentionSelection() {
+    const options = mentionMenu.querySelectorAll("[role=option]");
+    options.forEach((item, index) => item.setAttribute("aria-selected", String(index === mentionIndex)));
+    const active = mentionIndex >= 0 ? options[mentionIndex] : null;
+    if (active) {
+      composer.setAttribute("aria-activedescendant", active.id);
+      active.scrollIntoView({ block: "nearest" });
+    } else {
+      composer.removeAttribute("aria-activedescendant");
+    }
   }
 
   function closeMentionMenu() {
     mentionMenu.classList.add("hidden");
     composer.setAttribute("aria-expanded", "false");
+    composer.removeAttribute("aria-activedescendant");
     mentionOptions = [];
     mentionIndex = -1;
   }
@@ -1208,7 +1223,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
           mentionIndex = (mentionIndex + (event.key === "ArrowDown" ? 1 : -1) + mentionOptions.length) % mentionOptions.length;
-          mentionMenu.querySelectorAll("[role=option]").forEach((item, index) => item.setAttribute("aria-selected", String(index === mentionIndex)));
+          syncMentionSelection();
           return;
         }
         if (event.key === "Enter" && mentionIndex >= 0) {

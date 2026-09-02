@@ -62,14 +62,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v50");
+    expect(page.text).toContain("feature=global-im-v51");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260902-global-im-v50');
+    expect(application.text).toContain('/im.js?v=20260902-global-im-v51');
     expect(application.text).toContain("createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf })");
     expect(im.text).toContain('mentionMenu.addEventListener("pointerdown", (event) => event.preventDefault())');
     expect(application.text).toContain('if (!$("#im-view").classList.contains("hidden")) return { view: "im" }');
@@ -104,6 +104,9 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain('data-im-remove-human="${esc(item.userId)}" aria-label="移除 ${esc(item.displayName)}" hidden');
     expect(im.text).toContain('data-im-remove-character="${esc(item.characterId)}" aria-label="移除 ${esc(item.name)}" hidden');
     expect(im.text).toContain("confirmToast(");
+    expect(im.text).toContain('item.kind === "user" ? item.username : ""');
+    expect(im.text).toContain('composer.setAttribute("aria-activedescendant", active.id)');
+    expect(im.text).toContain('active.scrollIntoView({ block: "nearest" })');
     expect(im.text).toContain('title: "转让群主", confirmLabel: "确认转让"');
     expect(im.text).toContain('title: "解散群聊", confirmLabel: "确认解散"');
     expect((im.text.match(/const conversationId = current\.id;/gu) ?? []).length).toBeGreaterThanOrEqual(2);
