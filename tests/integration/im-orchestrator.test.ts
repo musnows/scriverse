@@ -489,6 +489,50 @@ describe("IM AI 调度", () => {
     }).message).toMatchObject({ content: "恢复后应重新使用既有单聊。" });
   });
 
+  it("失效角色墓碑不占群容量且不能绕过至少一个可用角色约束", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-character-tombstone-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "character_tombstone_owner", password: "secure-password-123" }).session.user;
+    const { work, characters } = runWithRequestActor(actor(owner), () => {
+      const createdWork = runtime.store.createWork({ title: "角色墓碑容量作品" });
+      return {
+        work: createdWork,
+        characters: Array.from({ length: 11 }, (_, index) => runtime.store.createCharacter(String(createdWork.id), {
+          name: `墓碑容量角色 ${index + 1}`
+        }))
+      };
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "角色墓碑容量群",
+      characterIds: characters.slice(0, 10).map((character) => String(character.id))
+    });
+    runtime.store.deleteCharacter(String(characters[0]!.id));
+    runtime.im.refreshCharacterAvailability(String(group.id));
+
+    runtime.im.addCharacter(owner, String(group.id), String(characters[10]!.id));
+    expect(runtime.database.get(
+      `SELECT COUNT(*) AS count FROM im_character_memberships
+       WHERE conversation_id = ? AND left_at IS NULL AND status = 'active' AND character_id IS NOT NULL`,
+      String(group.id)
+    )).toEqual({ count: 10 });
+    for (const character of characters.slice(1, 10)) {
+      runtime.im.removeCharacter(owner, String(group.id), String(character.id));
+    }
+    expect(() => runtime.im.removeCharacter(owner, String(group.id), String(characters[10]!.id)))
+      .toThrowError("群聊必须至少保留一个 AI 角色");
+
+    expect(() => runtime.im.removeCharacter(owner, String(group.id), String(characters[0]!.id))).not.toThrow();
+    expect(runtime.database.get(
+      `SELECT COUNT(*) AS count FROM im_character_memberships
+       WHERE conversation_id = ? AND left_at IS NULL AND character_id IS NULL`,
+      String(group.id)
+    )).toEqual({ count: 0 });
+    expect(runtime.store.getWork(String(work.id))).toMatchObject({ id: work.id });
+  });
+
   it("SSE 重连时重放正在生成气泡的完整流式快照", async () => {
     const encoder = new TextEncoder();
     let releaseStream: (() => void) | null = null;

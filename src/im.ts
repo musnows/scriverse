@@ -1147,9 +1147,11 @@ export class ImService {
     } catch {
       owner = null;
     }
+    let availableCharacterCount = 0;
     for (const membership of this.db.all(
       `SELECT id, character_id, source_work_id, snapshot_json FROM im_character_memberships
-       WHERE conversation_id = ? AND left_at IS NULL`,
+       WHERE conversation_id = ? AND left_at IS NULL
+       ORDER BY joined_at, id`,
       conversationId
     )) {
       const snapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
@@ -1169,9 +1171,10 @@ export class ImService {
               characterId,
               requiredString(membership.id)
             );
-            if (!duplicate) {
+            if (!duplicate && availableCharacterCount < IM_MAX_AI_PARTICIPANTS) {
               status = "active";
               restoredCharacterId = characterId;
+              availableCharacterCount += 1;
             }
           }
         } catch {
@@ -1464,14 +1467,19 @@ export class ImService {
   addCharacter(owner: AuthUser, conversationId: string, characterId: string): Record<string, unknown> {
     const conversation = this.assertOwner(conversationId, owner.userId);
     if (requiredString(conversation.kind) !== "group") throw new AppError(400, "IM_GROUP_REQUIRED", "单聊不能添加角色");
+    this.refreshCharacterAvailability(conversationId);
     const activeCount = Number(this.db.get(
-      "SELECT COUNT(*) AS count FROM im_character_memberships WHERE conversation_id = ? AND left_at IS NULL",
+      `SELECT COUNT(*) AS count FROM im_character_memberships
+       WHERE conversation_id = ? AND left_at IS NULL AND status = 'active' AND character_id IS NOT NULL`,
       conversationId
     )?.count ?? 0);
     if (activeCount >= IM_MAX_AI_PARTICIPANTS) throw new AppError(409, "IM_CHARACTER_LIMIT_REACHED", "群聊 AI 角色已达到上限");
     if (this.db.get(
-      "SELECT 1 AS present FROM im_character_memberships WHERE conversation_id = ? AND character_id = ? AND left_at IS NULL",
+      `SELECT 1 AS present FROM im_character_memberships
+       WHERE conversation_id = ? AND left_at IS NULL
+         AND (character_id = ? OR (character_id IS NULL AND json_extract(snapshot_json, '$.id') = ?))`,
       conversationId,
+      characterId,
       characterId
     )) throw new AppError(409, "IM_CHARACTER_EXISTS", "该角色已经在群聊中");
     const character = this.assertCharacterAvailable(owner, characterId);
@@ -1496,9 +1504,17 @@ export class ImService {
       "SELECT * FROM im_character_memberships WHERE conversation_id = ? AND left_at IS NULL",
       conversationId
     );
-    if (rows.length <= 1) throw new AppError(409, "IM_CHARACTER_REQUIRED", "群聊必须至少保留一个 AI 角色");
-    const membership = rows.find((row) => requiredString(row.character_id) === characterId);
+    const membership = rows.find((row) => {
+      if (optionalString(row.character_id) === characterId) return true;
+      const snapshot = json<Record<string, unknown>>(requiredString(row.snapshot_json), {});
+      return !optionalString(row.character_id) && optionalString(snapshot.id) === characterId;
+    });
     if (!membership) throw notFound("IM 群角色");
+    const removesActiveCharacter = optionalString(membership.character_id) !== null && requiredString(membership.status) === "active";
+    const activeCount = rows.filter((row) => optionalString(row.character_id) !== null && requiredString(row.status) === "active").length;
+    if (removesActiveCharacter && activeCount <= 1) {
+      throw new AppError(409, "IM_CHARACTER_REQUIRED", "群聊必须至少保留一个 AI 角色");
+    }
     const timestamp = now();
     this.db.transaction(() => {
       this.cancelActiveChain(conversationId, "character_member_removed");
@@ -1520,7 +1536,8 @@ export class ImService {
     if (!this.activeMembership(conversationId, nextOwnerUserId)) throw new AppError(400, "IM_OWNER_NOT_MEMBER", "新群主必须是当前群成员");
     const nextOwner = this.assertActiveUser(nextOwnerUserId);
     const characterIds = this.db.all(
-      "SELECT character_id FROM im_character_memberships WHERE conversation_id = ? AND left_at IS NULL AND character_id IS NOT NULL",
+      `SELECT character_id FROM im_character_memberships
+       WHERE conversation_id = ? AND left_at IS NULL AND status = 'active' AND character_id IS NOT NULL`,
       conversationId
     ).map((row) => requiredString(row.character_id));
     for (const characterId of characterIds) this.assertCharacterAvailable(nextOwner, characterId);
