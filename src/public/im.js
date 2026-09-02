@@ -567,17 +567,37 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     }
   }
 
+  async function performMutation(control, action) {
+    if (control?.disabled || control?.getAttribute("aria-busy") === "true") return { ok: false, value: null };
+    if (control) {
+      control.disabled = true;
+      control.setAttribute("aria-busy", "true");
+    }
+    try {
+      return { ok: true, value: await action() };
+    } catch (error) {
+      toast(error.message, "error");
+      return { ok: false, value: null };
+    } finally {
+      if (control) {
+        control.disabled = false;
+        control.removeAttribute("aria-busy");
+      }
+    }
+  }
+
   function bindDetailActions(owner) {
     const threshold = document.querySelector("#im-detail-threshold");
     threshold?.addEventListener("input", () => { document.querySelector("#im-detail-threshold-output").textContent = threshold.value; });
-    document.querySelector("#im-save-group-settings")?.addEventListener("click", async () => {
-      await api(`/api/im/conversations/${encodeURIComponent(current.id)}`, { method: "PATCH", body: {
+    document.querySelector("#im-save-group-settings")?.addEventListener("click", async (event) => {
+      const conversationId = current.id;
+      const result = await performMutation(event.currentTarget, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}`, { method: "PATCH", body: {
         title: document.querySelector("#im-detail-title").value.trim(),
         replyMode: document.querySelector("#im-detail-mode").value,
         responseThreshold: Number(document.querySelector("#im-detail-threshold").value),
         maxAiMessages: Number(document.querySelector("#im-detail-limit").value)
-      } });
-      await openConversation(current.id);
+      } }));
+      if (result.ok && current?.id === conversationId) await openConversation(conversationId);
     });
     document.querySelectorAll("[data-im-open-member-add]").forEach((button) => button.addEventListener("click", () => openMemberAddDialog(button.dataset.imOpenMemberAdd)));
     document.querySelectorAll("[data-im-toggle-member-edit]").forEach((button) => button.addEventListener("click", () => {
@@ -587,12 +607,14 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       list?.querySelectorAll("[data-im-remove-human], [data-im-remove-character]").forEach((removeButton) => { removeButton.hidden = !editing; });
     }));
     document.querySelectorAll("[data-im-remove-human]").forEach((button) => button.addEventListener("click", async () => {
-      await api(`/api/im/conversations/${encodeURIComponent(current.id)}/humans/${encodeURIComponent(button.dataset.imRemoveHuman)}`, { method: "DELETE", body: {} });
-      await openConversation(current.id);
+      const conversationId = current.id;
+      const result = await performMutation(button, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/humans/${encodeURIComponent(button.dataset.imRemoveHuman)}`, { method: "DELETE", body: {} }));
+      if (result.ok && current?.id === conversationId) await openConversation(conversationId);
     }));
     document.querySelectorAll("[data-im-remove-character]").forEach((button) => button.addEventListener("click", async () => {
-      await api(`/api/im/conversations/${encodeURIComponent(current.id)}/characters/${encodeURIComponent(button.dataset.imRemoveCharacter)}`, { method: "DELETE", body: {} });
-      await openConversation(current.id);
+      const conversationId = current.id;
+      const result = await performMutation(button, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(button.dataset.imRemoveCharacter)}`, { method: "DELETE", body: {} }));
+      if (result.ok && current?.id === conversationId) await openConversation(conversationId);
     }));
     document.querySelector("#im-transfer")?.addEventListener("click", async () => {
       const userId = document.querySelector("#im-transfer-select").value;
@@ -604,7 +626,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         `确认把群聊“${conversationTitle}”的群主转让给“${nextOwner?.displayName || nextOwner?.username || "所选成员"}”吗？转让后你将失去群主专属操作权限。`,
         { title: "转让群主", confirmLabel: "确认转让" }
       )) return;
-      await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/transfer`, { method: "POST", body: { userId } });
+      const result = await performMutation(document.querySelector("#im-transfer"), () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/transfer`, { method: "POST", body: { userId } }));
+      if (!result.ok) return;
       if (current?.id === conversationId) await openConversation(conversationId);
       else await refreshConversations();
       toast("群主已转让", "success");
@@ -616,14 +639,16 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         `确认解散群聊“${conversationTitle}”吗？解散后所有成员只能查看各自可见的历史，群聊不能恢复。`,
         { title: "解散群聊", confirmLabel: "确认解散" }
       )) return;
-      await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/disband`, { method: "POST", body: {} });
+      const result = await performMutation(document.querySelector("#im-disband"), () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/disband`, { method: "POST", body: {} }));
+      if (!result.ok) return;
       if (current?.id === conversationId) await openConversation(conversationId);
       else await refreshConversations();
       toast("群聊已解散", "success");
     });
-    document.querySelector("#im-leave")?.addEventListener("click", async () => {
-      await api(`/api/im/conversations/${encodeURIComponent(current.id)}/leave`, { method: "POST", body: {} });
-      await openConversation(current.id);
+    document.querySelector("#im-leave")?.addEventListener("click", async (event) => {
+      const conversationId = current.id;
+      const result = await performMutation(event.currentTarget, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/leave`, { method: "POST", body: {} }));
+      if (result.ok && current?.id === conversationId) await openConversation(conversationId);
     });
     if (!owner) return;
   }
@@ -1188,22 +1213,21 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       if (event.target.closest("[data-im-load-older]")) void loadOlderMessages();
     });
     document.querySelector("#im-send").addEventListener("click", () => void send());
-    document.querySelector("#im-stop").addEventListener("click", async () => {
-      await api(`/api/im/conversations/${encodeURIComponent(current.id)}/stop`, { method: "POST", body: {} });
+    document.querySelector("#im-stop").addEventListener("click", async (event) => {
+      const conversationId = current.id;
+      const result = await performMutation(event.currentTarget, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/stop`, { method: "POST", body: {} }));
+      if (!result.ok) return;
       provisionalReplies.clear();
-      await openConversation(current.id);
+      if (current?.id === conversationId) await openConversation(conversationId);
     });
     document.querySelector("#im-retry").addEventListener("click", async (event) => {
       if (!current?.activeChain?.id) return;
       const button = event.currentTarget;
       if (button.disabled) return;
-      button.disabled = true;
-      try {
-        await api(`/api/im/conversations/${encodeURIComponent(current.id)}/chains/${encodeURIComponent(current.activeChain.id)}/retry`, { method: "POST", body: {} });
-        await openConversation(current.id);
-      } finally {
-        button.disabled = false;
-      }
+      const conversationId = current.id;
+      const chainId = current.activeChain.id;
+      const result = await performMutation(button, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/chains/${encodeURIComponent(chainId)}/retry`, { method: "POST", body: {} }));
+      if (result.ok && current?.id === conversationId) await openConversation(conversationId);
     });
     document.querySelector("#im-details-toggle").addEventListener("click", () => document.querySelector("#im-details").classList.toggle("is-open"));
     document.querySelector("#im-details-close").addEventListener("click", () => document.querySelector("#im-details").classList.remove("is-open"));
@@ -1253,7 +1277,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#im-settings-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
-      settings = await api("/api/im/settings", { method: "PATCH", body: {
+      const submit = event.currentTarget.querySelector('button[type="submit"]');
+      const result = await performMutation(submit, () => api("/api/im/settings", { method: "PATCH", body: {
         preferredName: String(form.get("preferredName") || "").trim(),
         pronouns: String(form.get("pronouns") || "").trim(),
         identitySummary: String(form.get("identitySummary") || "").trim(),
@@ -1261,7 +1286,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         primaryModelId: String(form.get("primaryModelId") || "") || null,
         fallbackModelId: String(form.get("fallbackModelId") || "") || null,
         retryCount: Number(form.get("retryCount"))
-      } });
+      } }));
+      if (!result.ok) return;
+      settings = result.value;
       document.querySelector("#im-settings-dialog").close();
       toast("IM 身份与模型设置已保存", "success");
       if (current?.activeChain?.status === "waiting_config") await openConversation(current.id);
@@ -1314,16 +1341,19 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const form = new FormData(event.currentTarget);
       const characterIds = [...createSelectedCharacters.keys()];
       if (!characterIds.length) return;
-      const conversation = characterIds.length === 1
-        ? await api("/api/im/conversations/direct", { method: "POST", body: { characterId: characterIds[0] } })
-        : await api("/api/im/conversations/group", { method: "POST", body: {
+      const submit = event.currentTarget.querySelector('button[type="submit"]');
+      const result = await performMutation(submit, () => characterIds.length === 1
+        ? api("/api/im/conversations/direct", { method: "POST", body: { characterId: characterIds[0] } })
+        : api("/api/im/conversations/group", { method: "POST", body: {
             title: String(form.get("title") || "").trim(),
             characterIds,
             humanUserIds: form.getAll("humanUserId").map(String),
             replyMode: String(form.get("replyMode") || "mention"),
             responseThreshold: Number(form.get("responseThreshold") || 60),
             maxAiMessages: Number(form.get("maxAiMessages") || 20)
-          } });
+          } }));
+      if (!result.ok) return;
+      const conversation = result.value;
       document.querySelector("#im-group-dialog").close();
       await refreshConversations();
       await openConversation(conversation.id);
