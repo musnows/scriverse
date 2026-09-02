@@ -1074,7 +1074,7 @@ export class ImOrchestrator {
     membership: Record<string, unknown>,
     sourceMessage: Record<string, unknown>,
     signal: AbortSignal
-  ): Promise<number | null> {
+  ): Promise<{ score: number; turnId: string } | null> {
     await this.maybeCompact(chain, membership, sourceMessage, signal);
     const turnId = this.createTurn(requiredString(chain.id), requiredString(membership.id), "judge");
     try {
@@ -1107,7 +1107,7 @@ export class ImOrchestrator {
         },
         createdAt: now()
       });
-      return score;
+      return { score, turnId };
     } catch (error) {
       const effectiveError = effectiveAbortError(signal, error);
       this.failTurn(turnId, effectiveError, signal.aborted ? "cancelled" : "failed");
@@ -1447,7 +1447,7 @@ export class ImOrchestrator {
           }
           const settledScores = await Promise.allSettled(candidates.map(async (candidate) => ({
             membershipId: requiredString(candidate.id),
-            score: await this.judge(chain, candidate, sourceMessage, signal)
+            result: await this.judge(chain, candidate, sourceMessage, signal)
           })));
           if (signal.aborted) {
             throw signal.reason instanceof Error ? signal.reason : new AppError(499, "IM_CHAIN_CANCELLED", "IM 交流链已取消");
@@ -1455,7 +1455,11 @@ export class ImOrchestrator {
           const rejectedScore = settledScores.find((result) => result.status === "rejected");
           if (rejectedScore?.status === "rejected") throw rejectedScore.reason;
           const scores = settledScores.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
-          const available = scores.filter((item): item is { membershipId: string; score: number } => item.score !== null)
+          const available = scores.flatMap((item) => item.result ? [{
+            membershipId: item.membershipId,
+            score: item.result.score,
+            turnId: item.result.turnId
+          }] : [])
             .sort((left, right) => right.score - left.score || left.membershipId.localeCompare(right.membershipId));
           if (available.length === 0) throw new AppError(502, "IM_JUDGE_ALL_FAILED", "所有 AI 角色的发言判断都失败了");
           const selected = available.filter((item) => item.score >= Number(chain.threshold));
@@ -1466,33 +1470,23 @@ export class ImOrchestrator {
           for (const item of selected) {
             const selectedReply = this.planReplyTurn(chain, item.membershipId, requiredString(sourceMessage.id));
             forcedQueue.push(selectedReply);
-            const judgeTurn = this.db.get(
-              `SELECT id FROM im_chain_turns
-               WHERE chain_id = ? AND character_membership_id = ? AND kind = 'judge' AND status = 'completed'
-               ORDER BY created_at DESC, id DESC LIMIT 1`,
-              chainId,
-              selectedReply.membershipId
-            );
-            if (judgeTurn) {
-              const judgeTurnId = requiredString(judgeTurn.id);
-              const selectedMembership = this.characterMembership(selectedReply.membershipId);
-              this.db.run("UPDATE im_chain_turns SET selected = 1 WHERE id = ?", judgeTurnId);
-              this.publishToUser(requiredString(chain.authorization_user_id), {
-                id: id("imEvent"),
-                type: "turn",
-                conversationId,
-                payload: {
-                  chainId,
-                  turnId: judgeTurnId,
-                  kind: "judge",
-                  characterId: selectedMembership.character_id,
-                  score: item.score,
-                  selected: true,
-                  status: "completed"
-                },
-                createdAt: now()
-              });
-            }
+            const selectedMembership = this.characterMembership(selectedReply.membershipId);
+            this.db.run("UPDATE im_chain_turns SET selected = 1 WHERE id = ?", item.turnId);
+            this.publishToUser(requiredString(chain.authorization_user_id), {
+              id: id("imEvent"),
+              type: "turn",
+              conversationId,
+              payload: {
+                chainId,
+                turnId: item.turnId,
+                kind: "judge",
+                characterId: selectedMembership.character_id,
+                score: item.score,
+                selected: true,
+                status: "completed"
+              },
+              createdAt: now()
+            });
           }
           plannedReply = forcedQueue.shift() ?? null;
           if (!plannedReply) throw new AppError(500, "IM_REPLY_QUEUE_EMPTY", "主动交流没有生成可执行的角色回复队列");

@@ -2829,8 +2829,12 @@ describe("IM AI 调度", () => {
       { character_id: characters[0]?.id, score: 85, selected: 1 },
       { character_id: characters[1]?.id, score: 75, selected: 1 }
     ]);
-    expect(events.filter((event) => event.type === "turn" && event.payload.kind === "judge" && event.payload.selected === true))
-      .toHaveLength(2);
+    const selectedJudgeEvents = events.filter((event) => event.type === "turn" && event.payload.kind === "judge" && event.payload.selected === true);
+    expect(selectedJudgeEvents).toHaveLength(2);
+    expect(new Set(selectedJudgeEvents.map((event) => event.payload.turnId))).toEqual(new Set(runtime.database.all(
+      "SELECT id FROM im_chain_turns WHERE chain_id = ? AND kind = 'judge' AND selected = 1",
+      chainId
+    ).map((turn) => turn.id)));
     const characterMessages = runtime.database.all(
       "SELECT sender_character_id, sender_snapshot_json, content FROM im_messages WHERE conversation_id = ? AND sender_kind = 'character' ORDER BY sequence",
       String(group.id)
