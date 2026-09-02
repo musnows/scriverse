@@ -132,14 +132,19 @@ describe("数据库版本化迁移", () => {
     current.run("DELETE FROM schema_migrations WHERE version = 128");
     current.run("DROP TABLE im_avatar_versions");
     current.run("DELETE FROM schema_migrations WHERE version = 129");
+    current.run("DROP INDEX idx_im_chains_retry_source");
+    current.run("ALTER TABLE im_chains DROP COLUMN retry_source_chain_id");
+    current.run("DELETE FROM schema_migrations WHERE version = 130");
     current.close();
 
     const migrated = new Database(filename);
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 127")).toEqual({ count: 1 });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 128")).toEqual({ count: 1 });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 129")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 130")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA table_info(im_human_memberships)").map((column) => column.name)).toContain("conversation_snapshot_json");
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'im_avatar_versions'")).toEqual({ name: "im_avatar_versions" });
+    expect(migrated.all("PRAGMA table_info(im_chains)").map((column) => column.name)).toContain("retry_source_chain_id");
     expect(migrated.all("PRAGMA table_info(im_user_settings)").map((column) => column.name)).toEqual([
       "user_id",
       "preferred_name",

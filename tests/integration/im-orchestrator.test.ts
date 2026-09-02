@@ -405,6 +405,21 @@ describe("IM AI 调度", () => {
       .toThrowError("群成员或上下文已经变化，不能重试旧上下文中的交流链");
     expect(cancellationCalled).toBe(false);
 
+    const idempotentCharacter = runWithRequestActor(actor(owner), () => runtime.store.createCharacter(String(character.workId), { name: "幂等重试角色" }));
+    const idempotentDirect = runtime.im.createDirect(owner, String(idempotentCharacter.id));
+    const idempotentSource = runtime.im.sendMessage(owner, String(idempotentDirect.id), {
+      content: "等待幂等重试。",
+      requestId: "im-idempotent-retry-source-0001"
+    });
+    const idempotentSourceChainId = String((idempotentSource.chain as Record<string, unknown>).id);
+    let retryCancellationCount = 0;
+    const firstRetry = runtime.im.retryChain(owner, String(idempotentDirect.id), idempotentSourceChainId, () => { retryCancellationCount += 1; });
+    const duplicateRetry = runtime.im.retryChain(owner, String(idempotentDirect.id), idempotentSourceChainId, () => { retryCancellationCount += 1; });
+    expect(duplicateRetry.id).toBe(firstRetry.id);
+    expect(retryCancellationCount).toBe(1);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM im_chains WHERE conversation_id = ?", String(idempotentDirect.id)))
+      .toEqual({ count: 2 });
+
     const member = runtime.auth.register({ username: "retry_topology_member", password: "secure-password-123" }).session.user;
     const secondCharacter = runWithRequestActor(actor(owner), () => runtime.store.createCharacter(String(character.workId), { name: "拓扑变更角色" }));
     const group = runtime.im.createGroup(owner, {

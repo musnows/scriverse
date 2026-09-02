@@ -1169,10 +1169,17 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       provisionalReplies.clear();
       await openConversation(current.id);
     });
-    document.querySelector("#im-retry").addEventListener("click", async () => {
+    document.querySelector("#im-retry").addEventListener("click", async (event) => {
       if (!current?.activeChain?.id) return;
-      await api(`/api/im/conversations/${encodeURIComponent(current.id)}/chains/${encodeURIComponent(current.activeChain.id)}/retry`, { method: "POST", body: {} });
-      await openConversation(current.id);
+      const button = event.currentTarget;
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        await api(`/api/im/conversations/${encodeURIComponent(current.id)}/chains/${encodeURIComponent(current.activeChain.id)}/retry`, { method: "POST", body: {} });
+        await openConversation(current.id);
+      } finally {
+        button.disabled = false;
+      }
     });
     document.querySelector("#im-details-toggle").addEventListener("click", () => document.querySelector("#im-details").classList.toggle("is-open"));
     document.querySelector("#im-details-close").addEventListener("click", () => document.querySelector("#im-details").classList.remove("is-open"));

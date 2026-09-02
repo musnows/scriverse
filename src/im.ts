@@ -1687,9 +1687,6 @@ export class ImService {
     const conversation = this.assertActiveMembership(conversationId, user.userId);
     const source = this.db.get("SELECT * FROM im_chains WHERE id = ? AND conversation_id = ?", sourceChainId, conversationId);
     if (!source) throw notFound("IM 交流链");
-    if (!["failed", "interrupted", "waiting_config"].includes(requiredString(source.status))) {
-      throw new AppError(409, "IM_CHAIN_NOT_RETRYABLE", "只有失败、中断或等待模型配置的 IM 交流链可以重试");
-    }
     const triggerMessageId = requiredString(source.trigger_message_id);
     const trigger = this.db.get(
       `SELECT message.id, message.context_epoch FROM im_messages message
@@ -1707,6 +1704,17 @@ export class ImService {
     if (Number(trigger.context_epoch) !== Number(conversation.context_epoch)) {
       throw new AppError(409, "IM_CHAIN_CONTEXT_CHANGED", "群成员或上下文已经变化，不能重试旧上下文中的交流链");
     }
+    const existingRetry = this.db.get(
+      `SELECT * FROM im_chains
+       WHERE conversation_id = ? AND retry_source_chain_id = ? AND initiator_user_id = ?`,
+      conversationId,
+      sourceChainId,
+      user.userId
+    );
+    if (existingRetry) return existingRetry;
+    if (!["failed", "interrupted", "waiting_config"].includes(requiredString(source.status))) {
+      throw new AppError(409, "IM_CHAIN_NOT_RETRYABLE", "只有失败、中断或等待模型配置的 IM 交流链可以重试");
+    }
     const settings = this.getSettings(user.userId);
     const chainId = id("imChain");
     const timestamp = now();
@@ -1719,15 +1727,16 @@ export class ImService {
       const configured = Boolean(settings.primaryModelId && settings.fallbackModelId);
       this.db.run(
         `INSERT INTO im_chains (
-           id, conversation_id, initiator_user_id, authorization_user_id, trigger_message_id,
+           id, conversation_id, initiator_user_id, authorization_user_id, trigger_message_id, retry_source_chain_id,
            mode, threshold, max_ai_messages, retry_count, primary_model_id, fallback_model_id,
            status, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         chainId,
         conversationId,
         user.userId,
         requiredString(conversation.owner_user_id),
         triggerMessageId,
+        sourceChainId,
         mode,
         Number(conversation.response_threshold),
         Number(conversation.max_ai_messages),
