@@ -8531,7 +8531,7 @@ export class AiManager {
     scope?: ContextScope,
     model?: ModelRow,
     provider?: ProviderRow,
-    chatContext?: { conversationId?: string | null },
+    chatContext?: { conversationId?: string | null; im?: boolean },
     stagedRoleplayMemoryCandidates?: RoleplayMemoryCandidate[],
     allowedRemoteMcpToolNames?: ReadonlySet<string>
   ): Promise<AgentToolCallExecution> {
@@ -8634,7 +8634,7 @@ export class AiManager {
         || (toolId === "recall_known" && enabledTools.has(toolId)
           && (canReadWorkModule(permissions, "races") || canReadWorkModule(permissions, "organizations") || canReadWorkModule(permissions, "settings")))
         || (toolId === "recall_story" && enabledTools.has(toolId) && canReadWorkModule(permissions, "prose"))
-        || (toolId === "recall_roleplay_memory" && enabledTools.has(toolId) && Boolean(conversationId))
+        || (toolId === "recall_roleplay_memory" && enabledTools.has(toolId) && Boolean(conversationId || chatContext?.im))
         || (toolId === "remember_roleplay" && enabledTools.has(toolId) && Boolean(conversationId) && Boolean(stagedRoleplayMemoryCandidates))
         || (toolId === "image" && enabledTools.has(toolId) && this.canReadWithAgentTool(permissions, "image"))
       : Boolean(configuredToolId && enabledTools.has(configuredToolId) && this.canReadWithAgentTool(permissions, configuredToolId));
@@ -8665,7 +8665,6 @@ export class AiManager {
       ? new Set(this.getScopeChapters(workId, scope).map((chapter) => String(chapter.id)))
       : null;
     if (name === "recall_roleplay_memory") {
-      if (!conversationId) throw new Error("Conversation is required for recall_roleplay_memory");
       const { query, categories, cursor } = args as z.infer<typeof recallRoleplayMemoryArgumentsSchema>;
       return {
         id: toolCall.id,
@@ -10619,7 +10618,7 @@ export class AiManager {
             input.scope,
             model,
             provider,
-            { conversationId: input.conversationId ?? null },
+            { conversationId: input.conversationId ?? null, im: Boolean(input.im) },
             stagedRoleplayMemoryCandidates,
             allowedRemoteMcpToolNames
           );

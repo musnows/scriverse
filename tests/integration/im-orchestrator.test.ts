@@ -335,6 +335,69 @@ describe("IM AI 调度", () => {
     });
   });
 
+  it("IM 回复可以调用角色扮演记忆检索工具", async () => {
+    let requestCount = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-roleplay-memory-tool-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        requestCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        if (requestCount === 1) {
+          expect((body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name))
+            .toContain("recall_roleplay_memory");
+          return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+            id: "im-recall-roleplay-memory",
+            type: "function",
+            function: { name: "recall_roleplay_memory", arguments: JSON.stringify({ query: "远航凭证" }) }
+          }] }, finish_reason: "tool_calls" }] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        const toolResult = messages.filter((message) => message.role === "tool").at(-1)?.content ?? "";
+        expect(toolResult).not.toContain("TOOL_NOT_AVAILABLE");
+        expect(toolResult).toContain("远航凭证");
+        return completion("我记得那枚远航凭证。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "im_memory_tool_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "IM 记忆工具作品" });
+      const createdCharacter = runtime.store.createCharacter(String(work.id), { name: "IM 记忆工具角色" });
+      for (let index = 1; index <= 13; index += 1) {
+        runtime.store.createRoleplayMemory(String(createdCharacter.id), {
+          category: "knowledge",
+          content: index === 1 ? "我保管着一枚远航凭证。" : `普通共享记忆 ${index}`
+        });
+      }
+      return createdCharacter;
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "你还记得远航凭证吗？",
+      requestId: "im-roleplay-memory-tool-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "completed", generated_count: 1 });
+    expect(requestCount).toBe(2);
+    expect(runtime.database.get(
+      "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      String(chain.id)
+    )).toEqual({ content: "我记得那枚远航凭证。" });
+  });
+
   it("角色权限在模型请求期间失效时不写入迟到回复", async () => {
     const responseControl: { release?: () => void } = {};
     let markStarted: (() => void) | null = null;
