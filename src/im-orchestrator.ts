@@ -65,6 +65,7 @@ export class ImOrchestrator {
   private readonly controllers = new Map<string, AbortController>();
   private readonly activeByUser = new Map<string, number>();
   private readonly streamingReplies = new Map<string, ImRealtimeEvent>();
+  private readonly recipientCache = new Map<string, string[]>();
   private disposed = false;
 
   constructor(
@@ -119,11 +120,15 @@ export class ImOrchestrator {
 
   private publish(conversationId: string, type: ImRealtimeEvent["type"], payload: Record<string, unknown>): void {
     const event: ImRealtimeEvent = { id: id("imEvent"), type, conversationId, payload, createdAt: now() };
-    const userIds = this.db.all(
-      `SELECT DISTINCT user_id FROM im_human_memberships
-       WHERE conversation_id = ? AND left_at IS NULL`,
-      conversationId
-    ).map((row) => requiredString(row.user_id));
+    let userIds = this.recipientCache.get(conversationId);
+    if (!userIds) {
+      userIds = this.db.all(
+        `SELECT DISTINCT user_id FROM im_human_memberships
+         WHERE conversation_id = ? AND left_at IS NULL`,
+        conversationId
+      ).map((row) => requiredString(row.user_id));
+      this.recipientCache.set(conversationId, userIds);
+    }
     for (const userId of userIds) {
       this.publishToUser(userId, event);
     }
@@ -143,6 +148,7 @@ export class ImOrchestrator {
   }
 
   publishConversation(conversationId: string): void {
+    this.recipientCache.delete(conversationId);
     this.publish(conversationId, "conversation", {});
   }
 
@@ -1250,6 +1256,7 @@ export class ImOrchestrator {
     for (const controller of this.controllers.values()) controller.abort(new AppError(499, "IM_CHAIN_CANCELLED", "服务正在关闭"));
     this.controllers.clear();
     this.streamingReplies.clear();
+    this.recipientCache.clear();
     this.queuedChainIds.length = 0;
     this.queuedChainSet.clear();
     this.listeners.clear();
