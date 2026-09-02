@@ -146,8 +146,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let conversationRequest = 0;
   let diagnosticsRequest = 0;
   let ownerConfirmationPending = false;
-  let pendingMessageRequest = null;
-  let pendingAnnouncementRequest = null;
+  const pendingMessageRequests = new Map();
+  const sendingConversations = new Set();
+  const pendingAnnouncementRequests = new Map();
   let requestedConversationId = null;
   let models = [];
   let settings = null;
@@ -1142,10 +1143,13 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   async function send() {
     if (!current?.active) return;
     const conversationId = current.id;
+    if (sendingConversations.has(conversationId)) return;
     const content = serializeImComposer(composer);
     if (!content) return;
-    const messageRequestId = pendingMessageRequest?.content === content ? pendingMessageRequest.id : requestId();
-    pendingMessageRequest = { content, id: messageRequestId };
+    const pendingRequest = pendingMessageRequests.get(conversationId);
+    const messageRequestId = pendingRequest?.content === content ? pendingRequest.id : requestId();
+    pendingMessageRequests.set(conversationId, { content, id: messageRequestId });
+    sendingConversations.add(conversationId);
     composer.replaceChildren();
     conversationDrafts.delete(conversationId);
     closeMentionMenu();
@@ -1157,7 +1161,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         body: { content, requestId: messageRequestId }
       });
       committed = true;
-      pendingMessageRequest = null;
+      if (pendingMessageRequests.get(conversationId)?.id === messageRequestId) pendingMessageRequests.delete(conversationId);
       if (current?.id !== conversationId) {
         await refreshConversationSummary(conversationId);
         return;
@@ -1170,8 +1174,19 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       await refreshConversationSummary(conversationId);
       if (result.chain?.status === "waiting_config") toast("消息已发送；请配置主模型和 fallback 后重试 AI 链路", "warning");
     } catch (error) {
-      if (!committed && current?.id === conversationId) composer.textContent = content;
+      if (!committed) {
+        if (current?.id === conversationId) {
+          const newerDraft = serializeImComposer(composer);
+          composer.textContent = newerDraft ? `${content}\n\n${newerDraft}` : content;
+        } else {
+          const draft = document.createElement("div");
+          draft.textContent = content;
+          conversationDrafts.set(conversationId, draft.innerHTML);
+        }
+      }
       toast(committed ? `消息已发送，但刷新会话失败：${error.message}` : error.message, "error");
+    } finally {
+      sendingConversations.delete(conversationId);
     }
   }
 
@@ -1486,15 +1501,18 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const content = document.querySelector("#im-announcement-content").value.trim();
       if (!content || !current?.id || submit.disabled) return;
       const conversationId = current.id;
-      const announcementRequestId = pendingAnnouncementRequest?.content === content ? pendingAnnouncementRequest.id : requestId();
-      pendingAnnouncementRequest = { content, id: announcementRequestId };
+      const pendingRequest = pendingAnnouncementRequests.get(conversationId);
+      const announcementRequestId = pendingRequest?.content === content ? pendingRequest.id : requestId();
+      pendingAnnouncementRequests.set(conversationId, { content, id: announcementRequestId });
       submit.disabled = true;
       try {
         await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/announcements`, {
           method: "POST",
           body: { content, requestId: announcementRequestId }
         });
-        pendingAnnouncementRequest = null;
+        if (pendingAnnouncementRequests.get(conversationId)?.id === announcementRequestId) {
+          pendingAnnouncementRequests.delete(conversationId);
+        }
         document.querySelector("#im-announcement-dialog").close();
         if (current?.id === conversationId) await refreshAfterMutation("旁白公告发布", () => openConversation(conversationId));
         toast("旁白公告已发布", "success");
