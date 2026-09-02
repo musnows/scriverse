@@ -88,6 +88,15 @@ describe("IM AI 调度", () => {
     for (const unsubscribe of unsubscribes) unsubscribe();
     const afterRelease = runtime.imOrchestrator.subscribe(owner.userId, () => undefined);
     afterRelease();
+    let expiredConnectionClosed = false;
+    runtime.imOrchestrator.subscribe(
+      owner.userId,
+      () => undefined,
+      () => { expiredConnectionClosed = true; },
+      new Date(Date.now() + 10).toISOString()
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(expiredConnectionClosed).toBe(true);
 
     let memberEvents = 0;
     let memberDisconnected = false;

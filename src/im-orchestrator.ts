@@ -16,7 +16,7 @@ export type ImRealtimeEvent = {
 };
 
 type EventListener = (event: ImRealtimeEvent) => void;
-type EventSubscription = { listener: EventListener; disconnect: () => void };
+type EventSubscription = { listener: EventListener; disconnect: () => void; expirationTimer?: NodeJS.Timeout };
 
 type InvocationResult = {
   callId: string;
@@ -80,7 +80,7 @@ export class ImOrchestrator {
     return this.store.db;
   }
 
-  subscribe(userId: string, listener: EventListener, disconnect: () => void = () => undefined): () => void {
+  subscribe(userId: string, listener: EventListener, disconnect: () => void = () => undefined, expiresAt?: string): () => void {
     let listeners = this.listeners.get(userId);
     if (!listeners) {
       listeners = new Set();
@@ -89,8 +89,21 @@ export class ImOrchestrator {
     if (listeners.size >= IM_EVENT_CONNECTION_LIMIT_PER_USER) {
       throw new AppError(429, "IM_EVENT_CONNECTION_LIMIT", "IM 实时连接过多，请关闭其他页面后重试");
     }
-    const subscription = { listener, disconnect };
+    const subscription: EventSubscription = { listener, disconnect };
     listeners.add(subscription);
+    const scheduleExpiration = (): void => {
+      if (!expiresAt || !listeners?.has(subscription)) return;
+      const remainingMs = Date.parse(expiresAt) - Date.now();
+      if (remainingMs <= 0) {
+        listeners.delete(subscription);
+        if (listeners.size === 0) this.listeners.delete(userId);
+        disconnect();
+        return;
+      }
+      subscription.expirationTimer = setTimeout(scheduleExpiration, Math.min(remainingMs, 2_147_483_647));
+      subscription.expirationTimer.unref();
+    };
+    scheduleExpiration();
     for (const event of this.streamingReplies.values()) {
       const membership = this.db.get(
         `SELECT 1 AS present FROM im_human_memberships
@@ -109,6 +122,7 @@ export class ImOrchestrator {
       }
     }
     return () => {
+      if (subscription.expirationTimer) clearTimeout(subscription.expirationTimer);
       listeners?.delete(subscription);
       if (listeners?.size === 0) this.listeners.delete(userId);
     };
@@ -119,6 +133,7 @@ export class ImOrchestrator {
     if (!subscriptions) return;
     this.listeners.delete(userId);
     for (const subscription of subscriptions) {
+      if (subscription.expirationTimer) clearTimeout(subscription.expirationTimer);
       try {
         subscription.disconnect();
       } catch {
@@ -1369,6 +1384,6 @@ export class ImOrchestrator {
     this.recipientCache.clear();
     this.queuedChainIds.length = 0;
     this.queuedChainSet.clear();
-    this.listeners.clear();
+    for (const userId of [...this.listeners.keys()]) this.disconnectUser(userId);
   }
 }

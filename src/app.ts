@@ -1765,6 +1765,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       profileId: input.profileId,
       clientVersion: input.clientVersion
     });
+    imOrchestrator.disconnectUser(result.session.user.userId);
     response.setHeader("Cache-Control", "no-store");
     runWithRequestActor(result.session.user, () => store.audit(null, "user.logged-in", "user", result.session.user.userId, { source: "desktop" }));
     logger.info("auth.desktop_login.succeeded", { actorRef: accountReference(result.session.user.userId) });
@@ -1998,7 +1999,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     unsubscribe = imOrchestrator.subscribe(user.userId, (event) => {
       if (!started) pendingEvents.push(event);
       else writeEvent(event);
-    }, close);
+    }, close, request.authDesktopSession?.expiresAt ?? request.authSession?.expiresAt);
     response.status(200);
     response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     response.setHeader("Cache-Control", "no-cache, no-transform");
