@@ -4833,7 +4833,7 @@ body.is-im-composer-resizing { cursor: ns-resize; user-select: none; }
 .im-privacy-note { margin: 0; padding: 10px 11px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--accent) 6%, var(--surface-soft)); color: var(--muted); font-size: 10px; line-height: 1.6; }
 .im-settings-dialog .account-settings-form, .im-group-form, .im-announcement-form, .im-member-add-form { min-width: 0; max-height: calc(88dvh - 80px); overflow-y: auto; padding: 18px 24px 24px; }
 .im-settings-dialog .account-settings-form { grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 14px; margin: 0; }
-.im-settings-dialog .account-settings-form label, .im-group-form > label, .im-group-settings-row label, .im-create-role-toolbar label, .im-create-group-settings > label, .im-announcement-form > label, .im-member-picker-toolbar label { display: grid; min-width: 0; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 650; }
+.im-settings-dialog .account-settings-form label, .im-group-form > label, .im-group-form fieldset > label, .im-group-settings-row label, .im-create-role-toolbar label, .im-create-group-settings > label, .im-announcement-form > label, .im-member-picker-toolbar label { display: grid; min-width: 0; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 650; }
 .im-settings-dialog .account-settings-form .card-actions { grid-column: 1 / -1; }
 .im-settings-dialog :is(input:not([type="checkbox"]):not([type="range"]), textarea, select),
 .im-group-form :is(input:not([type="checkbox"]):not([type="range"]), textarea, select),
