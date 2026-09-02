@@ -531,6 +531,79 @@ describe("IM AI 调度", () => {
     });
   });
 
+  it("使用私有资料的回复在发起人权限撤销后不写入群聊", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-initiator-private-access-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        markStarted?.();
+        await responseGate;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return completion("这条回复使用了请求开始时的私有角色资料。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const workOwner = runtime.auth.register({ username: "private_reply_work_owner", password: "secure-password-123" }).session.user;
+    const groupOwner = runtime.auth.register({ username: "private_reply_group_owner", password: "secure-password-123" }).session.user;
+    const initiator = runtime.auth.register({ username: "private_reply_initiator", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const { work, character } = runWithRequestActor(actor(workOwner), () => {
+      const work = runtime.store.createWork({ title: "发起人撤权作品" });
+      return {
+        work,
+        character: runtime.store.createCharacter(String(work.id), {
+          name: "发起人撤权角色",
+          attributes: { privateSecret: "INITIATOR_PRIVATE_CHARACTER_DATA" }
+        })
+      };
+    });
+    runtime.auth.addMember(String(work.id), groupOwner.userId, { role: "editor" }, workOwner.userId);
+    runtime.auth.addMember(String(work.id), initiator.userId, { role: "editor" }, workOwner.userId);
+    runtime.im.updateSettings(initiator.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(groupOwner, {
+      title: "发起人撤权群",
+      characterIds: [String(character.id)],
+      humanUserIds: [initiator.userId],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    const sent = runtime.im.sendMessage(initiator, String(group.id), {
+      content: `mention://character/${character.id} 请使用角色资料回复。`,
+      requestId: "im-initiator-private-access-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    runtime.auth.updateMemberPermissions(String(work.id), initiator.userId, {
+      permissions: {
+        prose: "read", comments: "read", todos: "read", drafts: "read", settings: "read",
+        characters: "none", races: "read", organizations: "read", timeline: "read", relationships: "read",
+        outlines: "read", reviews: "read", "ai-chat": "none", "ai-analysis": "read", "ai-settings": "read"
+      }
+    });
+    responseControl.release?.();
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+
+    expect(chain).toMatchObject({ status: "failed", error_code: "IM_CHARACTER_ACCESS_DENIED", generated_count: 0 });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      chainId
+    )).toEqual({ count: 0 });
+    expect(runtime.database.get(
+      "SELECT status FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
+      chainId
+    )).toEqual({ status: "failed" });
+  });
+
   it("角色消息写入失败时原子回滚回复 turn 的完成状态", async () => {
     runtime = createRuntime({
       databasePath: ":memory:",

@@ -5,7 +5,7 @@ import type { AuthUser, UserAuthService } from "./user-auth.js";
 import { runWithRequestActor } from "./request-context.js";
 import { id, json, now } from "./utils.js";
 import { IM_MAX_MENTIONS_PER_MESSAGE, ImService, parseImMentions } from "./im.js";
-import { canReadWorkModule, type WorkModulePermissions } from "./work-permissions.js";
+import { canReadWorkModule, workPermissionModules, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
 
 export type ImRealtimeEvent = {
   id: string;
@@ -27,6 +27,7 @@ type InvocationResult = {
   model: Record<string, unknown>;
   stage: "primary" | "fallback";
   durationMs: number;
+  requiredInitiatorModules: WorkPermissionModule[];
 };
 
 const IM_USER_CHAIN_CONCURRENCY = 3;
@@ -699,6 +700,9 @@ export class ImOrchestrator {
     const participantContext = this.participantContext(requiredString(conversation.id), snapshot);
     const maximumHistoryTokens = this.maximumHistoryTokens(chain, participantContext);
     const context = this.characterHistory(membership, conversation, Number(sourceMessage.sequence), maximumHistoryTokens);
+    const requiredInitiatorModules = kind === "compact" || !authorization.initiatorPermissions
+      ? []
+      : workPermissionModules.filter((module) => canReadWorkModule(authorization.initiatorPermissions!, module));
     const common = {
       workId: authorization.workId,
       characterId: authorization.characterId,
@@ -764,7 +768,8 @@ export class ImOrchestrator {
         content: result.content,
         model: result.model,
         stage,
-        durationMs: Math.round(Number(process.hrtime.bigint() - started) / 1_000_000)
+        durationMs: Math.round(Number(process.hrtime.bigint() - started) / 1_000_000),
+        requiredInitiatorModules
       };
     };
     const errorDetails = (error: unknown): Record<string, unknown> => error instanceof AppError
@@ -1029,6 +1034,14 @@ export class ImOrchestrator {
       now(),
       turnId
     );
+  }
+
+  private assertInvocationInitiatorPermissions(
+    permissions: WorkModulePermissions | null,
+    invocation: InvocationResult
+  ): void {
+    if (invocation.requiredInitiatorModules.every((module) => permissions && canReadWorkModule(permissions, module))) return;
+    throw new AppError(403, "IM_CHARACTER_ACCESS_DENIED", "发起人的作品权限已变化，包含私有资料的角色结果未写入群聊");
   }
 
   private failTurn(turnId: string, error: unknown, status: "failed" | "cancelled" = "failed"): void {
@@ -1321,7 +1334,8 @@ export class ImOrchestrator {
         throw new AppError(502, "IM_AI_REPLY_TOO_LONG", `AI 回复超过 ${IM_MESSAGE_MAX_CHARACTERS} 字符，未写入会话`);
       }
       const currentMembership = this.characterMembership(membershipId);
-      this.assertCharacterAuthorization(chain, currentMembership);
+      const currentAuthorization = this.assertCharacterAuthorization(chain, currentMembership);
+      this.assertInvocationInitiatorPermissions(currentAuthorization.initiatorPermissions, result);
       const snapshot = this.streamingReplies.get(turnId);
       if (snapshot) snapshot.payload.content = result.content;
       this.publish(requiredString(chain.conversation_id), "delta", {
