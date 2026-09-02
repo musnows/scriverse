@@ -696,8 +696,15 @@ describe("全局 IM API", () => {
     )).toBe(true);
     expect(visibilityAllSpy).not.toHaveBeenCalled();
     expect(visibilityGetSpy).toHaveBeenCalledTimes(2);
+    const [snapshotLookupSql, ...snapshotLookupParams] = visibilityGetSpy.mock.calls.at(-1) ?? [];
     visibilityAllSpy.mockRestore();
     visibilityGetSpy.mockRestore();
+    expect(runtime.database.all(
+      `EXPLAIN QUERY PLAN ${String(snapshotLookupSql)}`,
+      ...(snapshotLookupParams as import("node:sqlite").SQLInputValue[])
+    ).map((row) => String(row.detail))).toEqual(expect.arrayContaining([
+      expect.stringContaining("idx_im_messages_character_snapshot_avatar")
+    ]));
     await owner.agent.post(`/api/im/conversations/${deletedCharacterGroup.body.data.id}/humans`)
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ userId: lateMember.user.userId })
