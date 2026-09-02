@@ -1342,7 +1342,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     hideMainViews();
     document.querySelector("#app").classList.add("shelf-mode", "im-mode");
     workspace.classList.remove("hidden");
-    document.querySelector("#work-meta").textContent = "IM";
+    document.querySelector("#work-meta").textContent = "";
     document.querySelector("#top-search-button").disabled = true;
     document.title = "IM · 叙界";
     window.history.replaceState(null, "", "#view=im");
