@@ -28,6 +28,7 @@ type InvocationResult = {
   stage: "primary" | "fallback";
   durationMs: number;
   requiredInitiatorModules: WorkPermissionModule[];
+  requiredInitiatorAnyModules: WorkPermissionModule[][];
 };
 
 const IM_USER_CHAIN_CONCURRENCY = 3;
@@ -714,6 +715,7 @@ export class ImOrchestrator {
       ...(fullCharacterPrompt ? ["characters" as const] : []),
       ...(allowRoleplayMemory ? ["ai-chat" as const] : [])
     ]);
+    const requiredInitiatorAnyModules: WorkPermissionModule[][] = [];
     const common = {
       workId: authorization.workId,
       characterId: authorization.characterId,
@@ -729,10 +731,18 @@ export class ImOrchestrator {
       retryCount: Number(chain.retry_count),
       createdByUserId: requiredString(chain.initiator_user_id),
       signal,
-      beforeRequest: () => {
+      beforeRequest: (requirement) => {
+        const anyOf = [...new Set(requirement?.anyOf ?? [])];
+        if (anyOf.length > 0 && !requiredInitiatorAnyModules.some((group) => (
+          group.length === anyOf.length && group.every((module) => anyOf.includes(module))
+        ))) requiredInitiatorAnyModules.push(anyOf);
         const currentMembership = this.characterMembership(requiredString(membership.id));
         const currentAuthorization = this.assertCharacterAuthorization(chain, currentMembership);
-        this.assertRequiredInitiatorPermissions(currentAuthorization.initiatorPermissions, [...requiredInitiatorModules]);
+        this.assertRequiredInitiatorPermissions(
+          currentAuthorization.initiatorPermissions,
+          [...requiredInitiatorModules],
+          requiredInitiatorAnyModules
+        );
       },
       onToolCall: (tool) => {
         if (tool.status !== "completed") return;
@@ -783,7 +793,8 @@ export class ImOrchestrator {
         model: result.model,
         stage,
         durationMs: Math.round(Number(process.hrtime.bigint() - started) / 1_000_000),
-        requiredInitiatorModules: [...requiredInitiatorModules]
+        requiredInitiatorModules: [...requiredInitiatorModules],
+        requiredInitiatorAnyModules: requiredInitiatorAnyModules.map((group) => [...group])
       };
     };
     const errorDetails = (error: unknown): Record<string, unknown> => error instanceof AppError
@@ -1054,14 +1065,20 @@ export class ImOrchestrator {
     permissions: WorkModulePermissions | null,
     invocation: InvocationResult
   ): void {
-    this.assertRequiredInitiatorPermissions(permissions, invocation.requiredInitiatorModules);
+    this.assertRequiredInitiatorPermissions(
+      permissions,
+      invocation.requiredInitiatorModules,
+      invocation.requiredInitiatorAnyModules
+    );
   }
 
   private assertRequiredInitiatorPermissions(
     permissions: WorkModulePermissions | null,
-    requiredModules: WorkPermissionModule[]
+    requiredModules: WorkPermissionModule[],
+    requiredAnyModules: WorkPermissionModule[][] = []
   ): void {
-    if (requiredModules.every((module) => permissions && canReadWorkModule(permissions, module))) return;
+    if (requiredModules.every((module) => permissions && canReadWorkModule(permissions, module))
+      && requiredAnyModules.every((group) => group.some((module) => permissions && canReadWorkModule(permissions, module)))) return;
     throw new AppError(403, "IM_CHARACTER_ACCESS_DENIED", "发起人的作品权限已变化，包含私有资料的角色结果未写入群聊");
   }
 

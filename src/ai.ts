@@ -499,7 +499,7 @@ export type ImAiPromptInput = {
   retryCount: number;
   createdByUserId: string;
   signal?: AbortSignal;
-  beforeRequest?: () => void;
+  beforeRequest?: (requirement?: { anyOf?: WorkPermissionModule[] }) => void;
   onToolCall?: (tool: { name: string; status: string; permissionModules: WorkPermissionModule[] }) => void;
 };
 
@@ -519,7 +519,7 @@ type GenerateInput = {
   signal?: AbortSignal;
   maxAttempts?: number;
   requestAttemptLimit?: number;
-  beforeRequest?: () => void;
+  beforeRequest?: (requirement?: { anyOf?: WorkPermissionModule[] }) => void;
   onToolCall?: (call: AgentToolCallResult, round: number, permissionModules?: WorkPermissionModule[]) => void;
   onProcessStep?: (step: AiProcessStep & { append?: boolean }) => void;
   onContextCompacted?: (event: AiContextCompactionEvent) => void;
@@ -8295,10 +8295,7 @@ export class AiManager {
     if (call.name === "recall_known") return ["characters", ...readable(["relationships", "organizations", "timeline", "races", "settings"])];
     if (call.name === "recall_story") return ["characters", "prose", ...readable(["timeline"])];
     if (call.name === "recall_roleplay_memory") return ["characters", "ai-chat"];
-    if (call.name === "image") {
-      const attachmentId = String(call.arguments?.attachmentId ?? "");
-      return attachmentId ? readable(this.store.attachmentModules(attachmentId)) : [];
-    }
+    if (call.name === "image") return [];
     return [];
   }
 
@@ -8319,10 +8316,11 @@ export class AiManager {
     workId: string,
     attachmentId: string,
     permissions: WorkModulePermissions
-  ): Promise<{ attachment: Record<string, unknown>; dataUrl: string }> {
+  ): Promise<{ attachment: Record<string, unknown>; dataUrl: string; permissionModules: WorkPermissionModule[] }> {
     if (!this.attachmentStorage) throw new AppError(500, "IMAGE_STORAGE_UNAVAILABLE", "图片附件存储不可用");
     const attachment = this.store.getSettingAttachment(workId, attachmentId);
-    if (!this.store.attachmentModules(attachmentId).some((module) => canReadWorkModule(permissions, module))) {
+    const permissionModules = this.store.attachmentModules(attachmentId);
+    if (!permissionModules.some((module) => canReadWorkModule(permissions, module))) {
       throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取该图片所属资料模块的权限");
     }
     if (Boolean(attachment.animated) || Number(attachment.pageCount) > 1) {
@@ -8338,7 +8336,8 @@ export class AiManager {
     }
     return {
       attachment,
-      dataUrl: `data:${String(attachment.storedMimeType)};base64,${image.toString("base64")}`
+      dataUrl: `data:${String(attachment.storedMimeType)};base64,${image.toString("base64")}`,
+      permissionModules
     };
   }
 
@@ -8347,7 +8346,7 @@ export class AiManager {
     attachmentId: string,
     signal: AbortSignal | undefined,
     permissions: WorkModulePermissions,
-    beforeRequest?: () => void
+    beforeRequest?: (requirement?: { anyOf?: WorkPermissionModule[] }) => void
   ): Promise<{ content: string; attachment: Record<string, unknown>; model: ModelRow; usage: ResolvedAiTokenUsage }> {
     const prepared = await this.loadImageAttachment(workId, attachmentId, permissions);
     const { attachment, dataUrl: imageDataUrl } = prepared;
@@ -8396,7 +8395,7 @@ export class AiManager {
           signal: controller.signal
         });
         return { ok: upstream.ok, status: upstream.status, body: await readResponseTextLimited(upstream) };
-      }, beforeRequest);
+      }, () => beforeRequest?.({ anyOf: prepared.permissionModules }));
       if (!response.ok) throw new AppError(502, "IMAGE_MODEL_REQUEST_FAILED", "多模态模型读取图片失败");
       let payload: CompletionPayload;
       try {
@@ -8563,7 +8562,7 @@ export class AiManager {
     chatContext?: { conversationId?: string | null; im?: boolean },
     stagedRoleplayMemoryCandidates?: RoleplayMemoryCandidate[],
     allowedRemoteMcpToolNames?: ReadonlySet<string>,
-    beforeRequest?: () => void
+    beforeRequest?: (requirement?: { anyOf?: WorkPermissionModule[] }) => void
   ): Promise<AgentToolCallExecution> {
     const name = toolCall.function.name;
     const calledAt = now();
@@ -9009,6 +9008,7 @@ export class AiManager {
       try {
         if (model && provider && boolValue(model, "multimodal_enabled") && supportsMultimodalProviderProtocol(provider)) {
           const prepared = await this.loadImageAttachment(workId, attachmentId, permissions);
+          beforeRequest?.({ anyOf: prepared.permissionModules });
           const fileName = String(prepared.attachment.originalName);
           return {
             id: toolCall.id,
