@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, matchImProvisionalReplyTurn, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
+import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, matchImProvisionalReplyTurn, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, sameImGroupSettings, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -44,6 +44,13 @@ describe("IM 编辑区域尺寸", () => {
     expect(matchImProvisionalReplyTurn(replies, { chainId: "chain-1", senderCharacterId: "character-1" })).toBe("turn-running");
     expect(matchImProvisionalReplyTurn(replies, { chainId: "chain-1", senderCharacterId: "character-3" })).toBeNull();
     expect(matchImProvisionalReplyTurn(replies, { senderCharacterId: "character-1" })).toBeNull();
+  });
+
+  it("只在群设置草稿与服务端值完全一致时视为已保存", () => {
+    const settings = { title: "讨论群", replyMode: "proactive", responseThreshold: 60, maxAiMessages: 20 };
+    expect(sameImGroupSettings(settings, { ...settings })).toBe(true);
+    expect(sameImGroupSettings(settings, { ...settings, title: "未保存群名" })).toBe(false);
+    expect(sameImGroupSettings(settings, { ...settings, responseThreshold: 61 })).toBe(false);
   });
 
   it("按当前文本节点的光标位置识别 mention 查询", () => {

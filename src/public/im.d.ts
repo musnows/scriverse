@@ -15,6 +15,8 @@ export function matchImProvisionalReplyTurn(
   message: Record<string, unknown>
 ): string | null;
 
+export function sameImGroupSettings(left: Record<string, unknown>, right: Record<string, unknown>): boolean;
+
 export function findImMentionQuery(text: string, caretOffset?: number): {
   query: string;
   startOffset: number;

@@ -72,6 +72,13 @@ export function matchImProvisionalReplyTurn(replies, message) {
   return matches.find((reply) => reply.status === "running")?.turnId ?? matches[0]?.turnId ?? null;
 }
 
+export function sameImGroupSettings(left, right) {
+  return String(left?.title || "") === String(right?.title || "")
+    && String(left?.replyMode || "mention") === String(right?.replyMode || "mention")
+    && Number(left?.responseThreshold) === Number(right?.responseThreshold)
+    && Number(left?.maxAiMessages) === Number(right?.maxAiMessages);
+}
+
 export function findImMentionQuery(text, caretOffset = String(text).length) {
   const source = String(text);
   const offset = Math.max(0, Math.min(source.length, Number(caretOffset) || 0));
@@ -165,6 +172,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let eventSource = null;
   const provisionalReplies = new Map();
   const conversationDrafts = new Map();
+  const groupSettingsDrafts = new Map();
   let mentionOptions = [];
   let mentionIndex = -1;
   let mentionCaretState = null;
@@ -573,6 +581,34 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     return array(current?.participants?.characters).filter((item) => !item.leftAt && item.status === "active");
   }
 
+  function captureGroupSettingsDraft() {
+    const form = document.querySelector("#im-group-settings");
+    if (!form || !current?.id || current.kind !== "group" || current.ownerUserId !== currentUserId()) return null;
+    const draft = {
+      title: document.querySelector("#im-detail-title").value,
+      replyMode: document.querySelector("#im-detail-mode").value,
+      responseThreshold: Number(document.querySelector("#im-detail-threshold").value),
+      maxAiMessages: Number(document.querySelector("#im-detail-limit").value)
+    };
+    if (sameImGroupSettings(draft, current)) groupSettingsDrafts.delete(current.id);
+    else groupSettingsDrafts.set(current.id, draft);
+    const control = form.contains(document.activeElement) ? document.activeElement : null;
+    return control?.id ? {
+      id: control.id,
+      selectionStart: typeof control.selectionStart === "number" ? control.selectionStart : null,
+      selectionEnd: typeof control.selectionEnd === "number" ? control.selectionEnd : null
+    } : null;
+  }
+
+  function restoreGroupSettingsFocus(snapshot) {
+    if (!snapshot) return;
+    const control = document.querySelector(`#${snapshot.id}`);
+    control?.focus();
+    if (control && snapshot.selectionStart !== null && snapshot.selectionEnd !== null) {
+      control.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
+    }
+  }
+
   function syncComposer() {
     const writable = current?.active === true && current?.status === "active" && activeCharacters().length > 0;
     const canAnnounce = writable && current?.kind === "group" && current?.ownerUserId === currentUserId();
@@ -592,6 +628,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       return;
     }
     const owner = current.ownerUserId === currentUserId();
+    const groupSettings = groupSettingsDrafts.get(current.id) ?? current;
     const canManageMembers = owner && current.kind === "group" && current.active === true;
     const addButton = (kind, label) => canManageMembers
       ? `<button class="im-member-add-button" type="button" data-im-open-member-add="${kind}" aria-label="${label}" title="${label}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>`
@@ -606,11 +643,11 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const characterRows = activeCharacters().map((item) => `<li><span class="im-member-identity">${imAvatarHtml(item, "character", "im-member-avatar")}<span>${esc(item.name)} <small>${esc(item.workTitle)}</small></span></span>${editableCharacterMembers ? `<button class="im-button im-button-danger-quiet" type="button" data-im-remove-character="${esc(item.characterId)}" aria-label="移除 ${esc(item.name)}" hidden>移除</button>` : ""}</li>`).join("");
     host.innerHTML = `<section><div class="im-member-section-heading"><h3>AI 角色</h3>${memberActions("character", "添加 AI 角色", "编辑 AI 角色", editableCharacterMembers)}</div><ul class="im-member-list" data-im-member-list="character">${characterRows}</ul></section>
       <section><div class="im-member-section-heading"><h3>人类成员</h3>${memberActions("human", "添加人类成员", "编辑人类成员", editableHumanMembers)}</div><ul class="im-member-list" data-im-member-list="human">${humanRows}</ul></section>
-      ${current.kind === "group" && owner ? `<section class="im-owner-settings"><h3>群设置</h3>
-        <label>群名称<input id="im-detail-title" maxlength="80" value="${esc(current.title)}"></label>
-        <label>回复模式<select id="im-detail-mode"><option value="mention" ${current.replyMode === "mention" ? "selected" : ""}>Mention 模式</option><option value="proactive" ${current.replyMode === "proactive" ? "selected" : ""}>主动交流</option></select></label>
-        <label>主动阈值 <output id="im-detail-threshold-output">${Number(current.responseThreshold)}</output><input id="im-detail-threshold" type="range" min="0" max="100" value="${Number(current.responseThreshold)}"></label>
-        <label>链路上限<input id="im-detail-limit" type="number" min="1" max="100" value="${Number(current.maxAiMessages)}"></label>
+      ${current.kind === "group" && owner ? `<section id="im-group-settings" class="im-owner-settings"><h3>群设置</h3>
+        <label>群名称<input id="im-detail-title" maxlength="80" value="${esc(groupSettings.title)}"></label>
+        <label>回复模式<select id="im-detail-mode"><option value="mention" ${groupSettings.replyMode === "mention" ? "selected" : ""}>Mention 模式</option><option value="proactive" ${groupSettings.replyMode === "proactive" ? "selected" : ""}>主动交流</option></select></label>
+        <label>主动阈值 <output id="im-detail-threshold-output">${Number(groupSettings.responseThreshold)}</output><input id="im-detail-threshold" type="range" min="0" max="100" value="${Number(groupSettings.responseThreshold)}"></label>
+        <label>链路上限<input id="im-detail-limit" type="number" min="1" max="100" value="${Number(groupSettings.maxAiMessages)}"></label>
         <button id="im-save-group-settings" class="primary-button" type="button">保存群设置</button>
       </section>` : ""}
       ${owner && current.kind === "group" ? '<section><h3>主动判断诊断</h3><div id="im-diagnostics"><p class="im-empty">尚无诊断记录。</p></div></section>' : ""}
@@ -677,6 +714,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         responseThreshold: Number(document.querySelector("#im-detail-threshold").value),
         maxAiMessages: Number(document.querySelector("#im-detail-limit").value)
       } }));
+      if (result.ok) groupSettingsDrafts.delete(conversationId);
       if (result.ok && current?.id === conversationId) await refreshAfterMutation("群设置保存", () => openConversation(conversationId));
     });
     document.querySelectorAll("[data-im-open-member-add]").forEach((button) => button.addEventListener("click", () => openMemberAddDialog(button.dataset.imOpenMemberAdd)));
@@ -771,6 +809,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   async function openConversation(conversationId, userInitiated = false) {
+    const detailsFocus = captureGroupSettingsDraft();
     if (current?.id && current.id !== conversationId) {
       if (serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
       else conversationDrafts.delete(current.id);
@@ -805,12 +844,17 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       else conversationDrafts.delete(current.id);
     }
     current = nextConversation;
+    const savedGroupSettings = groupSettingsDrafts.get(conversationId);
+    if (savedGroupSettings && sameImGroupSettings(savedGroupSettings, nextConversation)) groupSettingsDrafts.delete(conversationId);
+    if (nextConversation.kind !== "group" || nextConversation.ownerUserId !== currentUserId()) groupSettingsDrafts.delete(conversationId);
     if (conversationChanged) composer.innerHTML = conversationDrafts.get(conversationId) ?? "";
     if (requestedConversationId === conversationId) requestedConversationId = null;
     workspace.classList.add("has-conversation");
     syncProvisionalReplies();
+    const shouldRestoreDetailsFocus = detailsFocus && document.activeElement?.id === detailsFocus.id;
     renderConversationList();
     renderConversation(conversationChanged);
+    if (shouldRestoreDetailsFocus) restoreGroupSettingsFocus(detailsFocus);
     if (current.active && current.latestSequence > 0 && shouldMarkImConversationRead(opened, document.visibilityState)) {
       if (request !== conversationRequest) return;
       const summary = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: { sequence: current.latestSequence } });
@@ -1308,6 +1352,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
 
   function close() {
     if (current?.id && serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
+    captureGroupSettingsDraft();
     opened = false;
     conversationRequest += 1;
     requestedConversationId = null;
@@ -1471,6 +1516,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       conversationRequest += 1;
       requestedConversationId = null;
       if (current?.id && serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
+      captureGroupSettingsDraft();
       current = null;
       workspace.classList.remove("has-conversation");
       document.querySelector("#im-details").classList.remove("is-open");
