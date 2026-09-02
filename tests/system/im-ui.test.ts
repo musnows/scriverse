@@ -65,14 +65,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v96");
+    expect(page.text).toContain("feature=global-im-v97");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260902-global-im-v96');
+    expect(application.text).toContain('/im.js?v=20260902-global-im-v97');
     expect(application.text).toContain("onRouteChange: schedulePresenceHeartbeat");
     expect(application.text).toContain('confirmDiscardChanges("当前章节有未保存修改，进入 IM 将放弃本地修改。是否继续？")');
     expect(application.text).toMatch(/beforeOpen: async \(\) => \{[\s\S]*?cancelChapterAutoSave\(\);[\s\S]*?state\.dirty = false;/);
@@ -201,6 +201,7 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain("button.dataset.imConversation === focusedConversationId");
     expect(im.text).toContain("button.dataset.imConversation === previousConversationId");
     expect(im.text).toContain('userInitiated && mobileConversationMedia.matches');
+    expect(im.text).toContain("await openConversation(conversation.id, true)");
     expect(im.text).toContain('document.querySelector("#im-new-conversation")).focus()');
     expect(im.text).toContain("captureGroupSettingsDraft()");
     expect(im.text).toContain("restoreGroupSettingsFocus(detailsFocus)");

@@ -1775,7 +1775,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       document.querySelector("#im-group-dialog").close();
       await refreshAfterMutation("会话创建", async () => {
         await refreshConversations();
-        await openConversation(conversation.id);
+        await openConversation(conversation.id, true);
       });
     });
     document.querySelectorAll("[data-im-dialog-close]").forEach((button) => button.addEventListener("click", () => button.closest("dialog")?.close()));
