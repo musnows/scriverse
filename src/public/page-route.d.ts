@@ -1,6 +1,7 @@
 export type RestorableModule = "drafts" | "settings" | "characters" | "races" | "organizations" | "timeline" | "outlines" | "relationships" | "reviews" | "tasks" | "ai-settings";
 export type PageRoute =
   | { view: "shelf" }
+  | { view: "im" }
   | { view: "editor"; workId: string; chapterId: string | null }
   | { view: "reader"; workId: string; chapterId: string | null }
   | { view: "module"; workId: string; module: RestorableModule }
