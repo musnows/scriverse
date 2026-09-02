@@ -500,7 +500,7 @@ export type ImAiPromptInput = {
   createdByUserId: string;
   signal?: AbortSignal;
   beforeRequest?: () => void;
-  onToolCall?: (tool: { name: string; status: string }) => void;
+  onToolCall?: (tool: { name: string; status: string; permissionModules: WorkPermissionModule[] }) => void;
 };
 
 type ImGenerationPrompt = Pick<ImAiPromptInput, "characterId" | "kind" | "participantContext" | "history" | "summary" | "characterPrompt" | "allowRoleplayMemory">;
@@ -520,7 +520,7 @@ type GenerateInput = {
   maxAttempts?: number;
   requestAttemptLimit?: number;
   beforeRequest?: () => void;
-  onToolCall?: (call: AgentToolCallResult, round: number) => void;
+  onToolCall?: (call: AgentToolCallResult, round: number, permissionModules?: WorkPermissionModule[]) => void;
   onProcessStep?: (step: AiProcessStep & { append?: boolean }) => void;
   onContextCompacted?: (event: AiContextCompactionEvent) => void;
   conversationId?: string;
@@ -8278,6 +8278,30 @@ export class AiManager {
     return AGENT_TOOL_READ_MODULES[toolId].every((module) => canReadWorkModule(permissions, module));
   }
 
+  private executedAgentToolPermissionModules(workId: string, call: AgentToolCallResult): WorkPermissionModule[] {
+    if (call.status !== "completed") return [];
+    const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
+    const readable = (modules: WorkPermissionModule[]) => modules.filter((module) => canReadWorkModule(permissions, module));
+    const categories = Array.isArray(call.arguments?.categories) ? call.arguments.categories.map((item) => String(item)) : [];
+    if (call.name === "recall_self") return [...new Set<WorkPermissionModule>([
+      "characters",
+      ...(categories.includes("relationships") ? ["relationships" as const] : []),
+      ...(categories.includes("timeline") ? ["timeline" as const] : []),
+      ...(categories.includes("chapters") ? ["prose" as const] : []),
+      ...(categories.includes("chapters") && canReadWorkModule(permissions, "timeline") ? ["timeline" as const] : [])
+    ])];
+    if (call.name === "recall_relationship") return ["characters", "relationships"];
+    if (call.name === "recall_other") return ["characters", ...readable(["relationships", "organizations", "timeline"])];
+    if (call.name === "recall_known") return ["characters", ...readable(["relationships", "organizations", "timeline", "races", "settings"])];
+    if (call.name === "recall_story") return ["characters", "prose", ...readable(["timeline"])];
+    if (call.name === "recall_roleplay_memory") return ["characters", "ai-chat"];
+    if (call.name === "image") {
+      const attachmentId = String(call.arguments?.attachmentId ?? "");
+      return attachmentId ? readable(this.store.attachmentModules(attachmentId)) : [];
+    }
+    return [];
+  }
+
   private resolveImageToolModel(workId: string): { model: ModelRow; provider: ProviderRow } {
     const workSettings = this.store.getWorkAiSettings(workId);
     const workModelId = workSettings.imageToolModelId === null || workSettings.imageToolModelId === undefined
@@ -9915,7 +9939,11 @@ export class AiManager {
       retryPolicy: { retryCount: input.retryCount, backoffRetryCount: input.retryCount },
       requestAttemptLimit: input.retryCount,
       beforeRequest: input.beforeRequest,
-      onToolCall: (call) => input.onToolCall?.({ name: call.name, status: call.status }),
+      onToolCall: (call, _round, permissionModules = []) => input.onToolCall?.({
+        name: call.name,
+        status: call.status,
+        permissionModules
+      }),
       im: {
         characterId: input.characterId,
         kind: input.kind,
@@ -10634,6 +10662,7 @@ export class AiManager {
             input.beforeRequest
           );
           const { nativeImage, ...toolExecution } = execution;
+          const permissionModules = this.executedAgentToolPermissionModules(input.workId, toolExecution);
           logger.info("ai.tool_call.completed", {
             callId,
             toolName: toolExecution.name,
@@ -10649,7 +10678,7 @@ export class AiManager {
           toolTraceRound?.toolExecutions.push(toolExecution);
           saveTrace();
           processSteps.push({ id: id("process"), type: "tool", round, toolCall: toolExecution, createdAt: toolExecution.calledAt });
-          input.onToolCall?.(toolExecution, round);
+          input.onToolCall?.(toolExecution, round, permissionModules);
           currentRoundMessages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(toolExecution.result) });
           const questionId = toolExecution.name === "ask_user_question" && toolExecution.status === "completed"
             ? String((toolExecution.result.question as Record<string, unknown> | undefined)?.id ?? "")

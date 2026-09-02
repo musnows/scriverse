@@ -64,19 +64,6 @@ function scoreFromContent(content: string): number | null {
   }
 }
 
-function imToolPermissionModules(name: string, permissions: WorkModulePermissions | null): WorkPermissionModule[] {
-  if (!permissions) return [];
-  const readable = (modules: WorkPermissionModule[]) => modules.filter((module) => canReadWorkModule(permissions, module));
-  if (name === "recall_self") return ["characters"];
-  if (name === "recall_relationship") return ["characters", "relationships"];
-  if (name === "recall_other") return ["characters", ...readable(["relationships", "organizations", "timeline"])];
-  if (name === "recall_known") return readable(["races", "organizations", "settings"]);
-  if (name === "recall_story") return ["prose"];
-  if (name === "recall_roleplay_memory") return ["characters", "ai-chat"];
-  if (name === "image") return readable(["settings", "characters", "races", "organizations", "timeline", "relationships", "outlines"]);
-  return [];
-}
-
 export class ImOrchestrator {
   private readonly listeners = new Map<string, Set<EventSubscription>>();
   private readonly queuedChainIds: string[] = [];
@@ -749,9 +736,7 @@ export class ImOrchestrator {
       },
       onToolCall: (tool) => {
         if (tool.status !== "completed") return;
-        for (const module of imToolPermissionModules(tool.name, authorization.initiatorPermissions)) {
-          requiredInitiatorModules.add(module);
-        }
+        for (const module of tool.permissionModules) requiredInitiatorModules.add(module);
       }
     } satisfies Omit<ImAiPromptInput, "modelId">;
     const invokeModel = async (modelId: string, stage: "primary" | "fallback", attemptLimit = Number(chain.retry_count)): Promise<InvocationResult> => {

@@ -739,6 +739,90 @@ describe("IM AI 调度", () => {
     )).toEqual({ content: "无关权限变化不影响这条回复。" });
   });
 
+  it("角色工具读取正文后撤销 prose 会拒绝最终回复", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markFinalStarted: (() => void) | null = null;
+    const finalStarted = new Promise<void>((resolve) => { markFinalStarted = resolve; });
+    const finalGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    let requestCount = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-tool-actual-prose-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        requestCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (requestCount === 1) {
+          return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+            id: "im-recall-self-chapters",
+            type: "function",
+            function: {
+              name: "recall_self",
+              arguments: JSON.stringify({ query: "正文线索", categories: ["chapters"] })
+            }
+          }] }, finish_reason: "tool_calls" }] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        markFinalStarted?.();
+        await finalGate;
+        return completion("这条回复使用了正文工具结果。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const workOwner = runtime.auth.register({ username: "tool_prose_work_owner", password: "secure-password-123" }).session.user;
+    const initiator = runtime.auth.register({ username: "tool_prose_initiator", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const { work, character } = runWithRequestActor(actor(workOwner), () => {
+      const work = runtime.store.createWork({ title: "工具正文撤权作品" });
+      const character = runtime.store.createCharacter(String(work.id), { name: "正文线索角色" });
+      const volume = runtime.store.createVolume(String(work.id), { title: "正文线索卷" });
+      runtime.store.createChapter(String(work.id), {
+        volumeId: String(volume.id),
+        title: "正文线索章",
+        content: "正文线索角色在这里留下了正文线索。"
+      });
+      return { work, character };
+    });
+    runtime.auth.addMember(String(work.id), initiator.userId, { role: "editor" }, workOwner.userId);
+    runtime.im.updateSettings(initiator.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(workOwner, {
+      title: "工具正文撤权群",
+      characterIds: [String(character.id)],
+      humanUserIds: [initiator.userId],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    const sent = runtime.im.sendMessage(initiator, String(group.id), {
+      content: `mention://character/${character.id} 回忆正文线索。`,
+      requestId: "im-tool-actual-prose-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await finalStarted;
+    runtime.auth.updateMemberPermissions(String(work.id), initiator.userId, {
+      permissions: {
+        prose: "none", comments: "write", todos: "write", drafts: "write", settings: "write",
+        characters: "write", races: "write", organizations: "write", timeline: "write", relationships: "write",
+        outlines: "write", reviews: "write", "ai-chat": "write", "ai-analysis": "write", "ai-settings": "write"
+      }
+    });
+    responseControl.release?.();
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+
+    expect(chain).toMatchObject({ status: "failed", error_code: "IM_CHARACTER_ACCESS_DENIED", generated_count: 0 });
+    expect(requestCount).toBe(2);
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      chainId
+    )).toEqual({ count: 0 });
+  });
+
   it("provider 队列真正 dispatch 前重新检查 IM 权限", async () => {
     const blockerControl: { release?: () => void } = {};
     let markBlockerStarted: (() => void) | null = null;
