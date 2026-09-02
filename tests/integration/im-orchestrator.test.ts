@@ -691,6 +691,7 @@ describe("IM AI 调度", () => {
         attributes: { privateSecret: "PRIVATE_SOURCE_WORK_SECRET" }
       });
       const second = runtime.store.createCharacter(String(work.id), { name: "顾遥" });
+      runtime.store.createRoleplayMemory(String(first.id), { category: "knowledge", content: "PRIVATE_ROLEPLAY_MEMORY_SECRET" });
       runtime.auth.addMember(String(work.id), groupOwner.userId, { role: "editor" }, workOwner.userId);
       return { work, first, second };
     });
@@ -729,7 +730,38 @@ describe("IM AI 调度", () => {
     )).toEqual([{ created_by_user_id: member.userId, work_id: String(seeded.work.id) }]);
     expect(runtime.auth.workRole(member, String(seeded.work.id))).toBeNull();
     expect(JSON.stringify(requestBodies)).not.toContain("PRIVATE_SOURCE_WORK_SECRET");
+    expect(JSON.stringify(requestBodies)).not.toContain("PRIVATE_ROLEPLAY_MEMORY_SECRET");
     expect(JSON.stringify(requestBodies)).not.toContain("recall_story");
     expect(JSON.stringify(requestBodies)).toContain("群主邀请角色时冻结的公开角色资料");
+    runtime.auth.addMember(String(seeded.work.id), member.userId, {
+      permissions: {
+        prose: "none",
+        drafts: "none",
+        settings: "none",
+        characters: "none",
+        races: "none",
+        organizations: "none",
+        timeline: "none",
+        relationships: "none",
+        outlines: "none",
+        comments: "none",
+        todos: "none",
+        reviews: "none",
+        "ai-chat": "read",
+        "ai-analysis": "none",
+        "ai-settings": "none"
+      }
+    }, workOwner.userId);
+    const secondRequestStart = requestBodies.length;
+    const secondSent = runtime.im.sendMessage(member, String(group.id), {
+      content: `mention://character/${firstCharacterId} 再次复核。`,
+      requestId: "im-mutual-mention-request-0002"
+    });
+    runtime.imOrchestrator.publishMessageResult(secondSent);
+    await waitForChain(runtime, String((secondSent.chain as Record<string, unknown>).id));
+    const secondRequestBodies = requestBodies.slice(secondRequestStart);
+    expect(JSON.stringify(secondRequestBodies)).not.toContain("PRIVATE_ROLEPLAY_MEMORY_SECRET");
+    expect(JSON.stringify(secondRequestBodies)).not.toContain("recall_roleplay_memory");
+    expect(JSON.stringify(secondRequestBodies)).toContain("群主邀请角色时冻结的公开角色资料");
   });
 });

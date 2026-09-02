@@ -463,7 +463,11 @@ export class ImOrchestrator {
       characterPrompt: authorization.initiatorPermissions && canReadWorkModule(authorization.initiatorPermissions, "characters")
         ? undefined
         : this.publicCharacterPrompt(membership),
-      allowRoleplayMemory: Boolean(authorization.initiatorPermissions && canReadWorkModule(authorization.initiatorPermissions, "ai-chat")),
+      allowRoleplayMemory: Boolean(
+        authorization.initiatorPermissions
+        && canReadWorkModule(authorization.initiatorPermissions, "characters")
+        && canReadWorkModule(authorization.initiatorPermissions, "ai-chat")
+      ),
       retryCount: Number(chain.retry_count),
       createdByUserId: requiredString(chain.initiator_user_id),
       signal
