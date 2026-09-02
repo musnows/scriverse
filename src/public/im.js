@@ -609,8 +609,12 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     return array(current?.participants?.humans).filter((item) => !item.leftAt);
   }
 
+  function presentCharacters() {
+    return array(current?.participants?.characters).filter((item) => !item.leftAt);
+  }
+
   function activeCharacters() {
-    return array(current?.participants?.characters).filter((item) => !item.leftAt && item.status === "active");
+    return presentCharacters().filter((item) => item.status === "active");
   }
 
   function readGroupSettingsForm() {
@@ -689,13 +693,18 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       ? `<button class="im-member-add-button" type="button" data-im-open-member-add="${kind}" aria-label="${label}" title="${label}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>`
       : "";
     const editableHumanMembers = canManageMembers && activeHumans().some((item) => item.userId !== currentUserId());
-    const editableCharacterMembers = canManageMembers && activeCharacters().length > 1;
+    const activeCharacterCount = activeCharacters().length;
+    const editableCharacterMembers = canManageMembers && presentCharacters().some((item) => item.status !== "active" || activeCharacterCount > 1);
     const editButton = (kind, label, enabled) => enabled
       ? `<button class="im-member-edit-button" type="button" data-im-toggle-member-edit="${kind}" aria-label="${label}" aria-pressed="false" title="${label}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="m16.5 3.5 1.4-1.4a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z"></path></svg></button>`
       : "";
     const memberActions = (kind, addLabel, editLabel, editable) => `<span class="im-member-section-actions">${editButton(kind, editLabel, editable)}${addButton(kind, addLabel)}</span>`;
     const humanRows = activeHumans().map((item) => `<li><span class="im-member-identity">${imAvatarHtml(item, "user", "im-member-avatar")}<span>${esc(item.displayName)} <small>@${esc(item.username)}</small>${item.role === "owner" ? " · 群主" : ""}</span></span>${canManageMembers && item.userId !== currentUserId() ? `<button class="im-button im-button-danger-quiet" type="button" data-im-remove-human="${esc(item.userId)}" aria-label="移除 ${esc(item.displayName)}" hidden>移除</button>` : ""}</li>`).join("");
-    const characterRows = activeCharacters().map((item) => `<li><span class="im-member-identity">${imAvatarHtml(item, "character", "im-member-avatar")}<span>${esc(item.name)} <small>${esc(item.workTitle)}</small></span></span>${editableCharacterMembers ? `<button class="im-button im-button-danger-quiet" type="button" data-im-remove-character="${esc(item.characterId)}" aria-label="移除 ${esc(item.name)}" hidden>移除</button>` : ""}</li>`).join("");
+    const characterRows = presentCharacters().map((item) => {
+      const removable = canManageMembers && (item.status !== "active" || activeCharacterCount > 1);
+      const unavailable = item.status === "active" ? "" : '<b class="im-member-unavailable">不可用</b>';
+      return `<li><span class="im-member-identity">${imAvatarHtml(item, "character", "im-member-avatar")}<span>${esc(item.name)} ${unavailable}<small>${esc(item.workTitle)}</small></span></span>${removable ? `<button class="im-button im-button-danger-quiet" type="button" data-im-remove-character="${esc(item.characterId)}" aria-label="移除 ${esc(item.name)}" hidden>移除</button>` : ""}</li>`;
+    }).join("");
     host.innerHTML = `<section><div class="im-member-section-heading"><h3>AI 角色</h3>${memberActions("character", "添加 AI 角色", "编辑 AI 角色", editableCharacterMembers)}</div><ul class="im-member-list" data-im-member-list="character">${characterRows}</ul></section>
       <section><div class="im-member-section-heading"><h3>人类成员</h3>${memberActions("human", "添加人类成员", "编辑人类成员", editableHumanMembers)}</div><ul class="im-member-list" data-im-member-list="human">${humanRows}</ul></section>
       ${current.kind === "group" && owner ? `<section id="im-group-settings" class="im-owner-settings"><h3>群设置</h3>
@@ -1018,7 +1027,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     if (append && memberAddCharacterNextCursor === null) return;
     const query = search.value.trim();
     const cursor = append ? memberAddCharacterNextCursor : 0;
-    const activeCharacterIds = new Set(activeCharacters().map((item) => item.characterId));
+    const activeCharacterIds = new Set(presentCharacters().map((item) => item.characterId));
     const page = await api(`/api/im/characters?workId=${encodeURIComponent(workId)}&q=${encodeURIComponent(query)}&limit=50&cursor=${encodeURIComponent(cursor)}`);
     const candidates = array(page.items ?? page)
       .filter((item) => !activeCharacterIds.has(item.id));

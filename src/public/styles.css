@@ -4819,6 +4819,7 @@ body.is-im-composer-resizing { cursor: ns-resize; user-select: none; }
 .im-member-list { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
 .im-member-list li { display: flex; align-items: center; justify-content: space-between; gap: 7px; padding: 7px 8px; border-radius: 6px; background: var(--paper-deep); font-size: 10px; }
 .im-member-list small { display: block; color: var(--muted); font-size: 8px; }
+.im-member-unavailable { display: inline-flex; margin-left: 4px; padding: 1px 5px; border: 1px solid color-mix(in srgb, var(--warning) 55%, var(--line)); border-radius: 999px; color: var(--warning); font-size: 8px; line-height: 1.4; }
 .im-member-identity { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .im-member-identity > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .im-member-avatar { width: 30px; height: 30px; font-size: 10px; }
