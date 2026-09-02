@@ -440,19 +440,19 @@ describe("IM AI 调度", () => {
   });
 
   it("优雅关闭把运行链保留为可重试的中断状态", async () => {
-    const responseControl: { release?: () => void } = {};
     let markStarted: (() => void) | null = null;
     const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
-    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
     runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "im-graceful-interruption-secret-with-enough-length",
       serveUi: false,
       fetchImpl: async (_url, init) => {
         markStarted?.();
-        await responseGate;
-        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-        return completion("服务关闭后的迟到结果。", body.stream === true);
+        return await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) reject(signal.reason);
+          else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
       },
       aiRetrySleep: async () => undefined
     });
@@ -475,7 +475,6 @@ describe("IM AI 调度", () => {
     runtime.imOrchestrator.publishMessageResult(sent);
     await requestStarted;
     runtime.imOrchestrator.dispose();
-    responseControl.release?.();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     const chainId = String((sent.chain as Record<string, unknown>).id);

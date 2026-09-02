@@ -10286,7 +10286,12 @@ export class AiManager {
                   delivery: "sse" as const
                 };
               } catch (error) {
-                if (streamResponse && input.signal?.aborted) throw interactiveStreamRequestCancelledError();
+                if (streamResponse && input.signal?.aborted) {
+                  if (input.signal.reason instanceof AppError && input.signal.reason.code === "IM_CHAIN_RUNTIME_RESTARTED") {
+                    throw input.signal.reason;
+                  }
+                  throw interactiveStreamRequestCancelledError();
+                }
                 if (streamWatchdog?.failure) throw streamWatchdog.failure;
                 if (streamResponse && !responseReceived) {
                   throw new AppError(502, "AI_STREAM_NETWORK_ERROR", "AI 上游流连接失败，尚未收到首个事件");
@@ -10794,6 +10799,7 @@ export class AiManager {
         || error.code === "IM_CHARACTER_UNAVAILABLE"
         || error.code === "IM_OWNER_DISABLED"
         || error.code === "IM_INITIATOR_DISABLED"
+        || error.code === "IM_CHAIN_RUNTIME_RESTARTED"
         || isInteractiveStreamError(error)
       )) {
         throw new AppError(error.status, error.code, error.message, {
