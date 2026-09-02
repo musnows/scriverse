@@ -10,6 +10,12 @@ export function shouldMarkImConversationRead(opened: boolean, visibilityState: s
 
 export function shouldRefreshImConversationListForEvent(type: string): boolean;
 
+export function findImMentionQuery(text: string, caretOffset?: number): {
+  query: string;
+  startOffset: number;
+  endOffset: number;
+} | null;
+
 export function createImWorkspace(options: Record<string, unknown>): {
   start(): Promise<void>;
   open(): Promise<void>;

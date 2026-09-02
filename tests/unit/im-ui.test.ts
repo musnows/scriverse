@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
+import { findImMentionQuery, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -33,5 +33,11 @@ describe("IM 编辑区域尺寸", () => {
     expect(shouldRefreshImConversationListForEvent("delta")).toBe(false);
     expect(shouldRefreshImConversationListForEvent("turn")).toBe(false);
     expect(shouldRefreshImConversationListForEvent("reset")).toBe(false);
+  });
+
+  it("按当前文本节点的光标位置识别 mention 查询", () => {
+    expect(findImMentionQuery("开头 @林舟 后续文字", 6)).toEqual({ query: "林舟", startOffset: 3, endOffset: 6 });
+    expect(findImMentionQuery("开头 @林舟 后续文字", 11)).toBeNull();
+    expect(findImMentionQuery("@", 1)).toEqual({ query: "", startOffset: 0, endOffset: 1 });
   });
 });

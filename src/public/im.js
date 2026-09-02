@@ -62,6 +62,13 @@ export function shouldRefreshImConversationListForEvent(type) {
   return ["conversation", "message", "chain"].includes(String(type));
 }
 
+export function findImMentionQuery(text, caretOffset = String(text).length) {
+  const source = String(text);
+  const offset = Math.max(0, Math.min(source.length, Number(caretOffset) || 0));
+  const match = source.slice(0, offset).match(/@([^@\s]*)$/u);
+  return match ? { query: match[1], startOffset: offset - match[0].length, endOffset: offset } : null;
+}
+
 export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf }) {
   const workspace = document.querySelector("#im-view");
   const listHost = document.querySelector("#im-conversation-list");
@@ -813,15 +820,18 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   function updateMentionMenu() {
-    const text = composer.innerText ?? composer.textContent ?? "";
-    const match = text.match(/@([^@\s]*)$/u);
-    if (!match) {
+    const caret = composerCaret();
+    const match = caret ? findImMentionQuery(caret.anchor.nodeValue ?? "", caret.offset) : null;
+    if (!caret || !match) {
       closeMentionMenu();
       return;
     }
-    const query = match[1].toLocaleLowerCase("zh-CN");
-    const caret = composerCaret();
-    if (caret) mentionCaretState = { anchor: caret.anchor, offset: caret.offset };
+    const query = match.query.toLocaleLowerCase("zh-CN");
+    mentionCaretState = {
+      anchor: caret.anchor,
+      startOffset: match.startOffset,
+      endOffset: match.endOffset
+    };
     mentionOptions = [
       ...activeCharacters().map((item) => ({ ...item, kind: "character", id: item.characterId, label: item.name, detail: item.workTitle })),
       ...activeHumans().map((item) => ({ ...item, kind: "user", id: item.userId, label: item.displayName, detail: `@${item.username}` }))
@@ -844,26 +854,22 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
 
   function selectMention(index) {
     const item = mentionOptions[index];
-    if (!item) return;
-    const existingChips = [...composer.querySelectorAll("[data-im-mention-uri]")];
-    const lastChip = existingChips.at(-1) ?? null;
-    const tailNodes = lastChip
-      ? [...composer.childNodes].slice([...composer.childNodes].indexOf(lastChip) + 1)
-      : [...composer.childNodes];
-    const tailText = tailNodes.map((node) => node.textContent ?? "").join("");
-    const match = tailText.match(/@([^@\s]*)$/u);
-    if (!match) return;
-    const prefix = tailText.slice(0, tailText.length - match[0].length);
-    for (const node of tailNodes) node.remove();
-    if (prefix) composer.append(document.createTextNode(prefix));
+    const caret = mentionCaretState;
+    if (!item || !caret || caret.anchor.nodeType !== Node.TEXT_NODE || !composer.contains(caret.anchor)) return;
+    const text = caret.anchor.nodeValue ?? "";
+    if (caret.startOffset < 0 || caret.endOffset > text.length || !findImMentionQuery(text, caret.endOffset)) return;
     const chip = document.createElement("span");
     chip.className = "im-composer-mention";
     chip.contentEditable = "false";
     chip.dataset.imMentionUri = `mention://${item.kind}/${item.id}`;
     chip.textContent = `@${item.label}`;
     const tail = document.createTextNode(" ");
-    composer.append(chip, tail);
     const range = document.createRange();
+    range.setStart(caret.anchor, caret.startOffset);
+    range.setEnd(caret.anchor, caret.endOffset);
+    range.deleteContents();
+    range.insertNode(chip);
+    chip.after(tail);
     range.setStart(tail, 1);
     range.collapse(true);
     const selection = document.getSelection();
