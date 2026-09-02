@@ -290,6 +290,25 @@ describe("全局 IM API", () => {
       .send({ title: "API 重复群设置", replyMode: "mention", responseThreshold: 60, maxAiMessages: 20 })
       .expect(200);
     expect(runtime.database.get("SELECT status FROM im_chains WHERE id = ?", noOpChainId)).toEqual({ status: "queued" });
+    const noOpMembership = runtime.database.get(
+      "SELECT id FROM im_character_memberships WHERE conversation_id = ? AND character_id = ? AND left_at IS NULL",
+      String(noOpGroup.id),
+      character.body.data.id
+    );
+    runtime.database.run(
+      `INSERT INTO im_chain_turns (id, chain_id, character_membership_id, kind, status, created_at)
+       VALUES ('im-api-stopped-pending-turn', ?, ?, 'reply', 'pending', ?)`,
+      noOpChainId,
+      String(noOpMembership?.id),
+      "2026-09-02T00:00:00.000Z"
+    );
+    await owner.agent.post(`/api/im/conversations/${noOpGroup.id}/stop`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({})
+      .expect(204);
+    expect(runtime.database.get("SELECT status FROM im_chains WHERE id = ?", noOpChainId)).toEqual({ status: "cancelled" });
+    expect(runtime.database.get("SELECT status FROM im_chain_turns WHERE id = 'im-api-stopped-pending-turn'"))
+      .toEqual({ status: "cancelled" });
 
     await member.agent.post(`/api/im/conversations/${groupId}/announcements`)
       .set("X-CSRF-Token", member.csrfToken)

@@ -2204,6 +2204,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     parse(z.object({}).strict(), request.body ?? {});
     const current = im.getConversation(request.params.conversationId, user.userId);
     if (current.active !== true) throw new AppError(403, "IM_MEMBERSHIP_INACTIVE", "你已经退出这个 IM 会话");
+    im.stopChain(user.userId, request.params.conversationId);
     imOrchestrator.cancelConversation(request.params.conversationId, "stopped_by_user");
     noContent(response);
   });
