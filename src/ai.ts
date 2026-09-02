@@ -10167,7 +10167,7 @@ export class AiManager {
         for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
           totalAttemptCount += 1;
           let retryable = true;
-          let retryLimit = legacyMaximumAttempts - 1;
+          let retryLimit = requestAttemptLimit === null ? legacyMaximumAttempts - 1 : requestAttemptLimit - 1;
           let retryDelayMs = attempt * 1_200;
           let attemptEmitted = false;
           const attemptStartedAt = process.hrtime.bigint();

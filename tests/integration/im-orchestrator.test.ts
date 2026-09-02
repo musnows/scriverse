@@ -145,6 +145,66 @@ describe("IM AI 调度", () => {
     expect(String(work.id)).toBeTruthy();
   });
 
+  it("非 HTTP 可重试错误也遵守每个模型的失败次数", async () => {
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-invalid-json-retry-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (body.model === "primary-model") {
+          primaryCalls += 1;
+          return new Response("not-json", { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        fallbackCalls += 1;
+        return completion("fallback 成功。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "invalid_json_retry_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "无效 JSON 重试来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "重试角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 5
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "测试重试次数。",
+      requestId: "im-invalid-json-retry-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "completed", generated_count: 1 });
+    expect(primaryCalls).toBe(5);
+    expect(fallbackCalls).toBe(1);
+  });
+
+  it("无效重试链不会执行取消当前链的回调", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-invalid-retry-chain-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "invalid_retry_chain_owner", password: "secure-password-123" }).session.user;
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "无效重试来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "重试目标" });
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    let cancellationCalled = false;
+
+    expect(() => runtime.im.retryChain(owner, String(direct.id), "missing-chain", () => { cancellationCalled = true; })).toThrowError("IM 交流链不存在");
+    expect(cancellationCalled).toBe(false);
+  });
+
   it("SSE 重连时重放正在生成气泡的完整流式快照", async () => {
     const encoder = new TextEncoder();
     let releaseStream: (() => void) | null = null;

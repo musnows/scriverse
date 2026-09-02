@@ -2102,8 +2102,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/im/conversations/:conversationId/chains/:chainId/retry", (request, response) => {
     const user = requireImUser(request);
     parse(z.object({}).strict(), request.body ?? {});
-    imOrchestrator.cancelConversation(request.params.conversationId, "manual_retry");
-    const chain = im.retryChain(user, request.params.conversationId, request.params.chainId);
+    const chain = im.retryChain(user, request.params.conversationId, request.params.chainId, () => {
+      imOrchestrator.cancelConversation(request.params.conversationId, "manual_retry");
+    });
     if (String(chain.status) === "queued") imOrchestrator.enqueue(String(chain.id));
     imOrchestrator.publishConversation(request.params.conversationId);
     data(response, chain, 201);

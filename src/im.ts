@@ -1260,7 +1260,7 @@ export class ImService {
     this.db.transaction(() => this.cancelActiveChain(conversationId, "stopped_by_user"));
   }
 
-  retryChain(user: AuthUser, conversationId: string, sourceChainId: string): Record<string, unknown> {
+  retryChain(user: AuthUser, conversationId: string, sourceChainId: string, beforeCreate?: () => void): Record<string, unknown> {
     const conversation = this.assertActiveMembership(conversationId, user.userId);
     const source = this.db.get("SELECT * FROM im_chains WHERE id = ? AND conversation_id = ?", sourceChainId, conversationId);
     if (!source) throw notFound("IM 交流链");
@@ -1284,6 +1284,7 @@ export class ImService {
     const mode = requiredString(conversation.kind) === "direct"
       ? "direct"
       : requiredString(conversation.reply_mode) === "proactive" ? "proactive" : "mention";
+    beforeCreate?.();
     return this.db.transaction(() => {
       this.cancelActiveChain(conversationId, "manual_retry");
       const configured = Boolean(settings.primaryModelId && settings.fallbackModelId);
