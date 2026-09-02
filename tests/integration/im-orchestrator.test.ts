@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
 import { runWithRequestActor, type RequestActor } from "../../src/request-context.js";
@@ -40,6 +41,50 @@ function seedModels(runtime: Runtime): { primaryModelId: string; fallbackModelId
   const primary = runtime.ai.createModel(String(provider.id), { displayName: "Primary", modelId: "primary-model" });
   const fallback = runtime.ai.createModel(String(provider.id), { displayName: "Fallback", modelId: "fallback-model" });
   return { primaryModelId: String(primary.id), fallbackModelId: String(fallback.id) };
+}
+
+function seedImImageAttachment(
+  runtime: Runtime,
+  workId: string,
+  settingId: string,
+  attachmentId: string,
+  content: Buffer,
+  modules: Array<"settings" | "characters">
+): { storageKey: string; sha256: string } {
+  const sha256 = createHash("sha256").update(content).digest("hex");
+  const storageKey = `${sha256.slice(0, 2)}/${sha256}.png`;
+  runtime.database.run(
+    `INSERT INTO attachments (
+       id, work_id, original_name, original_mime_type, stored_mime_type, original_byte_length, stored_byte_length,
+       original_sha256, stored_sha256, storage_key, width, height, page_count, animated, created_at, created_by_user_id
+     ) VALUES (?, ?, ?, 'image/png', 'image/png', ?, ?, ?, ?, ?, 1, 1, 1, 0, ?, NULL)`,
+    attachmentId,
+    workId,
+    `${attachmentId}.png`,
+    content.byteLength,
+    content.byteLength,
+    sha256,
+    sha256,
+    storageKey,
+    "2026-09-03T00:00:00.000Z"
+  );
+  runtime.database.run(
+    `INSERT INTO attachment_references (attachment_id, work_id, entity_type, entity_id, created_at)
+     VALUES (?, ?, 'setting', ?, ?)`,
+    attachmentId,
+    workId,
+    settingId,
+    "2026-09-03T00:00:00.000Z"
+  );
+  for (const module of modules) {
+    runtime.database.run(
+      "INSERT INTO attachment_access_modules (attachment_id, module, created_at) VALUES (?, ?, ?)",
+      attachmentId,
+      module,
+      "2026-09-03T00:00:00.000Z"
+    );
+  }
+  return { storageKey, sha256 };
 }
 
 describe("IM AI 调度", () => {
@@ -266,6 +311,194 @@ describe("IM AI 调度", () => {
       primaryAttemptCount: 0,
       fallbackAttemptCount: 1
     });
+  });
+
+  it("IM 原生图片外发在存储读取后按附件模块 OR 权限复核", async () => {
+    const readControls = new Map<string, {
+      content: Buffer;
+      started: Promise<void>;
+      markStarted: () => void;
+      gate: Promise<void>;
+      release: () => void;
+    }>();
+    const createReadControl = (storageKey: string, content: Buffer): void => {
+      let markStarted: (() => void) | null = null;
+      let releaseRead: (() => void) | null = null;
+      const started = new Promise<void>((resolve) => { markStarted = resolve; });
+      const gate = new Promise<void>((resolve) => { releaseRead = resolve; });
+      readControls.set(storageKey, {
+        content,
+        started,
+        markStarted: () => markStarted?.(),
+        gate,
+        release: () => releaseRead?.()
+      });
+    };
+    let requestCount = 0;
+    let firstAttachmentId = "";
+    let secondAttachmentId = "";
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-native-image-permission-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        requestCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: unknown }>;
+        const serialized = JSON.stringify(messages);
+        if (requestCount === 1 || requestCount === 3) {
+          const attachmentId = requestCount === 1 ? firstAttachmentId : secondAttachmentId;
+          return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+            id: `im-image-${requestCount}`,
+            type: "function",
+            function: { name: "image", arguments: JSON.stringify({ attachmentId }) }
+          }] }, finish_reason: "tool_calls" }] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        expect(serialized).toContain("data:image/png;base64,");
+        return completion("图片仍可通过角色模块合法读取。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const workOwner = runtime.auth.register({ username: "native_image_work_owner", password: "secure-password-123" }).session.user;
+    const initiator = runtime.auth.register({ username: "native_image_initiator", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    runtime.database.run("UPDATE models SET multimodal_enabled = 1 WHERE id = ?", models.primaryModelId);
+    const seeded = runWithRequestActor(actor(workOwner), () => {
+      const work = runtime.store.createWork({ title: "原生图片权限作品" });
+      const character = runtime.store.createCharacter(String(work.id), { name: "原生图片权限角色" });
+      const setting = runtime.store.createSetting(String(work.id), {
+        title: "图片权限设定",
+        category: "图片",
+        content: "包含两张权限测试图片。"
+      });
+      return { work, character, setting };
+    });
+    firstAttachmentId = "im-native-image-or";
+    secondAttachmentId = "im-native-image-denied";
+    const firstImage = seedImImageAttachment(runtime, String(seeded.work.id), String(seeded.setting.id), firstAttachmentId, Buffer.from("native-image-or"), ["settings", "characters"]);
+    const secondImage = seedImImageAttachment(runtime, String(seeded.work.id), String(seeded.setting.id), secondAttachmentId, Buffer.from("native-image-denied"), ["settings"]);
+    createReadControl(firstImage.storageKey, Buffer.from("native-image-or"));
+    createReadControl(secondImage.storageKey, Buffer.from("native-image-denied"));
+    const previousRead = runtime.attachmentStorage.read.bind(runtime.attachmentStorage);
+    runtime.attachmentStorage.read = async (key) => {
+      const control = readControls.get(key);
+      if (!control) return previousRead(key);
+      control.markStarted();
+      await control.gate;
+      return control.content;
+    };
+    runtime.auth.addMember(String(seeded.work.id), initiator.userId, { role: "editor" }, workOwner.userId);
+    runtime.im.updateSettings(initiator.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(workOwner, {
+      title: "原生图片权限群",
+      characterIds: [String(seeded.character.id)],
+      humanUserIds: [initiator.userId],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    const first = runtime.im.sendMessage(initiator, String(group.id), {
+      content: `mention://character/${seeded.character.id} 读取双模块图片。`,
+      requestId: "im-native-image-permission-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(first);
+    await readControls.get(firstImage.storageKey)?.started;
+    runtime.auth.updateMemberPermissions(String(seeded.work.id), initiator.userId, {
+      permissions: {
+        prose: "write", comments: "write", todos: "write", drafts: "write", settings: "none",
+        characters: "write", races: "write", organizations: "write", timeline: "write", relationships: "write",
+        outlines: "write", reviews: "write", "ai-chat": "write", "ai-analysis": "write", "ai-settings": "write"
+      }
+    });
+    readControls.get(firstImage.storageKey)?.release();
+    expect(await waitForChain(runtime, String((first.chain as Record<string, unknown>).id)))
+      .toMatchObject({ status: "limit", generated_count: 1 });
+    runtime.auth.updateMemberPermissions(String(seeded.work.id), initiator.userId, { role: "editor" });
+    const second = runtime.im.sendMessage(initiator, String(group.id), {
+      content: `mention://character/${seeded.character.id} 读取仅设置模块图片。`,
+      requestId: "im-native-image-permission-0002"
+    });
+    runtime.imOrchestrator.publishMessageResult(second);
+    await readControls.get(secondImage.storageKey)?.started;
+    runtime.auth.updateMemberPermissions(String(seeded.work.id), initiator.userId, {
+      permissions: {
+        prose: "write", comments: "write", todos: "write", drafts: "write", settings: "none",
+        characters: "write", races: "write", organizations: "write", timeline: "write", relationships: "write",
+        outlines: "write", reviews: "write", "ai-chat": "write", "ai-analysis": "write", "ai-settings": "write"
+      }
+    });
+    readControls.get(secondImage.storageKey)?.release();
+    expect(await waitForChain(runtime, String((second.chain as Record<string, unknown>).id)))
+      .toMatchObject({ status: "failed", error_code: "IM_CHARACTER_ACCESS_DENIED", generated_count: 0 });
+    expect(requestCount).toBe(3);
+  });
+
+  it("IM 独立图片模型路径完成嵌套读图再回复", async () => {
+    let attachmentId = "";
+    let requestCount = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-nested-image-model-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        requestCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const serialized = JSON.stringify(body.messages ?? []);
+        if (requestCount === 1) {
+          return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+            id: "im-nested-image-call",
+            type: "function",
+            function: { name: "image", arguments: JSON.stringify({ attachmentId }) }
+          }] }, finish_reason: "tool_calls" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (requestCount === 2) {
+          expect(serialized).toContain("data:image/png;base64,");
+          return completion("嵌套图片模型看到一座灯塔。", false);
+        }
+        expect(serialized).toContain("嵌套图片模型看到一座灯塔");
+        return completion("我看到图片里有一座灯塔。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "nested_image_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    runtime.database.run("UPDATE models SET multimodal_enabled = 0 WHERE id = ?", models.primaryModelId);
+    runtime.database.run("UPDATE models SET multimodal_enabled = 1 WHERE id = ?", models.fallbackModelId);
+    runtime.store.updatePlatformAiSettings({ imageToolModelId: models.fallbackModelId });
+    const seeded = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "嵌套图片模型作品" });
+      const character = runtime.store.createCharacter(String(work.id), { name: "嵌套图片模型角色" });
+      const setting = runtime.store.createSetting(String(work.id), { title: "灯塔图片", category: "图片", content: "灯塔图片设定。" });
+      return { work, character, setting };
+    });
+    attachmentId = "im-nested-image";
+    const image = Buffer.from("nested-image-content");
+    const attachment = seedImImageAttachment(runtime, String(seeded.work.id), String(seeded.setting.id), attachmentId, image, ["settings"]);
+    runtime.attachmentStorage.read = async (key) => {
+      expect(key).toBe(attachment.storageKey);
+      return image;
+    };
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(seeded.character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "读取灯塔图片。",
+      requestId: "im-nested-image-model-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "completed", generated_count: 1 });
+    expect(requestCount).toBe(3);
   });
 
   it("工具轮次共享一次角色调用的模型失败预算", async () => {
