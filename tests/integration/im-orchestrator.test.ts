@@ -709,6 +709,37 @@ describe("IM AI 调度", () => {
     }).message).toMatchObject({ content: "恢复后应重新使用既有单聊。" });
   });
 
+  it("不触发 AI 的 mention 消息不保存悬空 chain id", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-message-without-chain-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "no_chain_owner", password: "secure-password-123" }).session.user;
+    const member = runtime.auth.register({ username: "no_chain_member", password: "secure-password-123" }).session.user;
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "无链消息作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "无链消息角色" });
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "无链消息群",
+      characterIds: [String(character.id)],
+      humanUserIds: [member.userId],
+      replyMode: "mention"
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://user/${member.userId} 只通知人类成员。`,
+      requestId: "im-message-without-chain-0001"
+    });
+
+    expect(sent.chain).toBeNull();
+    expect(sent.message).toMatchObject({ chainId: null });
+    expect(runtime.database.get(
+      "SELECT chain_id FROM im_messages WHERE id = ?",
+      String((sent.message as Record<string, unknown>).id)
+    )).toEqual({ chain_id: null });
+  });
+
   it("失效角色墓碑不占群容量且不能绕过至少一个可用角色约束", () => {
     runtime = createRuntime({
       databasePath: ":memory:",

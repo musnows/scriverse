@@ -1857,8 +1857,16 @@ export class ImService {
     const mentions = this.validatedMentions(conversationId, input.content);
     beforeCreate?.();
     const settings = this.getSettings(user.userId);
+    const mode = requiredString(conversation.kind) === "direct"
+      ? "direct"
+      : requiredString(conversation.reply_mode) === "proactive" ? "proactive" : "mention";
+    const deliveryIds = mode === "direct" || mode === "proactive"
+      ? activeCharacters.map((row) => requiredString(row.id))
+      : mentions.flatMap((mention) => mention.kind === "character" && mention.membershipId ? [mention.membershipId] : []);
+    const shouldCreateChain = activeCharacters.length > 0
+      && (mode === "direct" || mode === "proactive" || deliveryIds.length > 0);
     const messageId = id("imMessage");
-    const chainId = id("imChain");
+    const chainId = shouldCreateChain ? id("imChain") : null;
     const timestamp = now();
     return this.db.transaction(() => {
       this.cancelActiveChain(conversationId, "human_message_received");
@@ -1889,12 +1897,6 @@ export class ImService {
         mention.id,
         JSON.stringify(mention.snapshot)
       ));
-      const mode = requiredString(conversation.kind) === "direct"
-        ? "direct"
-        : requiredString(conversation.reply_mode) === "proactive" ? "proactive" : "mention";
-      const deliveryIds = mode === "direct" || mode === "proactive"
-        ? activeCharacters.map((row) => requiredString(row.id))
-        : mentions.flatMap((mention) => mention.kind === "character" && mention.membershipId ? [mention.membershipId] : []);
       for (const membershipId of new Set(deliveryIds)) {
         this.db.run(
           "INSERT INTO im_message_deliveries (message_id, character_membership_id, delivered_at) VALUES (?, ?, ?)",
@@ -1903,8 +1905,6 @@ export class ImService {
           timestamp
         );
       }
-      const shouldCreateChain = activeCharacters.length > 0
-        && (mode === "direct" || mode === "proactive" || deliveryIds.length > 0);
       let chain: Record<string, unknown> | null = null;
       if (shouldCreateChain) {
         const configured = Boolean(settings.primaryModelId && settings.fallbackModelId);
@@ -1932,7 +1932,7 @@ export class ImService {
         chain = this.db.get("SELECT * FROM im_chains WHERE id = ?", chainId) ?? null;
       }
       this.db.run("UPDATE im_conversations SET updated_at = ? WHERE id = ?", timestamp, conversationId);
-      this.store.audit(null, "im.message-sent", "im-message", messageId, { conversationId, sequence, chainId: shouldCreateChain ? chainId : null });
+      this.store.audit(null, "im.message-sent", "im-message", messageId, { conversationId, sequence, chainId });
       const message = this.db.get("SELECT * FROM im_messages WHERE id = ?", messageId);
       if (!message) throw notFound("IM 消息");
       return { message: this.mapMessage(message), chain, duplicate: false };
