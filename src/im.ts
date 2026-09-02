@@ -2021,18 +2021,19 @@ export class ImService {
     });
   }
 
-  markRead(userId: string, conversationId: string, sequence: number): Record<string, unknown> {
+  markRead(userId: string, conversationId: string, sequence: number): { summary: Record<string, unknown>; changed: boolean } {
     const conversation = this.assertActiveMembership(conversationId, userId);
     const latest = this.nextSequence(conversationId) - 1;
     const safeSequence = Math.min(latest, Math.max(0, sequence));
-    this.db.run(
+    const result = this.db.run(
       `UPDATE im_human_memberships SET last_read_sequence = MAX(last_read_sequence, ?)
-       WHERE conversation_id = ? AND user_id = ? AND left_at IS NULL`,
+       WHERE conversation_id = ? AND user_id = ? AND left_at IS NULL AND last_read_sequence < ?`,
       safeSequence,
       conversationId,
-      userId
+      userId,
+      safeSequence
     );
-    return this.mapConversation(conversation, userId);
+    return { summary: this.mapConversation(conversation, userId), changed: result.changes > 0 };
   }
 
   stopChain(userId: string, conversationId: string): void {

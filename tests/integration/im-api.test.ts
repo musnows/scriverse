@@ -376,8 +376,12 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", member.csrfToken)
       .send({ sequence: memberView.body.data.latestSequence })
       .expect(200);
+    await member.agent.post(`/api/im/conversations/${groupId}/read`)
+      .set("X-CSRF-Token", member.csrfToken)
+      .send({ sequence: memberView.body.data.latestSequence })
+      .expect(200);
     unsubscribeRead();
-    expect(readEvents).toContain(groupId);
+    expect(readEvents.filter((conversationId) => conversationId === groupId)).toHaveLength(1);
     expect(memberView.body.data.messages[1].content).toContain("mention://character/");
     expect(memberView.body.data.participants.characters[0].avatarUrl).toBe(
       `/api/im/conversations/${groupId}/characters/${character.body.data.id}/avatar?v=${characterAvatarSha256}`
