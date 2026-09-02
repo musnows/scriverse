@@ -918,8 +918,11 @@ describe("IM AI 调度", () => {
       content: "请判断是否回答。",
       requestId: "im-invalid-judge-score-0001"
     });
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => events.push({ type: event.type, payload: event.payload }));
     runtime.imOrchestrator.publishMessageResult(sent);
     const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+    unsubscribe();
 
     expect(chain).toMatchObject({ status: "quiet", generated_count: 1 });
     expect(primaryJudgeCalls).toBe(3);
@@ -930,6 +933,7 @@ describe("IM AI 调度", () => {
     );
     expect(judgeTurn).toMatchObject({ model_stage: "fallback", attempt_count: 4 });
     expect(JSON.parse(String(judgeTurn?.ai_call_ids_json))).toHaveLength(4);
+    expect(events.filter((event) => event.type === "reset")).toEqual([]);
   });
 
   it("主动模式中的 mention 角色优先回复且完全跳过自身发言判断", async () => {

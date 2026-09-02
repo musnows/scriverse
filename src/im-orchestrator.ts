@@ -629,15 +629,17 @@ export class ImOrchestrator {
       if (!this.shouldFailover(error) || signal.aborted) throw error;
       const fallbackModelId = optionalString(chain.fallback_model_id);
       if (!fallbackModelId) throw error;
-      if (streamTurnId) this.resetStreamingReply(streamTurnId);
-      this.publish(requiredString(chain.conversation_id), "reset", {
-        chainId: requiredString(chain.id),
-        ...(streamTurnId ? { turnId: streamTurnId } : {}),
-        reason: "fallback",
-        modelStage: "fallback",
-        kind,
-        characterId: membership.character_id
-      });
+      if (streamTurnId) {
+        this.resetStreamingReply(streamTurnId);
+        this.publish(requiredString(chain.conversation_id), "reset", {
+          chainId: requiredString(chain.id),
+          turnId: streamTurnId,
+          reason: "fallback",
+          modelStage: "fallback",
+          kind,
+          characterId: membership.character_id
+        });
+      }
       this.db.run("UPDATE im_chains SET model_stage = 'fallback', updated_at = ? WHERE id = ?", now(), requiredString(chain.id));
       const primaryDetails = errorDetails(error);
       const primaryCallIds = errorCallIds(error);
