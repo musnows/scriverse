@@ -47,7 +47,7 @@ import {
   renderWritePlanDetailMarkup,
   isInteractiveToolPending,
   aiFormatDateTime
-} from "/ai-interactive.js?v=20260829-question-tool-result-v5";
+} from "/ai-interactive.js?v=20260902-question-tool-summary-v6";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
@@ -2940,7 +2940,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   recall_story: "回忆故事",
   recall_roleplay_memory: "回忆当前扮演线",
   remember_roleplay: "整理扮演记忆",
-  calculate_time: "计算日期"
+  calculate_time: "计算日期",
+  ask_user_question: "向作者提问"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -2958,7 +2959,8 @@ const AI_TOOL_DESCRIPTIONS = {
   recall_story: "查询自己姓名或别名出现过的正文段落，避免全知回忆。",
   recall_roleplay_memory: "查询当前所扮演角色在作品内唯一共享的非正史记忆库，不读取其他角色或作品正史。",
   remember_roleplay: "暂存本轮值得保持的扮演经历；最终角色回复成功保存后才提交。",
-  calculate_time: "计算两个 YYYY-MM-DD 日期之间的天数差。"
+  calculate_time: "计算两个 YYYY-MM-DD 日期之间的天数差。",
+  ask_user_question: "向作者提出单选问题；作者提交的选择会作为工具结果返回给 Agent。"
 };
 
 const aiFeedScrollFrames = new WeakMap();
@@ -3122,7 +3124,7 @@ function openAiToolCallDetail(toolCall) {
 
 function createAiToolCallButton(toolCall) {
   const name = String(toolCall?.name ?? "unknown");
-  if (name === "propose_write_plan" || name === "ask_user_question") {
+  if (name === "propose_write_plan") {
     const card = createInteractiveToolCard(toolCall, AI_TOOL_CARD_ACTIONS);
     if (card) return card;
   }
@@ -3404,51 +3406,19 @@ async function openAiUserQuestionDialog(questionId) {
   }
 }
 
-function beginAiQuestionContinuationUi(conversationId, questionId) {
+function beginAiQuestionContinuationUi(conversationId) {
   const tab = conversationId ? aiChatTabManager.findByConversation(conversationId) : null;
   if (!tab) return null;
-  const card = questionId
-    ? tab.feed.querySelector(`.ai-question-card[data-question-id="${CSS.escape(String(questionId))}"]`)
-    : null;
-  const note = card?.querySelector(".ai-interactive-note") ?? null;
-  const status = card?.querySelector(".ai-status-chip") ?? null;
-  const previousNote = note?.textContent ?? "";
-  const previousStatus = status?.textContent ?? "";
-  const controlStates = card
-    ? [...card.querySelectorAll("button")].map((button) => ({ button, disabled: button.disabled }))
-    : [];
-  if (card) {
-    card.classList.add("is-resuming");
-    card.setAttribute("aria-busy", "true");
-    controlStates.forEach(({ button }) => { button.disabled = true; });
-    if (status) status.textContent = "处理中";
-    if (note) note.textContent = "回答已作为工具结果提交，正在根据你的回答继续处理…";
-  }
   aiQuestionContinuationTabIds.add(tab.id);
   setAiChatTabStatus(tab, "streaming");
   if (isActiveAiChatTab(tab)) syncAiRequestControls();
   scrollAiFeedToBottom(tab.feed);
-  return {
-    tab,
-    card,
-    note,
-    status,
-    previousNote,
-    previousStatus,
-    controlStates
-  };
+  return { tab };
 }
 
 function finishAiQuestionContinuationUi(continuationUi, failed = false) {
   if (!continuationUi) return;
   aiQuestionContinuationTabIds.delete(continuationUi.tab.id);
-  if (continuationUi.card?.isConnected) {
-    continuationUi.card.classList.remove("is-resuming");
-    continuationUi.card.removeAttribute("aria-busy");
-    continuationUi.controlStates.forEach(({ button, disabled }) => { button.disabled = disabled; });
-    if (continuationUi.note) continuationUi.note.textContent = continuationUi.previousNote;
-    if (continuationUi.status) continuationUi.status.textContent = continuationUi.previousStatus;
-  }
   if (aiChatTabManager.get(continuationUi.tab.id)) setAiChatTabStatus(continuationUi.tab, failed ? "error" : "ready");
   if (isActiveAiChatTab(continuationUi.tab)) syncAiRequestControls();
 }
@@ -3481,7 +3451,7 @@ async function respondAiUserQuestion(questionId, payload) {
     const conversationId = typeof knownQuestion?.conversationId === "string" ? knownQuestion.conversationId : null;
     if (questionDialog.open) questionDialog.close();
     if (approvalCenterDialog.open) approvalCenterDialog.close();
-    continuationUi = beginAiQuestionContinuationUi(conversationId, questionId);
+    continuationUi = beginAiQuestionContinuationUi(conversationId);
     let question;
     if (payload.action === "reject") {
       question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/reject`), { method: "POST" });

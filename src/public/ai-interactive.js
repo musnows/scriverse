@@ -153,17 +153,15 @@ function cachedAiQuestionView(questionId) {
 
 /**
  * 判断交互式工具调用当前是否会渲染出可操作的待处理卡片；
- * 历史消息据此自动展开"思考与执行过程"，避免待确认/待回答入口被折叠隐藏。
+ * 历史消息据此自动展开"思考与执行过程"，避免待确认入口被折叠隐藏。
+ * ask_user_question 在消息流中沿用普通工具摘要，回答入口只由独立确认弹窗承载。
  */
 export function isInteractiveToolPending(toolCall) {
   const model = parseInteractiveToolPayload(toolCall);
   if (!model?.ok) return false;
-  if (model.kind === "plan") {
-    const detail = model.plan?.id ? cachedAiWritePlanDetail(model.plan.id) : null;
-    return (detail?.status ?? model.plan?.status ?? "") === "pending";
-  }
-  const question = model.question?.id ? cachedAiQuestionView(model.question.id) : null;
-  return ((question ?? model.question)?.status ?? "") === "pending";
+  if (model.kind !== "plan") return false;
+  const detail = model.plan?.id ? cachedAiWritePlanDetail(model.plan.id) : null;
+  return (detail?.status ?? model.plan?.status ?? "") === "pending";
 }
 
 // ---------------------------------------------------------------------------
