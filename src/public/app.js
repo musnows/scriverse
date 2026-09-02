@@ -1,7 +1,7 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1";
 import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260830-adjacent-blockquotes-v1";
-import { createImWorkspace } from "/im.js?v=20260902-global-im-v51";
+import { createImWorkspace } from "/im.js?v=20260902-global-im-v52";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { applyAiSkillCommand, findAiSkillCommand, listAiSkillOptions } from "/ai-skill-menu.js?v=20260830-ai-skill-slash-menu-v1";
 import {
@@ -21256,7 +21256,8 @@ window.addEventListener("resize", () => {
 const imWorkspace = createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf });
 
 initializeAiChatTabs();
-initializePage().then(() => imWorkspace.start()).catch((error) => {
+imWorkspace.start();
+initializePage().catch((error) => {
   restoringPageRoute = false;
   if (state.user) {
     document.body.classList.remove("auth-pending");
@@ -21264,4 +21265,6 @@ initializePage().then(() => imWorkspace.start()).catch((error) => {
   }
   showShelf();
   toast(`系统初始化失败：${error.message}`, "error");
+}).finally(() => {
+  if (state.user) void imWorkspace.activate().catch((error) => toast(`IM 初始化失败：${error.message}`, "error"));
 });

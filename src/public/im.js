@@ -149,6 +149,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let opened = false;
   let composerHeight = 68;
   let conversationsWidth = 300;
+  let bound = false;
   let preferredConversationsWidth = 300;
 
   const conversationsWidthStorageKey = "scriverse.im.conversations-width.v1";
@@ -1073,6 +1074,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   async function open() {
+    start();
     opened = true;
     hideMainViews();
     document.querySelector("#app").classList.add("shelf-mode", "im-mode");
@@ -1082,6 +1084,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.title = "IM · 叙界";
     window.history.replaceState(null, "", "#view=im");
     await Promise.all([loadCatalogs(), refreshConversations()]);
+    if (!eventSource) connectEvents();
     if (current) await openConversation(current.id);
     else renderConversation();
   }
@@ -1328,11 +1331,17 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelectorAll("[data-im-dialog-close]").forEach((button) => button.addEventListener("click", () => button.closest("dialog")?.close()));
   }
 
-  async function start() {
+  function start() {
+    if (bound) return;
+    bound = true;
     bind();
-    await refreshConversations();
-    connectEvents();
   }
 
-  return { start, open, close, refreshUnread: refreshConversations, get opened() { return opened; } };
+  async function activate() {
+    start();
+    await refreshConversations();
+    if (!eventSource) connectEvents();
+  }
+
+  return { start, activate, open, close, refreshUnread: refreshConversations, get opened() { return opened; } };
 }
