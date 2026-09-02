@@ -447,6 +447,23 @@ export class ImOrchestrator {
     return `[${Number(row.sequence)}] ${String(label)}：${requiredString(row.content)}`;
   }
 
+  private assertGenerationStillCurrent(
+    chain: Record<string, unknown>,
+    sourceMessage: Record<string, unknown>,
+    signal: AbortSignal
+  ): void {
+    if (signal.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new AppError(499, "IM_CHAIN_CANCELLED", "IM 交流链已取消");
+    }
+    const currentChain = this.chainRow(requiredString(chain.id));
+    const currentConversation = this.conversationRow(requiredString(chain.conversation_id));
+    if (requiredString(currentChain.status) !== "running"
+      || requiredString(currentConversation.status) !== "active"
+      || Number(currentConversation.context_epoch) !== Number(sourceMessage.context_epoch)) {
+      throw new AppError(499, "IM_CHAIN_CANCELLED", "IM 交流链已取消或上下文已经变化");
+    }
+  }
+
   private async maybeCompact(
     chain: Record<string, unknown>,
     membership: Record<string, unknown>,
@@ -519,6 +536,7 @@ export class ImOrchestrator {
           undefined,
           { history: compactLines.join("\n\n"), summary: requiredString(context?.summary) }
         );
+        this.assertGenerationStillCurrent(chain, sourceMessage, signal);
         this.db.run(
           `INSERT INTO im_character_contexts (
              character_membership_id, context_epoch, summary, summarized_through_sequence, updated_at
@@ -950,7 +968,8 @@ export class ImOrchestrator {
   private finishTurn(turnId: string, result: InvocationResult, score?: number, selected = false): void {
     this.db.run(
       `UPDATE im_chain_turns SET status = 'completed', score = ?, selected = ?, model_id = ?, model_stage = ?,
-       attempt_count = ?, duration_ms = ?, ai_call_ids_json = ?, completed_at = ? WHERE id = ?`,
+       attempt_count = ?, duration_ms = ?, ai_call_ids_json = ?, completed_at = ?
+       WHERE id = ? AND status IN ('pending', 'running')`,
       score ?? null,
       selected ? 1 : 0,
       requiredString(result.model.id),
@@ -974,7 +993,7 @@ export class ImOrchestrator {
     ])];
     this.db.run(
       `UPDATE im_chain_turns SET status = ?, failure = ?, model_id = ?, model_stage = ?, attempt_count = ?,
-       ai_call_ids_json = ?, completed_at = ? WHERE id = ?`,
+       ai_call_ids_json = ?, completed_at = ? WHERE id = ? AND status IN ('pending', 'running')`,
       status,
       `${failure.code}: ${failure.message}`.slice(0, 2000),
       optionalString(details.modelRecordId),
@@ -1009,6 +1028,7 @@ export class ImOrchestrator {
       );
       const score = scoreFromContent(result.content);
       if (score === null) throw new AppError(502, "IM_JUDGE_INVALID_SCORE", "AI 没有返回有效的发言意愿分数");
+      this.assertGenerationStillCurrent(chain, sourceMessage, signal);
       this.finishTurn(turnId, result, score, false);
       this.publishToUser(requiredString(chain.authorization_user_id), {
         id: id("imEvent"),

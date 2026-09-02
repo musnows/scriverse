@@ -447,6 +447,126 @@ describe("IM AI 调度", () => {
     )).toEqual({ count: 0 });
   });
 
+  it("停止后不接受忽略 abort 的迟到主动判断结果", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-late-judge-result-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async () => {
+        markStarted?.();
+        await responseGate;
+        return completion('{"score":100}', false);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "late_judge_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "迟到主动判断作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "迟到判断角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "迟到主动判断群",
+      characterIds: [String(character.id)],
+      replyMode: "proactive",
+      responseThreshold: 0,
+      maxAiMessages: 1
+    });
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => events.push({ type: event.type, payload: event.payload }));
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "开始判断后立即停止。",
+      requestId: "im-late-judge-result-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    runtime.im.stopChain(owner.userId, String(group.id));
+    runtime.imOrchestrator.cancelConversation(String(group.id), "stopped_by_user");
+    responseControl.release?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    unsubscribe();
+
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    expect(runtime.database.get("SELECT status FROM im_chains WHERE id = ?", chainId)).toEqual({ status: "cancelled" });
+    expect(runtime.database.get(
+      "SELECT status, score FROM im_chain_turns WHERE chain_id = ? AND kind = 'judge'",
+      chainId
+    )).toEqual({ status: "cancelled", score: null });
+    expect(events.some((event) => event.type === "turn" && event.payload.kind === "judge" && event.payload.score === 100)).toBe(false);
+  });
+
+  it("停止后不写入忽略 abort 的迟到上下文压缩结果", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-late-compaction-result-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async () => {
+        markStarted?.();
+        await responseGate;
+        return completion("不应写入的迟到摘要。", false);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "late_compaction_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "迟到压缩作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "迟到压缩角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "迟到压缩群",
+      characterIds: [String(character.id)],
+      replyMode: "proactive",
+      responseThreshold: 0,
+      maxAiMessages: 1
+    });
+    for (let index = 1; index <= 61; index += 1) {
+      runtime.im.publishAnnouncement(owner, String(group.id), {
+        content: `用于触发压缩的公告 ${index}`,
+        requestId: `im-late-compaction-announcement-${index}`
+      });
+    }
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "开始压缩后立即停止。",
+      requestId: "im-late-compaction-result-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    runtime.im.stopChain(owner.userId, String(group.id));
+    runtime.imOrchestrator.cancelConversation(String(group.id), "stopped_by_user");
+    responseControl.release?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    expect(runtime.database.get("SELECT status FROM im_chains WHERE id = ?", chainId)).toEqual({ status: "cancelled" });
+    expect(runtime.database.get(
+      "SELECT status FROM im_chain_turns WHERE chain_id = ? AND kind = 'compact'",
+      chainId
+    )).toEqual({ status: "cancelled" });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_character_contexts WHERE character_membership_id IN (SELECT id FROM im_character_memberships WHERE conversation_id = ?)",
+      String(group.id)
+    )).toEqual({ count: 0 });
+  });
+
   it("优雅关闭把运行链保留为可重试的中断状态", async () => {
     let markStarted: (() => void) | null = null;
     const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
