@@ -17,6 +17,8 @@ export function matchImProvisionalReplyTurn(
 
 export function sameImGroupSettings(left: Record<string, unknown>, right: Record<string, unknown>): boolean;
 
+export function imDiagnosticStatusLabel(turn: Record<string, unknown>): string;
+
 export function findImMentionQuery(text: string, caretOffset?: number): {
   query: string;
   startOffset: number;

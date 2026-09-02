@@ -79,6 +79,19 @@ export function sameImGroupSettings(left, right) {
     && Number(left?.maxAiMessages) === Number(right?.maxAiMessages);
 }
 
+export function imDiagnosticStatusLabel(turn) {
+  if (turn?.selected === true) return "已选择";
+  const labels = {
+    pending: "等待判断",
+    running: "判断中",
+    completed: "未选择 · 低于阈值",
+    failed: "判断失败",
+    cancelled: "已取消",
+    skipped: "已跳过"
+  };
+  return labels[String(turn?.status || "")] ?? "状态未知";
+}
+
 export function findImMentionQuery(text, caretOffset = String(text).length) {
   const source = String(text);
   const offset = Math.max(0, Math.min(source.length, Number(caretOffset) || 0));
@@ -692,7 +705,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const host = document.querySelector("#im-diagnostics");
       if (!host) return;
       host.innerHTML = array(result.turns).filter((turn) => turn.kind === "judge").length
-        ? array(result.turns).filter((turn) => turn.kind === "judge").map((turn) => `<div class="im-diagnostic-row"><span>${esc(turn.characterName)}</span><strong>${turn.score ?? "失败"}</strong><small>${turn.selected ? "已选择" : turn.status}</small></div>`).join("")
+        ? array(result.turns).filter((turn) => turn.kind === "judge").map((turn) => `<div class="im-diagnostic-row"><span>${esc(turn.characterName)}</span><strong>${turn.score ?? "失败"}</strong><small>${imDiagnosticStatusLabel(turn)}</small></div>`).join("")
         : '<p class="im-empty">尚无主动判断记录。</p>';
     } catch (error) {
       if (request !== diagnosticsRequest || current?.id !== conversationId) return;

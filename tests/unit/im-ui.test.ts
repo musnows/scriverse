@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, matchImProvisionalReplyTurn, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, sameImGroupSettings, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
+import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, imDiagnosticStatusLabel, matchImProvisionalReplyTurn, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, sameImGroupSettings, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -51,6 +51,14 @@ describe("IM 编辑区域尺寸", () => {
     expect(sameImGroupSettings(settings, { ...settings })).toBe(true);
     expect(sameImGroupSettings(settings, { ...settings, title: "未保存群名" })).toBe(false);
     expect(sameImGroupSettings(settings, { ...settings, responseThreshold: 61 })).toBe(false);
+  });
+
+  it("把主动判断内部状态映射成中文结果", () => {
+    expect(imDiagnosticStatusLabel({ selected: true, status: "completed" })).toBe("已选择");
+    expect(imDiagnosticStatusLabel({ selected: false, status: "completed" })).toBe("未选择 · 低于阈值");
+    expect(imDiagnosticStatusLabel({ selected: false, status: "failed" })).toBe("判断失败");
+    expect(imDiagnosticStatusLabel({ selected: false, status: "cancelled" })).toBe("已取消");
+    expect(imDiagnosticStatusLabel({ selected: false, status: "running" })).toBe("判断中");
   });
 
   it("按当前文本节点的光标位置识别 mention 查询", () => {
