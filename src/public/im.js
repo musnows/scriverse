@@ -1628,6 +1628,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     });
     document.querySelector("#im-details-close").addEventListener("click", () => setDetailsDrawerOpen(false, "toggle"));
     document.querySelector("#im-mobile-back").addEventListener("click", () => {
+      const previousConversationId = current?.id ?? null;
       conversationRequest += 1;
       requestedConversationId = null;
       if (current?.id) {
@@ -1641,6 +1642,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       provisionalReplies.clear();
       renderConversationList();
       renderConversation();
+      const previousConversationButton = [...listHost.querySelectorAll("[data-im-conversation]")]
+        .find((button) => button.dataset.imConversation === previousConversationId);
+      (previousConversationButton ?? document.querySelector("#im-new-conversation")).focus();
     });
     composer.addEventListener("input", updateMentionMenu);
     composer.addEventListener("paste", (event) => {
