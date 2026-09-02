@@ -678,6 +678,67 @@ describe("IM AI 调度", () => {
     expect(fallbackCalls).toBe(0);
   });
 
+  it("撤销未被 IM 使用的模块权限不丢弃角色回复", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-unrelated-permission-change-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        markStarted?.();
+        await responseGate;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return completion("无关权限变化不影响这条回复。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const workOwner = runtime.auth.register({ username: "unrelated_access_work_owner", password: "secure-password-123" }).session.user;
+    const initiator = runtime.auth.register({ username: "unrelated_access_initiator", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const { work, character } = runWithRequestActor(actor(workOwner), () => {
+      const work = runtime.store.createWork({ title: "无关权限变化作品" });
+      return { work, character: runtime.store.createCharacter(String(work.id), { name: "无关权限变化角色" }) };
+    });
+    runtime.auth.addMember(String(work.id), initiator.userId, { role: "editor" }, workOwner.userId);
+    runtime.im.updateSettings(initiator.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(workOwner, {
+      title: "无关权限变化群",
+      characterIds: [String(character.id)],
+      humanUserIds: [initiator.userId],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    const sent = runtime.im.sendMessage(initiator, String(group.id), {
+      content: `mention://character/${character.id} 请回复。`,
+      requestId: "im-unrelated-permission-change-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    runtime.auth.updateMemberPermissions(String(work.id), initiator.userId, {
+      permissions: {
+        prose: "write", comments: "write", todos: "write", drafts: "write", settings: "write",
+        characters: "write", races: "write", organizations: "write", timeline: "write", relationships: "write",
+        outlines: "write", reviews: "none", "ai-chat": "write", "ai-analysis": "write", "ai-settings": "write"
+      }
+    });
+    responseControl.release?.();
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+
+    expect(chain).toMatchObject({ status: "limit", generated_count: 1 });
+    expect(runtime.database.get(
+      "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      chainId
+    )).toEqual({ content: "无关权限变化不影响这条回复。" });
+  });
+
   it("发起人停用后不再执行模型提出的角色工具", async () => {
     const responseControl: { release?: () => void } = {};
     let markStarted: (() => void) | null = null;

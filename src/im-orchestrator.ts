@@ -5,7 +5,7 @@ import type { AuthUser, UserAuthService } from "./user-auth.js";
 import { runWithRequestActor } from "./request-context.js";
 import { id, json, now } from "./utils.js";
 import { IM_MAX_MENTIONS_PER_MESSAGE, ImService, parseImMentions } from "./im.js";
-import { canReadWorkModule, workPermissionModules, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
+import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
 
 export type ImRealtimeEvent = {
   id: string;
@@ -62,6 +62,19 @@ function scoreFromContent(content: string): number | null {
   } catch {
     return null;
   }
+}
+
+function imToolPermissionModules(name: string, permissions: WorkModulePermissions | null): WorkPermissionModule[] {
+  if (!permissions) return [];
+  const readable = (modules: WorkPermissionModule[]) => modules.filter((module) => canReadWorkModule(permissions, module));
+  if (name === "recall_self") return ["characters"];
+  if (name === "recall_relationship") return ["characters", "relationships"];
+  if (name === "recall_other") return ["characters", ...readable(["relationships", "organizations", "timeline"])];
+  if (name === "recall_known") return readable(["races", "organizations", "settings"]);
+  if (name === "recall_story") return ["prose"];
+  if (name === "recall_roleplay_memory") return ["characters", "ai-chat"];
+  if (name === "image") return readable(["settings", "characters", "races", "organizations", "timeline", "relationships", "outlines"]);
+  return [];
 }
 
 export class ImOrchestrator {
@@ -702,9 +715,18 @@ export class ImOrchestrator {
     const participantContext = this.participantContext(requiredString(conversation.id), snapshot);
     const maximumHistoryTokens = this.maximumHistoryTokens(chain, participantContext);
     const context = this.characterHistory(membership, conversation, Number(sourceMessage.sequence), maximumHistoryTokens);
-    const requiredInitiatorModules = kind === "compact" || !authorization.initiatorPermissions
-      ? []
-      : workPermissionModules.filter((module) => canReadWorkModule(authorization.initiatorPermissions!, module));
+    const fullCharacterPrompt = kind !== "compact" && Boolean(
+      authorization.initiatorPermissions && canReadWorkModule(authorization.initiatorPermissions, "characters")
+    );
+    const allowRoleplayMemory = kind !== "compact" && Boolean(
+      authorization.initiatorPermissions
+      && canReadWorkModule(authorization.initiatorPermissions, "characters")
+      && canReadWorkModule(authorization.initiatorPermissions, "ai-chat")
+    );
+    const requiredInitiatorModules = new Set<WorkPermissionModule>([
+      ...(fullCharacterPrompt ? ["characters" as const] : []),
+      ...(allowRoleplayMemory ? ["ai-chat" as const] : [])
+    ]);
     const common = {
       workId: authorization.workId,
       characterId: authorization.characterId,
@@ -715,21 +737,21 @@ export class ImOrchestrator {
       summary: historyOverride?.summary ?? context.summary,
       characterPrompt: kind === "compact"
         ? this.publicCharacterPrompt(membership)
-        : authorization.initiatorPermissions && canReadWorkModule(authorization.initiatorPermissions, "characters")
-          ? undefined
-          : this.publicCharacterPrompt(membership),
-      allowRoleplayMemory: kind !== "compact" && Boolean(
-          authorization.initiatorPermissions
-          && canReadWorkModule(authorization.initiatorPermissions, "characters")
-          && canReadWorkModule(authorization.initiatorPermissions, "ai-chat")
-        ),
+        : fullCharacterPrompt ? undefined : this.publicCharacterPrompt(membership),
+      allowRoleplayMemory,
       retryCount: Number(chain.retry_count),
       createdByUserId: requiredString(chain.initiator_user_id),
       signal,
       beforeRequest: () => {
         const currentMembership = this.characterMembership(requiredString(membership.id));
         const currentAuthorization = this.assertCharacterAuthorization(chain, currentMembership);
-        this.assertRequiredInitiatorPermissions(currentAuthorization.initiatorPermissions, requiredInitiatorModules);
+        this.assertRequiredInitiatorPermissions(currentAuthorization.initiatorPermissions, [...requiredInitiatorModules]);
+      },
+      onToolCall: (tool) => {
+        if (tool.status !== "completed") return;
+        for (const module of imToolPermissionModules(tool.name, authorization.initiatorPermissions)) {
+          requiredInitiatorModules.add(module);
+        }
       }
     } satisfies Omit<ImAiPromptInput, "modelId">;
     const invokeModel = async (modelId: string, stage: "primary" | "fallback", attemptLimit = Number(chain.retry_count)): Promise<InvocationResult> => {
@@ -776,7 +798,7 @@ export class ImOrchestrator {
         model: result.model,
         stage,
         durationMs: Math.round(Number(process.hrtime.bigint() - started) / 1_000_000),
-        requiredInitiatorModules
+        requiredInitiatorModules: [...requiredInitiatorModules]
       };
     };
     const errorDetails = (error: unknown): Record<string, unknown> => error instanceof AppError

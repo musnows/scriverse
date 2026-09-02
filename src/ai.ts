@@ -500,6 +500,7 @@ export type ImAiPromptInput = {
   createdByUserId: string;
   signal?: AbortSignal;
   beforeRequest?: () => void;
+  onToolCall?: (tool: { name: string; status: string }) => void;
 };
 
 type ImGenerationPrompt = Pick<ImAiPromptInput, "characterId" | "kind" | "participantContext" | "history" | "summary" | "characterPrompt" | "allowRoleplayMemory">;
@@ -9911,6 +9912,7 @@ export class AiManager {
       retryPolicy: { retryCount: input.retryCount, backoffRetryCount: input.retryCount },
       requestAttemptLimit: input.retryCount,
       beforeRequest: input.beforeRequest,
+      onToolCall: (call) => input.onToolCall?.({ name: call.name, status: call.status }),
       im: {
         characterId: input.characterId,
         kind: input.kind,
