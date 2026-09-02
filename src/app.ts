@@ -1783,11 +1783,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, { authenticated: true, user: request.authUser, apiKeyPrefix: request.authApiKey?.prefix ?? null });
   });
   app.delete("/api/auth/session", (request, response) => {
+    const userId = request.authUser?.userId;
     if (request.authDesktopSession) auth.revokeDesktop(request.authDesktopSession.id);
     if (request.authSession) {
       auth.revoke(request.authSession.id);
       clearSessionCookie(response, request.secure);
     }
+    if (userId) imOrchestrator.disconnectUser(userId);
     noContent(response);
   });
   app.post("/api/auth/onboarding/complete", (request, response) => {
@@ -1843,6 +1845,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (!request.authUser || !activeSession) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     const input = parse(passwordChangeSchema, request.body);
     auth.changePassword(request.authUser.userId, activeSession.id, input.currentPassword, input.newPassword, activeSession.kind);
+    imOrchestrator.disconnectUser(request.authUser.userId);
     store.audit(null, "user.password-changed", "user", request.authUser.userId);
     noContent(response);
   });
@@ -1894,6 +1897,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
     const updated = auth.updateUser(request.authUser, request.params.userId, parse(userUpdateSchema, request.body));
+    if (updated.status !== "active") imOrchestrator.disconnectUser(updated.userId);
     store.audit(null, "user.updated", "user", updated.userId, { role: updated.role, status: updated.status });
     data(response, updated);
   });
@@ -1994,7 +1998,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     unsubscribe = imOrchestrator.subscribe(user.userId, (event) => {
       if (!started) pendingEvents.push(event);
       else writeEvent(event);
-    });
+    }, close);
     response.status(200);
     response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     response.setHeader("Cache-Control", "no-cache, no-transform");

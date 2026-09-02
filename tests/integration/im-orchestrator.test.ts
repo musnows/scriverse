@@ -66,6 +66,11 @@ describe("IM AI 调度", () => {
       characterIds: [String(character.id)],
       humanUserIds: [member.userId]
     });
+    const secondGroup = runtime.im.createGroup(owner, {
+      title: "实时连接保留群",
+      characterIds: [String(character.id)],
+      humanUserIds: [member.userId]
+    });
     let healthyEvents = 0;
     const unsubscribes = [
       runtime.imOrchestrator.subscribe(owner.userId, () => { throw new Error("closed listener"); }),
@@ -84,11 +89,22 @@ describe("IM AI 调度", () => {
     const afterRelease = runtime.imOrchestrator.subscribe(owner.userId, () => undefined);
     afterRelease();
 
-    let disabledMemberEvents = 0;
-    runtime.imOrchestrator.subscribe(member.userId, () => { disabledMemberEvents += 1; });
-    runtime.auth.updateUser(owner, member.userId, { status: "disabled" });
+    let memberEvents = 0;
+    let memberDisconnected = false;
+    runtime.imOrchestrator.subscribe(member.userId, () => { memberEvents += 1; }, () => { memberDisconnected = true; });
     runtime.imOrchestrator.publishConversation(String(group.id));
-    expect(disabledMemberEvents).toBe(0);
+    runtime.imOrchestrator.publishConversation(String(secondGroup.id));
+    memberEvents = 0;
+    runtime.im.removeHuman(owner, String(group.id), member.userId);
+    runtime.imOrchestrator.cancelConversation(String(group.id), "human_member_removed");
+    runtime.imOrchestrator.publishConversation(String(secondGroup.id));
+    expect(memberEvents).toBe(1);
+
+    runtime.auth.updateUser(owner, member.userId, { status: "disabled" });
+    runtime.imOrchestrator.disconnectUser(member.userId);
+    runtime.imOrchestrator.publishConversation(String(secondGroup.id));
+    expect(memberEvents).toBe(1);
+    expect(memberDisconnected).toBe(true);
   });
 
   it("主模型重试耗尽后单次调用切换 fallback 并持久化完整回复", async () => {

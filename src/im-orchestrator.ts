@@ -16,6 +16,7 @@ export type ImRealtimeEvent = {
 };
 
 type EventListener = (event: ImRealtimeEvent) => void;
+type EventSubscription = { listener: EventListener; disconnect: () => void };
 
 type InvocationResult = {
   callId: string;
@@ -60,7 +61,7 @@ function scoreFromContent(content: string): number | null {
 }
 
 export class ImOrchestrator {
-  private readonly listeners = new Map<string, Set<EventListener>>();
+  private readonly listeners = new Map<string, Set<EventSubscription>>();
   private readonly queuedChainIds: string[] = [];
   private readonly queuedChainSet = new Set<string>();
   private readonly controllers = new Map<string, AbortController>();
@@ -80,7 +81,7 @@ export class ImOrchestrator {
     return this.store.db;
   }
 
-  subscribe(userId: string, listener: EventListener): () => void {
+  subscribe(userId: string, listener: EventListener, disconnect: () => void = () => undefined): () => void {
     let listeners = this.listeners.get(userId);
     if (!listeners) {
       listeners = new Set();
@@ -89,7 +90,8 @@ export class ImOrchestrator {
     if (listeners.size >= IM_EVENT_CONNECTION_LIMIT_PER_USER) {
       throw new AppError(429, "IM_EVENT_CONNECTION_LIMIT", "IM 实时连接过多，请关闭其他页面后重试");
     }
-    listeners.add(listener);
+    const subscription = { listener, disconnect };
+    listeners.add(subscription);
     for (const event of this.streamingReplies.values()) {
       const membership = this.db.get(
         `SELECT 1 AS present FROM im_human_memberships
@@ -101,16 +103,29 @@ export class ImOrchestrator {
         try {
           listener({ ...event, id: id("imEvent"), createdAt: now() });
         } catch (error) {
-          listeners.delete(listener);
+          listeners.delete(subscription);
           if (listeners.size === 0) this.listeners.delete(userId);
           throw error;
         }
       }
     }
     return () => {
-      listeners?.delete(listener);
+      listeners?.delete(subscription);
       if (listeners?.size === 0) this.listeners.delete(userId);
     };
+  }
+
+  disconnectUser(userId: string): void {
+    const subscriptions = this.listeners.get(userId);
+    if (!subscriptions) return;
+    this.listeners.delete(userId);
+    for (const subscription of subscriptions) {
+      try {
+        subscription.disconnect();
+      } catch {
+        // 连接关闭失败不应阻塞其他订阅释放。
+      }
+    }
   }
 
   streamingReplySnapshots(conversationId: string): Record<string, unknown>[] {
@@ -145,24 +160,11 @@ export class ImOrchestrator {
   private publishToUser(userId: string, event: ImRealtimeEvent): void {
     const listeners = this.listeners.get(userId);
     if (!listeners) return;
-    const membershipCondition = event.payload.membershipChanged === true
-      ? "EXISTS (SELECT 1 FROM im_human_memberships membership WHERE membership.conversation_id = ? AND membership.user_id = user.id)"
-      : "EXISTS (SELECT 1 FROM im_human_memberships membership WHERE membership.conversation_id = ? AND membership.user_id = user.id AND membership.left_at IS NULL)";
-    const authorized = this.db.get(
-      `SELECT 1 AS present FROM users user
-       WHERE user.id = ? AND user.status = 'active' AND ${membershipCondition}`,
-      userId,
-      event.conversationId
-    );
-    if (!authorized) {
-      this.listeners.delete(userId);
-      return;
-    }
-    for (const listener of [...listeners]) {
+    for (const subscription of [...listeners]) {
       try {
-        listener(event);
+        subscription.listener(event);
       } catch {
-        listeners.delete(listener);
+        listeners.delete(subscription);
       }
     }
     if (listeners.size === 0) this.listeners.delete(userId);
@@ -210,6 +212,7 @@ export class ImOrchestrator {
   }
 
   cancelConversation(conversationId: string, reason = "human_message_received"): void {
+    this.recipientCache.delete(conversationId);
     for (const [chainId, controller] of this.controllers) {
       const chain = this.db.get("SELECT conversation_id FROM im_chains WHERE id = ?", chainId);
       if (requiredString(chain?.conversation_id) === conversationId) {
