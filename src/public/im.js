@@ -1594,6 +1594,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       document.execCommand("insertText", false, event.clipboardData?.getData("text/plain") ?? "");
     });
     composer.addEventListener("keydown", (event) => {
+      if (event.isComposing) return;
       if (!mentionMenu.classList.contains("hidden")) {
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
