@@ -1684,8 +1684,8 @@ export class ImService {
     if (activeCharacters.length === 0) {
       throw new AppError(409, "IM_CHARACTER_UNAVAILABLE", "当前 IM 会话没有可用的 AI 角色，无法发送消息");
     }
-    beforeCreate?.();
     const mentions = this.validatedMentions(conversationId, input.content);
+    beforeCreate?.();
     const settings = this.getSettings(user.userId);
     const messageId = id("imMessage");
     const chainId = id("imChain");

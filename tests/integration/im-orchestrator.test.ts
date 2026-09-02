@@ -412,6 +412,13 @@ describe("IM AI 调度", () => {
       requestId: "im-idempotent-retry-source-0001"
     });
     const idempotentSourceChainId = String((idempotentSource.chain as Record<string, unknown>).id);
+    let invalidMentionCancellationCalled = false;
+    expect(() => runtime.im.sendMessage(owner, String(idempotentDirect.id), {
+      content: Array.from({ length: 51 }, () => `mention://character/${idempotentCharacter.id}`).join(" "),
+      requestId: "im-invalid-mention-limit-0001"
+    }, () => { invalidMentionCancellationCalled = true; })).toThrowError("单条 IM 消息最多允许 50 个 mention");
+    expect(invalidMentionCancellationCalled).toBe(false);
+    expect(runtime.database.get("SELECT status FROM im_chains WHERE id = ?", idempotentSourceChainId)).toEqual({ status: "waiting_config" });
     let retryCancellationCount = 0;
     const firstRetry = runtime.im.retryChain(owner, String(idempotentDirect.id), idempotentSourceChainId, () => { retryCancellationCount += 1; });
     const duplicateRetry = runtime.im.retryChain(owner, String(idempotentDirect.id), idempotentSourceChainId, () => { retryCancellationCount += 1; });
