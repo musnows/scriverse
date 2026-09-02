@@ -1440,7 +1440,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   function close() {
-    if (current?.id && serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
+    if (current?.id) {
+      if (serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
+      else conversationDrafts.delete(current.id);
+    }
     captureGroupSettingsDraft();
     opened = false;
     conversationRequest += 1;
@@ -1615,7 +1618,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#im-mobile-back").addEventListener("click", () => {
       conversationRequest += 1;
       requestedConversationId = null;
-      if (current?.id && serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
+      if (current?.id) {
+        if (serializeImComposer(composer)) conversationDrafts.set(current.id, composer.innerHTML);
+        else conversationDrafts.delete(current.id);
+      }
       captureGroupSettingsDraft();
       current = null;
       workspace.classList.remove("has-conversation");
