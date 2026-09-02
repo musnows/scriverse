@@ -234,4 +234,84 @@ describe("story_index 目录读取", () => {
       pagination: { nextCursor: expect.any(Number), maxChars: 1_000 }
     });
   });
+
+  it("区分章节翻页与结果分片，并兼容旧 offset 输入", async () => {
+    runtime = createTestRuntime();
+    const work = runtime.store.createWork({ title: "双层分页目录" });
+    const volume = runtime.store.createVolume(String(work.id), { title: "第一卷" });
+    const chapters = ["第一章", "第二章"].map((title) => runtime!.store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title,
+      content: `${title}正文`
+    }));
+    type StoryIndexExecution = {
+      arguments: Record<string, unknown>;
+      result: {
+        data: {
+          chapterOffset: number;
+          chapters: Array<{ id?: unknown }>;
+          nextChapterOffset: number | null;
+          continuationRule: string;
+        };
+        pagination: { cursor: number; nextCursor: number | null; maxChars: number };
+      };
+    };
+    const internalAi = runtime.ai as unknown as {
+      executeAgentTool: (
+        workId: string,
+        toolCall: Record<string, unknown>,
+        maximumResultChars?: number
+      ) => Promise<StoryIndexExecution>;
+    };
+    const readPage = (chapterOffset: number, cursor = 0): Promise<StoryIndexExecution> => internalAi.executeAgentTool(String(work.id), {
+      id: `index-${chapterOffset}-${cursor}`,
+      type: "function",
+      function: { name: "story_index", arguments: { chapterOffset, limit: 1, ...(cursor > 0 ? { cursor } : {}) } }
+    }, 1_000);
+
+    const firstChapterIds: unknown[] = [];
+    let cursor = 0;
+    let finalFirstPage: StoryIndexExecution | null = null;
+    for (let pageCount = 0; pageCount < 10; pageCount += 1) {
+      const execution = await readPage(0, cursor);
+      expect(execution.arguments).toMatchObject({ chapterOffset: 0, limit: 1 });
+      expect(execution.result.data.chapterOffset).toBe(0);
+      firstChapterIds.push(...execution.result.data.chapters.map((chapter) => chapter.id));
+      const nextCursor = execution.result.pagination.nextCursor;
+      if (nextCursor === null) {
+        finalFirstPage = execution;
+        break;
+      }
+      expect(execution.result.data.nextChapterOffset).toBeNull();
+      expect(execution.result.data.continuationRule).toContain("pagination.nextCursor");
+      expect(nextCursor).toBeGreaterThan(cursor);
+      cursor = nextCursor;
+    }
+
+    expect(firstChapterIds).toEqual([chapters[0]?.id]);
+    expect(finalFirstPage?.result.data).toMatchObject({
+      nextChapterOffset: 1,
+      continuationRule: expect.stringContaining("reset cursor")
+    });
+
+    const secondChapterIds: unknown[] = [];
+    cursor = 0;
+    for (let pageCount = 0; pageCount < 10; pageCount += 1) {
+      const execution = await readPage(1, cursor);
+      secondChapterIds.push(...execution.result.data.chapters.map((chapter) => chapter.id));
+      const nextCursor = execution.result.pagination.nextCursor;
+      if (nextCursor === null) break;
+      expect(nextCursor).toBeGreaterThan(cursor);
+      cursor = nextCursor;
+    }
+    expect(secondChapterIds).toEqual([chapters[1]?.id]);
+
+    const legacyExecution = await internalAi.executeAgentTool(String(work.id), {
+      id: "legacy-index-offset",
+      type: "function",
+      function: { name: "story_index", arguments: { offset: 1, limit: 1 } }
+    });
+    expect(legacyExecution.arguments).toEqual({ chapterOffset: 1, limit: 1 });
+    expect(legacyExecution.result.data.chapterOffset).toBe(1);
+  });
 });
