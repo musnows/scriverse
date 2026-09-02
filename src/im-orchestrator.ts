@@ -44,7 +44,7 @@ function optionalString(value: unknown): string | null {
 
 function publicError(error: unknown): { code: string; message: string } {
   if (error instanceof AppError) return { code: error.code, message: error.message };
-  return { code: "IM_AI_CHAIN_FAILED", message: error instanceof Error ? error.message : "IM AI 交流链失败" };
+  return { code: "IM_AI_CHAIN_FAILED", message: "IM AI 交流链失败" };
 }
 
 function scoreFromContent(content: string): number | null {
