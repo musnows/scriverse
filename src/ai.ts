@@ -8634,7 +8634,8 @@ export class AiManager {
         || (toolId === "recall_known" && enabledTools.has(toolId)
           && (canReadWorkModule(permissions, "races") || canReadWorkModule(permissions, "organizations") || canReadWorkModule(permissions, "settings")))
         || (toolId === "recall_story" && enabledTools.has(toolId) && canReadWorkModule(permissions, "prose"))
-        || (toolId === "recall_roleplay_memory" && enabledTools.has(toolId) && Boolean(conversationId || chatContext?.im))
+        || (toolId === "recall_roleplay_memory" && enabledTools.has(toolId) && Boolean(conversationId || chatContext?.im)
+          && canReadWorkModule(permissions, "characters") && canReadWorkModule(permissions, "ai-chat"))
         || (toolId === "remember_roleplay" && enabledTools.has(toolId) && Boolean(conversationId) && Boolean(stagedRoleplayMemoryCandidates))
         || (toolId === "image" && enabledTools.has(toolId) && this.canReadWithAgentTool(permissions, "image"))
       : Boolean(configuredToolId && enabledTools.has(configuredToolId) && this.canReadWithAgentTool(permissions, configuredToolId));

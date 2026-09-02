@@ -398,6 +398,74 @@ describe("IM AI 调度", () => {
     )).toEqual({ content: "我记得那枚远航凭证。" });
   });
 
+  it("IM 记忆工具执行前重新检查发起人实时权限", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    let requestCount = 0;
+    let toolResult = "";
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-memory-tool-permission-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        requestCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        if (requestCount === 1) {
+          markStarted?.();
+          await responseGate;
+          return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+            id: "im-denied-roleplay-memory",
+            type: "function",
+            function: { name: "recall_roleplay_memory", arguments: JSON.stringify({ query: "权限密钥" }) }
+          }] }, finish_reason: "tool_calls" }] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        toolResult = messages.filter((message) => message.role === "tool").at(-1)?.content ?? "";
+        return completion("权限变化后不应读取共享记忆。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const workOwner = runtime.auth.register({ username: "memory_tool_work_owner", password: "secure-password-123" }).session.user;
+    const chatOwner = runtime.auth.register({ username: "memory_tool_chat_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const { work, character } = runWithRequestActor(actor(workOwner), () => {
+      const work = runtime.store.createWork({ title: "IM 工具撤权作品" });
+      const character = runtime.store.createCharacter(String(work.id), { name: "IM 工具撤权角色" });
+      runtime.store.createRoleplayMemory(String(character.id), { category: "knowledge", content: "权限密钥只能由有权用户读取。" });
+      return { work, character };
+    });
+    runtime.auth.addMember(String(work.id), chatOwner.userId, { role: "editor" }, workOwner.userId);
+    runtime.im.updateSettings(chatOwner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(chatOwner, String(character.id));
+    const sent = runtime.im.sendMessage(chatOwner, String(direct.id), {
+      content: "检索权限密钥。",
+      requestId: "im-memory-tool-permission-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    runtime.auth.updateMemberPermissions(String(work.id), chatOwner.userId, {
+      permissions: {
+        prose: "read", comments: "read", todos: "read", drafts: "read", settings: "read",
+        characters: "none", races: "read", organizations: "read", timeline: "read", relationships: "read",
+        outlines: "read", reviews: "read", "ai-chat": "none", "ai-analysis": "read", "ai-settings": "read"
+      }
+    });
+    responseControl.release?.();
+    await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(toolResult).toContain("TOOL_NOT_AVAILABLE");
+    expect(toolResult).not.toContain("权限密钥只能由有权用户读取");
+  });
+
   it("角色权限在模型请求期间失效时不写入迟到回复", async () => {
     const responseControl: { release?: () => void } = {};
     let markStarted: (() => void) | null = null;
