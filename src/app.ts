@@ -2051,11 +2051,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/im/conversations/direct", (request, response) => {
     const user = requireImUser(request);
     const input = parse(z.object({ characterId: identifier }).strict(), request.body);
-    data(response, im.createDirect(user, input.characterId), 201);
+    const conversation = im.createDirect(user, input.characterId);
+    imOrchestrator.publishConversation(String(conversation.id));
+    data(response, conversation, 201);
   });
   app.post("/api/im/conversations/group", (request, response) => {
     const user = requireImUser(request);
-    data(response, im.createGroup(user, parse(imGroupSchema, request.body)), 201);
+    const conversation = im.createGroup(user, parse(imGroupSchema, request.body));
+    imOrchestrator.publishConversation(String(conversation.id));
+    data(response, conversation, 201);
   });
   app.get("/api/im/conversations/:conversationId", (request, response) => {
     const user = requireImUser(request);

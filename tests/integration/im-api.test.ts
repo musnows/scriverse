@@ -211,6 +211,10 @@ describe("全局 IM API", () => {
     });
     runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = 'provider-im'");
 
+    const ownerConversationEvents: string[] = [];
+    const unsubscribeOwnerConversations = runtime.imOrchestrator.subscribe(owner.user.userId, (event) => {
+      if (event.type === "conversation") ownerConversationEvents.push(event.conversationId);
+    });
     const direct = await owner.agent.post("/api/im/conversations/direct")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ characterId: character.body.data.id })
@@ -222,12 +226,17 @@ describe("全局 IM API", () => {
         avatarUrl: `/api/im/conversations/${direct.body.data.id}/characters/${character.body.data.id}/avatar?v=${characterAvatarSha256}`
       })
     ]);
+    expect(ownerConversationEvents).toContain(direct.body.data.id);
     const duplicateDirect = await owner.agent.post("/api/im/conversations/direct")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ characterId: character.body.data.id })
       .expect(201);
     expect(duplicateDirect.body.data.id).toBe(direct.body.data.id);
 
+    const invitedConversationEvents: string[] = [];
+    const unsubscribeInvitedConversations = runtime.imOrchestrator.subscribe(member.user.userId, (event) => {
+      if (event.type === "conversation") invitedConversationEvents.push(event.conversationId);
+    });
     const group = await owner.agent.post("/api/im/conversations/group")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({
@@ -240,6 +249,9 @@ describe("全局 IM API", () => {
       })
       .expect(201);
     const groupId = group.body.data.id;
+    expect(invitedConversationEvents).toContain(groupId);
+    unsubscribeOwnerConversations();
+    unsubscribeInvitedConversations();
     expect(group.body.data.avatarCharacters).toEqual([
       expect.objectContaining({
         characterId: character.body.data.id,
