@@ -1198,17 +1198,7 @@ export class ImOrchestrator {
         sourceMessage,
         signal,
         (delta) => {
-          const currentMembership = this.characterMembership(membershipId);
-          this.assertCharacterAuthorization(chain, currentMembership);
           streamed += delta;
-          const snapshot = this.streamingReplies.get(turnId);
-          if (snapshot) snapshot.payload.content = `${requiredString(snapshot.payload.content)}${delta}`;
-          this.publish(requiredString(chain.conversation_id), "delta", {
-            chainId: requiredString(chain.id),
-            turnId,
-            characterId: currentMembership.character_id,
-            delta
-          });
         },
         (content) => {
           if (!content.trim()) throw new AppError(502, "IM_AI_EMPTY_REPLY", "AI 返回了空消息");
@@ -1227,6 +1217,14 @@ export class ImOrchestrator {
       }
       const currentMembership = this.characterMembership(membershipId);
       this.assertCharacterAuthorization(chain, currentMembership);
+      const snapshot = this.streamingReplies.get(turnId);
+      if (snapshot) snapshot.payload.content = result.content;
+      this.publish(requiredString(chain.conversation_id), "delta", {
+        chainId: requiredString(chain.id),
+        turnId,
+        characterId: currentMembership.character_id,
+        delta: result.content
+      });
       this.finishTurn(turnId, result, undefined, true);
       const message = this.appendCharacterMessage(chain, currentMembership, result);
       this.publish(requiredString(chain.conversation_id), "message", { message });

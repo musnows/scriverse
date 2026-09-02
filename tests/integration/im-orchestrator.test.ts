@@ -816,13 +816,13 @@ describe("IM AI 调度", () => {
       requestId: "im-stream-replay-0001"
     });
     runtime.imOrchestrator.publishMessageResult(sent);
-    const deltaDeadline = Date.now() + 2_000;
-    while (!initialEvents.some((event) => event.type === "delta") && Date.now() < deltaDeadline) {
+    const runningDeadline = Date.now() + 2_000;
+    while (!initialEvents.some((event) => event.type === "turn" && event.payload.status === "running") && Date.now() < runningDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    expect(initialEvents.some((event) => event.type === "delta")).toBe(true);
+    expect(initialEvents.some((event) => event.type === "delta")).toBe(false);
     expect(runtime.imOrchestrator.streamingReplySnapshots(String(direct.id))).toEqual([
-      expect.objectContaining({ status: "running", content: "前半" })
+      expect.objectContaining({ status: "running", content: "" })
     ]);
     let duplicateCancellationCalled = false;
     const duplicate = runtime.im.sendMessage(owner, String(direct.id), {
@@ -836,7 +836,7 @@ describe("IM AI 调度", () => {
     const replayed: Array<{ type: string; payload: Record<string, unknown> }> = [];
     const unsubscribeReplay = runtime.imOrchestrator.subscribe(owner.userId, (event) => replayed.push({ type: event.type, payload: event.payload }));
     expect(replayed).toEqual([
-      expect.objectContaining({ type: "turn", payload: expect.objectContaining({ status: "running", content: "前半" }) })
+      expect.objectContaining({ type: "turn", payload: expect.objectContaining({ status: "running", content: "" }) })
     ]);
     expect(releaseStream).not.toBeNull();
     releaseStream!();
@@ -844,6 +844,9 @@ describe("IM AI 调度", () => {
     unsubscribeReplay();
 
     expect(chain.status).toBe("completed");
+    expect(replayed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "delta", payload: expect.objectContaining({ delta: "前半后半" }) })
+    ]));
     expect(runtime.database.get(
       "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
       String(chain.id)
