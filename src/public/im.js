@@ -715,13 +715,18 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     threshold?.addEventListener("input", () => { document.querySelector("#im-detail-threshold-output").textContent = threshold.value; });
     document.querySelector("#im-save-group-settings")?.addEventListener("click", async (event) => {
       const conversationId = current.id;
-      const result = await performMutation(event.currentTarget, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}`, { method: "PATCH", body: {
-        title: document.querySelector("#im-detail-title").value.trim(),
-        replyMode: document.querySelector("#im-detail-mode").value,
-        responseThreshold: Number(document.querySelector("#im-detail-threshold").value),
-        maxAiMessages: Number(document.querySelector("#im-detail-limit").value)
-      } }));
-      if (result.ok) groupSettingsDrafts.delete(conversationId);
+      const submittedForm = readGroupSettingsForm();
+      if (!submittedForm) return;
+      const submittedSettings = { ...submittedForm, title: submittedForm.title.trim() };
+      const result = await performMutation(event.currentTarget, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}`, {
+        method: "PATCH",
+        body: submittedSettings
+      }));
+      if (result.ok) {
+        const latestForm = current?.id === conversationId ? readGroupSettingsForm() : groupSettingsDrafts.get(conversationId);
+        if (latestForm && !sameImGroupSettings(latestForm, submittedForm)) groupSettingsDrafts.set(conversationId, latestForm);
+        else groupSettingsDrafts.delete(conversationId);
+      }
       if (result.ok && current?.id === conversationId) await refreshAfterMutation("群设置保存", () => openConversation(conversationId));
     });
     document.querySelectorAll("[data-im-open-member-add]").forEach((button) => button.addEventListener("click", () => openMemberAddDialog(button.dataset.imOpenMemberAdd)));
