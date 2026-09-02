@@ -672,26 +672,26 @@ export class ImService {
     const conversationId = requiredString(row.conversation_id);
     const senderCharacterId = optionalString(row.sender_character_id);
     const sender = json<Record<string, unknown>>(requiredString(row.sender_snapshot_json), {});
-    if (showCurrentCharacterAvatar && requiredString(row.sender_kind) === "character" && senderCharacterId) {
-      const avatarSha256 = prepared
-        ? prepared.avatarShaByCharacterId.get(senderCharacterId) ?? null
-        : optionalString(this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", senderCharacterId)?.sha256);
-      sender.avatarUrl = avatarSha256
-        ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(senderCharacterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
-        : null;
-    } else if (!showCurrentCharacterAvatar && requiredString(row.sender_kind) === "character" && senderCharacterId) {
-      const avatarSha256 = optionalString(sender.avatarSha256) ?? avatarVersionFromUrl(sender.avatarUrl);
+    if (requiredString(row.sender_kind) === "character" && senderCharacterId) {
+      const snapshotAvatarSha256 = optionalString(sender.avatarSha256) ?? avatarVersionFromUrl(sender.avatarUrl);
+      const avatarSha256 = snapshotAvatarSha256 ?? (showCurrentCharacterAvatar
+        ? prepared
+          ? prepared.avatarShaByCharacterId.get(senderCharacterId) ?? null
+          : optionalString(this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", senderCharacterId)?.sha256)
+        : null);
       sender.avatarUrl = avatarSha256
         ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(senderCharacterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
         : optionalString(historicalParticipants?.characters
             .find((character) => optionalString(character.characterId) === senderCharacterId)?.avatarUrl);
-    } else if (!showCurrentCharacterAvatar && requiredString(row.sender_kind) === "human") {
+    } else if (requiredString(row.sender_kind) === "human") {
       const senderUserId = optionalString(row.sender_user_id);
       const avatarSha256 = optionalString(sender.avatarSha256) ?? avatarVersionFromUrl(sender.avatarUrl);
       sender.avatarUrl = senderUserId && avatarSha256
         ? `/api/im/conversations/${encodeURIComponent(conversationId)}/users/${encodeURIComponent(senderUserId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
-        : optionalString(historicalParticipants?.humans
-            .find((human) => optionalString(human.userId) === senderUserId)?.avatarUrl);
+        : !showCurrentCharacterAvatar
+          ? optionalString(historicalParticipants?.humans
+              .find((human) => optionalString(human.userId) === senderUserId)?.avatarUrl)
+          : null;
     }
     const mentionRows = prepared
       ? prepared.mentionsByMessageId.get(messageId) ?? []
@@ -1142,8 +1142,7 @@ export class ImService {
     this.assertReadableConversation(conversationId, userId);
     const visibleCharacter = this.conversationParticipants(conversationId, userId).characters
       .find((membership) => requiredString(membership.characterId) === characterId);
-    if (!visibleCharacter) throw notFound("IM 群角色");
-    const visibleSha256 = avatarVersionFromUrl(visibleCharacter.avatarUrl);
+    const visibleSha256 = avatarVersionFromUrl(visibleCharacter?.avatarUrl);
     const requestedSha256 = optionalString(sha256) ?? visibleSha256;
     const visibleInMessage = requestedSha256
       ? this.messageAvatarVersionVisible(userId, conversationId, "character", characterId, requestedSha256)
@@ -1172,6 +1171,9 @@ export class ImService {
     }
     const avatar = this.store.getCharacterAvatar(characterId);
     if (!avatar) throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "角色头像不存在");
+    if (requestedSha256 !== avatar.sha256) {
+      throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "IM 角色头像版本不存在");
+    }
     if (!this.activeMembership(conversationId, userId)) {
       throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "离开群聊后的角色头像版本不存在");
     }
@@ -1182,8 +1184,7 @@ export class ImService {
     this.assertReadableConversation(conversationId, userId);
     const visibleHuman = this.conversationParticipants(conversationId, userId).humans
       .find((membership) => requiredString(membership.userId) === targetUserId);
-    if (!visibleHuman) throw notFound("IM 群成员");
-    if (avatarVersionFromUrl(visibleHuman.avatarUrl) !== sha256
+    if (avatarVersionFromUrl(visibleHuman?.avatarUrl) !== sha256
       && !this.messageAvatarVersionVisible(userId, conversationId, "human", targetUserId, sha256)) {
       throw new AppError(404, "USER_AVATAR_NOT_FOUND", "该成员头像版本不在你的 IM 可见任期内");
     }

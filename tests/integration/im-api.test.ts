@@ -653,6 +653,11 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ userId: member.user.userId })
       .expect(201);
+    const rejoinedView = await member.agent.get(`/api/im/conversations/${exitedGroup.body.data.id}`).expect(200);
+    expect(rejoinedView.body.data.messages.find((message: { senderKind: string }) => message.senderKind === "character").sender.avatarUrl)
+      .toBe(exitedCharacterUrl);
+    expect(rejoinedView.body.data.messages.find((message: { senderUserId: string }) => message.senderUserId === member.user.userId).sender.avatarUrl)
+      .toBe(exitedHumanUrl);
     expect(Buffer.from((await member.agent.get(exitedCharacterUrl).expect(200)).body)).toEqual(avatarPng);
     expect(Buffer.from((await member.agent.get(exitedHumanUrl).expect(200)).body)).toEqual(avatarPng);
     await owner.agent.post(`/api/im/conversations/${exitedGroup.body.data.id}/humans`)
