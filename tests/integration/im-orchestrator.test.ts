@@ -818,6 +818,10 @@ describe("IM AI 调度", () => {
 
     expect(chain).toMatchObject({ status: "failed", error_code: "IM_PARTICIPANT_CONTEXT_TOO_LARGE" });
     expect(fetchCalls).toBe(0);
+    expect(runtime.database.get(
+      "SELECT model_id, model_stage, attempt_count, ai_call_ids_json FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
+      String(chain.id)
+    )).toEqual({ model_id: null, model_stage: null, attempt_count: 0, ai_call_ids_json: "[]" });
   });
 
   it("在角色生成前发布气泡状态并把最终错误保留在角色 turn 中", async () => {
