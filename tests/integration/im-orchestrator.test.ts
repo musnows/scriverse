@@ -434,6 +434,11 @@ describe("IM AI 调度", () => {
     });
     const topologyChainId = String((topologyMessage.chain as Record<string, unknown>).id);
     runtime.database.run("UPDATE im_chains SET status = 'failed' WHERE id = ?", topologyChainId);
+    let crossMemberCancellationCount = 0;
+    const memberRetry = runtime.im.retryChain(member, String(group.id), topologyChainId, () => { crossMemberCancellationCount += 1; });
+    const ownerDuplicateRetry = runtime.im.retryChain(owner, String(group.id), topologyChainId, () => { crossMemberCancellationCount += 1; });
+    expect(ownerDuplicateRetry.id).toBe(memberRetry.id);
+    expect(crossMemberCancellationCount).toBe(1);
     runtime.im.addCharacter(owner, String(group.id), String(secondCharacter.id));
     expect(runtime.database.get("SELECT context_epoch FROM im_conversations WHERE id = ?", String(group.id))).toEqual({ context_epoch: 2 });
     expect(() => runtime.im.retryChain(owner, String(group.id), topologyChainId))

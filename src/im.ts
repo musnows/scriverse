@@ -1831,10 +1831,9 @@ export class ImService {
     }
     const existingRetry = this.db.get(
       `SELECT * FROM im_chains
-       WHERE conversation_id = ? AND retry_source_chain_id = ? AND initiator_user_id = ?`,
+       WHERE conversation_id = ? AND retry_source_chain_id = ?`,
       conversationId,
-      sourceChainId,
-      user.userId
+      sourceChainId
     );
     if (existingRetry) return existingRetry;
     if (!["failed", "interrupted", "waiting_config"].includes(requiredString(source.status))) {
