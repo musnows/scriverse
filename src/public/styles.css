@@ -4723,7 +4723,7 @@ body.is-im-conversations-resizing { cursor: ew-resize; user-select: none; }
 .im-chat-header h2, .im-details h2 { margin: 0; font-size: 18px; }
 #im-details-toggle { display: none; }
 #im-details-close { display: inline-grid; }
-.im-view.is-details-hidden #im-details-toggle { display: inline-flex; }
+.im-view.is-details-hidden #im-details-toggle { display: inline-grid; }
 .im-view.is-details-hidden .im-details { display: none; }
 .im-create-actions { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
 .im-create-actions p { min-width: 0; margin: 0; color: var(--muted); font-size: 9px; line-height: 1.4; }
@@ -4754,6 +4754,7 @@ body.is-im-conversations-resizing { cursor: ew-resize; user-select: none; }
 .im-chat-header p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
 .im-chat-header > div:last-child { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .im-chat-header .im-button { min-height: 28px; padding: 4px 8px; border-radius: 5px; font-size: 9px; }
+.im-chat-header-icon-button svg { width: 16px; height: 16px; overflow: visible; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 .im-mobile-back { display: none; }
 .im-message-feed { min-height: 0; overflow-y: auto; padding: 20px clamp(14px, 4vw, 54px); scroll-behavior: smooth; }
 .im-load-older { display: block; margin: 0 auto 18px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font: 500 10px/1.4 var(--font-sans); cursor: pointer; }
@@ -4935,7 +4936,7 @@ body.is-im-details-resizing { cursor: ew-resize; user-select: none; }
 
 @media (max-width: 980px) {
   .im-view, .im-view.is-details-hidden { grid-template-columns: var(--im-conversations-width, 280px) minmax(0, 1fr); }
-  #im-details-toggle { display: inline-flex; }
+  #im-details-toggle { display: inline-grid; }
   #im-details-close { display: inline-grid; }
   .im-view.is-details-hidden .im-details { display: block; }
   .im-details-resize-handle { display: none; }
