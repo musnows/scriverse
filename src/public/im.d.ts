@@ -16,6 +16,8 @@ export function findImMentionQuery(text: string, caretOffset?: number): {
   endOffset: number;
 } | null;
 
+export function shouldFollowImFeed(scrollHeight: number, scrollTop: number, clientHeight: number, force?: boolean): boolean;
+
 export function createImWorkspace(options: Record<string, unknown>): {
   start(): Promise<void>;
   open(): Promise<void>;

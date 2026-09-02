@@ -69,6 +69,10 @@ export function findImMentionQuery(text, caretOffset = String(text).length) {
   return match ? { query: match[1], startOffset: offset - match[0].length, endOffset: offset } : null;
 }
 
+export function shouldFollowImFeed(scrollHeight, scrollTop, clientHeight, force = false) {
+  return force === true || Number(scrollHeight) - Number(scrollTop) - Number(clientHeight) < 80;
+}
+
 export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf }) {
   const workspace = document.querySelector("#im-view");
   const listHost = document.querySelector("#im-conversation-list");
@@ -364,7 +368,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     if (follow) feed.scrollTop = feed.scrollHeight;
   }
 
-  function renderMessages() {
+  function renderMessages({ scrollToBottom = false } = {}) {
+    const follow = shouldFollowImFeed(feed.scrollHeight, feed.scrollTop, feed.clientHeight, scrollToBottom);
+    const previousTop = feed.scrollTop;
     const messages = array(current?.messages);
     const provisional = [...provisionalReplies.values()];
     if (!messages.length && !provisional.length) {
@@ -402,7 +408,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       </article>`;
     }).join("") + generatingSummary + provisionalHtml;
     bindImAvatarFallbacks(feed);
-    feed.scrollTop = feed.scrollHeight;
+    feed.scrollTop = follow ? feed.scrollHeight : previousTop;
   }
 
   async function loadOlderMessages() {
@@ -559,11 +565,11 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     if (!owner) return;
   }
 
-  function renderConversation() {
+  function renderConversation(scrollToBottom = false) {
     document.querySelector("#im-chat-title").textContent = current?.title || "选择会话";
     document.querySelector("#im-chat-subtitle").textContent = current ? conversationSubtitle(current) : "角色单聊或混合群聊";
     document.querySelector("#im-details-toggle").disabled = !current;
-    renderMessages();
+    renderMessages({ scrollToBottom });
     renderDetails();
     syncComposer();
   }
@@ -580,12 +586,13 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       throw error;
     }
     if (request !== conversationRequest || (requestedConversationId && requestedConversationId !== conversationId)) return;
+    const conversationChanged = current?.id !== conversationId;
     current = nextConversation;
     if (requestedConversationId === conversationId) requestedConversationId = null;
     workspace.classList.add("has-conversation");
     syncProvisionalReplies();
     renderConversationList();
-    renderConversation();
+    renderConversation(conversationChanged);
     if (current.active && current.latestSequence > 0 && shouldMarkImConversationRead(opened, document.visibilityState)) {
       if (request !== conversationRequest) return;
       await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: { sequence: current.latestSequence } });
@@ -904,7 +911,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const existing = array(current.messages).some((message) => message.id === result.message.id);
       if (!existing) current.messages.push(result.message);
       current.activeChain = result.chain;
-      renderConversation();
+      renderConversation(true);
       await openConversation(current.id);
       await refreshConversations();
       if (result.chain?.status === "waiting_config") toast("消息已发送；请配置主模型和 fallback 后重试 AI 链路", "warning");
