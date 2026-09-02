@@ -49,6 +49,32 @@ describe("IM AI 调度", () => {
     await runtime?.close();
   });
 
+  it("限制每用户实时连接并隔离异常 listener", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-event-listener-limit-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "event_listener_owner", password: "secure-password-123" }).session.user;
+    let healthyEvents = 0;
+    const unsubscribes = [
+      runtime.imOrchestrator.subscribe(owner.userId, () => { throw new Error("closed listener"); }),
+      runtime.imOrchestrator.subscribe(owner.userId, () => { healthyEvents += 1; }),
+      runtime.imOrchestrator.subscribe(owner.userId, () => undefined),
+      runtime.imOrchestrator.subscribe(owner.userId, () => undefined),
+      runtime.imOrchestrator.subscribe(owner.userId, () => undefined)
+    ];
+    expect(() => runtime.imOrchestrator.subscribe(owner.userId, () => undefined)).toThrowError("IM 实时连接过多");
+
+    expect(() => runtime.imOrchestrator.publishConversationToUser(owner.userId, "conversation-test")).not.toThrow();
+    expect(healthyEvents).toBe(1);
+    const replacement = runtime.imOrchestrator.subscribe(owner.userId, () => undefined);
+    replacement();
+    for (const unsubscribe of unsubscribes) unsubscribe();
+    const afterRelease = runtime.imOrchestrator.subscribe(owner.userId, () => undefined);
+    afterRelease();
+  });
+
   it("主模型重试耗尽后单次调用切换 fallback 并持久化完整回复", async () => {
     let primaryCalls = 0;
     let fallbackCalls = 0;

@@ -69,7 +69,7 @@ import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { ImService } from "./im.js";
-import { ImOrchestrator } from "./im-orchestrator.js";
+import { ImOrchestrator, type ImRealtimeEvent } from "./im-orchestrator.js";
 import { OfflineSyncService } from "./offline-sync.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -1958,21 +1958,54 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/im/events", (request, response) => {
     const user = requireImUser(request);
+    let started = false;
+    let closed = false;
+    let heartbeat: NodeJS.Timeout | null = null;
+    let unsubscribe = (): void => undefined;
+    const pendingEvents: ImRealtimeEvent[] = [];
+    const close = (): void => {
+      if (closed) return;
+      closed = true;
+      if (heartbeat) clearInterval(heartbeat);
+      unsubscribe();
+      if (!response.writableEnded) response.end();
+    };
+    const write = (chunk: string): boolean => {
+      if (closed || response.destroyed || response.writableEnded) {
+        close();
+        return false;
+      }
+      try {
+        if (response.write(chunk)) return true;
+      } catch {
+        close();
+        return false;
+      }
+      close();
+      return false;
+    };
+    const writeEvent = (event: ImRealtimeEvent): void => {
+      write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    };
+    unsubscribe = imOrchestrator.subscribe(user.userId, (event) => {
+      if (!started) pendingEvents.push(event);
+      else writeEvent(event);
+    });
     response.status(200);
     response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     response.setHeader("Cache-Control", "no-cache, no-transform");
     response.setHeader("Connection", "keep-alive");
     response.flushHeaders();
-    response.write(`event: ready\ndata: ${JSON.stringify({ connected: true })}\n\n`);
-    const unsubscribe = imOrchestrator.subscribe(user.userId, (event) => {
-      response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-    });
-    const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 15_000);
+    started = true;
+    if (!write(`event: ready\ndata: ${JSON.stringify({ connected: true })}\n\n`)) return;
+    for (const event of pendingEvents) {
+      if (closed) return;
+      writeEvent(event);
+    }
+    pendingEvents.length = 0;
+    heartbeat = setInterval(() => write(": heartbeat\n\n"), 15_000);
     heartbeat.unref();
-    request.on("close", () => {
-      clearInterval(heartbeat);
-      unsubscribe();
-    });
+    request.on("close", close);
   });
   app.post("/api/im/conversations/direct", (request, response) => {
     const user = requireImUser(request);

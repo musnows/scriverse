@@ -30,6 +30,7 @@ type InvocationResult = {
 
 const IM_USER_CHAIN_CONCURRENCY = 3;
 const IM_MESSAGE_MAX_CHARACTERS = 20_000;
+const IM_EVENT_CONNECTION_LIMIT_PER_USER = 5;
 
 function requiredString(value: unknown): string {
   return typeof value === "string" ? value : String(value ?? "");
@@ -81,6 +82,9 @@ export class ImOrchestrator {
       listeners = new Set();
       this.listeners.set(userId, listeners);
     }
+    if (listeners.size >= IM_EVENT_CONNECTION_LIMIT_PER_USER) {
+      throw new AppError(429, "IM_EVENT_CONNECTION_LIMIT", "IM 实时连接过多，请关闭其他页面后重试");
+    }
     listeners.add(listener);
     for (const event of this.streamingReplies.values()) {
       const membership = this.db.get(
@@ -89,7 +93,15 @@ export class ImOrchestrator {
         event.conversationId,
         userId
       );
-      if (membership) listener({ ...event, id: id("imEvent"), createdAt: now() });
+      if (membership) {
+        try {
+          listener({ ...event, id: id("imEvent"), createdAt: now() });
+        } catch (error) {
+          listeners.delete(listener);
+          if (listeners.size === 0) this.listeners.delete(userId);
+          throw error;
+        }
+      }
     }
     return () => {
       listeners?.delete(listener);
@@ -116,7 +128,16 @@ export class ImOrchestrator {
   }
 
   private publishToUser(userId: string, event: ImRealtimeEvent): void {
-    for (const listener of this.listeners.get(userId) ?? []) listener(event);
+    const listeners = this.listeners.get(userId);
+    if (!listeners) return;
+    for (const listener of [...listeners]) {
+      try {
+        listener(event);
+      } catch {
+        listeners.delete(listener);
+      }
+    }
+    if (listeners.size === 0) this.listeners.delete(userId);
   }
 
   publishConversation(conversationId: string): void {
