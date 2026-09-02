@@ -122,6 +122,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   const mentionMenu = document.querySelector("#im-mention-menu");
   const unreadBadge = document.querySelector("#im-unread-count");
   let conversations = [];
+  let conversationNextCursor = null;
+  let conversationUnreadTotal = 0;
+  let conversationPageLoading = false;
   let current = null;
   let works = [];
   let createCharacters = [];
@@ -258,7 +261,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   function renderUnread() {
-    const count = conversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0);
+    const count = conversationUnreadTotal;
     unreadBadge.textContent = count > 99 ? "99+" : String(count);
     unreadBadge.classList.toggle("hidden", count === 0);
     document.querySelector("#im-open-button")?.setAttribute("aria-label", count ? `打开 IM，${count} 条未读` : "打开 IM");
@@ -266,11 +269,31 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
 
   async function refreshConversations() {
     const request = ++conversationListRequest;
-    const nextConversations = array(await api("/api/im/conversations"));
+    const page = await api("/api/im/conversations?limit=50");
     if (request !== conversationListRequest) return;
-    conversations = nextConversations;
+    conversations = array(page.items ?? page);
+    conversationNextCursor = page.nextCursor ?? null;
+    conversationUnreadTotal = Number(page.unreadCount ?? conversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0));
     renderUnread();
     renderConversationList();
+  }
+
+  async function loadMoreConversations() {
+    if (conversationNextCursor === null || conversationPageLoading) return;
+    conversationPageLoading = true;
+    const cursor = conversationNextCursor;
+    try {
+      const page = await api(`/api/im/conversations?limit=50&cursor=${encodeURIComponent(cursor)}`);
+      if (cursor !== conversationNextCursor) return;
+      const known = new Set(conversations.map((conversation) => conversation.id));
+      conversations.push(...array(page.items).filter((conversation) => !known.has(conversation.id)));
+      conversationNextCursor = page.nextCursor ?? null;
+      conversationUnreadTotal = Number(page.unreadCount ?? conversationUnreadTotal);
+      renderUnread();
+      renderConversationList();
+    } finally {
+      conversationPageLoading = false;
+    }
   }
 
   function upsertConversationSummary(summary) {
@@ -314,13 +337,14 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   function renderConversationList() {
-    listHost.innerHTML = conversations.length
+    const items = conversations.length
       ? conversations.map((item) => `<button class="im-conversation-item${current?.id === item.id ? " is-active" : ""}" type="button" data-im-conversation="${esc(item.id)}" aria-label="${esc(`${item.title}，${conversationSubtitle(item)}`)}" title="${esc(item.title)}">
           ${conversationAvatarHtml(item)}
           <span><strong>${esc(item.title)}</strong><small>${esc(conversationSubtitle(item))}</small></span>
           ${item.mentionUnreadCount ? `<b class="im-mention-unread">@${Number(item.mentionUnreadCount)}</b>` : item.unreadCount ? `<b class="im-item-unread">${Number(item.unreadCount)}</b>` : ""}
         </button>`).join("")
       : '<p class="im-empty">还没有 IM 会话。点击“新建会话”，先选书籍，再选择一个或多个角色。</p>';
+    listHost.innerHTML = `${items}${conversationNextCursor === null ? "" : '<button class="im-button im-button-secondary im-load-more-conversations" type="button" data-im-load-more-conversations>加载更多会话</button>'}`;
     bindImAvatarFallbacks(listHost);
   }
 
@@ -1208,6 +1232,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       renderMemberAddOptions();
     });
     listHost.addEventListener("click", (event) => {
+      if (event.target.closest("[data-im-load-more-conversations]")) {
+        void loadMoreConversations().catch((error) => toast(error.message, "error"));
+        return;
+      }
       const button = event.target.closest("[data-im-conversation]");
       if (button) void openConversation(button.dataset.imConversation, true).catch((error) => toast(error.message, "error"));
     });

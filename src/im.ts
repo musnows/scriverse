@@ -908,18 +908,39 @@ export class ImService {
     };
   }
 
-  listConversations(userId: string): Record<string, unknown>[] {
+  listConversations(
+    userId: string,
+    limit = 50,
+    cursor?: { updatedAt: string; createdAt: string; id: string }
+  ): Record<string, unknown>[] {
+    const cursorWhere = cursor
+      ? `AND (
+          conversation.updated_at < ?
+          OR (conversation.updated_at = ? AND conversation.created_at < ?)
+          OR (conversation.updated_at = ? AND conversation.created_at = ? AND conversation.id > ?)
+        )`
+      : "";
     const conversations = this.db.all(
-      `SELECT DISTINCT conversation.* FROM im_conversations conversation
-       JOIN im_human_memberships membership ON membership.conversation_id = conversation.id
-       WHERE membership.user_id = ?`,
-      userId
+      `SELECT conversation.* FROM im_conversations conversation
+       WHERE EXISTS (
+         SELECT 1 FROM im_human_memberships membership
+         WHERE membership.conversation_id = conversation.id AND membership.user_id = ?
+       ) ${cursorWhere}
+       ORDER BY conversation.updated_at DESC, conversation.created_at DESC, conversation.id
+       LIMIT ?`,
+      userId,
+      ...(cursor ? [cursor.updatedAt, cursor.updatedAt, cursor.createdAt, cursor.updatedAt, cursor.createdAt, cursor.id] : []),
+      limit
     );
     if (conversations.length === 0) return [];
+    const conversationIds = conversations.map((conversation) => requiredString(conversation.id));
+    const placeholders = conversationIds.map(() => "?").join(", ");
     const viewerMemberships = this.db.all(
       `SELECT * FROM im_human_memberships WHERE user_id = ?
+       AND conversation_id IN (${placeholders})
        ORDER BY conversation_id, joined_sequence DESC, joined_at DESC`,
-      userId
+      userId,
+      ...conversationIds
     );
     const viewerByConversation = new Map<string, Record<string, unknown>>();
     for (const membership of viewerMemberships) {
@@ -927,14 +948,11 @@ export class ImService {
       if (!viewerByConversation.has(conversationId)) viewerByConversation.set(conversationId, membership);
     }
     const latestByConversation = new Map(this.db.all(
-      `WITH visible_conversations AS (
-         SELECT DISTINCT conversation_id FROM im_human_memberships WHERE user_id = ?
-       )
-       SELECT visible.conversation_id, MAX(message.sequence) AS sequence
-       FROM visible_conversations visible
-       JOIN im_messages message ON message.conversation_id = visible.conversation_id
-       GROUP BY visible.conversation_id`,
-      userId
+      `SELECT message.conversation_id, MAX(message.sequence) AS sequence
+       FROM im_messages message
+       WHERE message.conversation_id IN (${placeholders})
+       GROUP BY message.conversation_id`,
+      ...conversationIds
     ).map((row) => [requiredString(row.conversation_id), Number(row.sequence)]));
     const unreadByConversation = new Map(this.db.all(
       `SELECT membership.conversation_id, COUNT(message.id) AS count
@@ -943,8 +961,10 @@ export class ImService {
          AND message.sequence > membership.last_read_sequence
          AND message.sequence > membership.joined_sequence
        WHERE membership.user_id = ? AND membership.left_at IS NULL
+         AND membership.conversation_id IN (${placeholders})
        GROUP BY membership.conversation_id`,
-      userId
+      userId,
+      ...conversationIds
     ).map((row) => [requiredString(row.conversation_id), Number(row.count)]));
     const mentionUnreadByConversation = new Map(this.db.all(
       `SELECT membership.conversation_id, COUNT(DISTINCT message.id) AS count
@@ -955,32 +975,28 @@ export class ImService {
        JOIN im_mentions mention ON mention.message_id = message.id
          AND mention.target_kind = 'user' AND mention.target_id = membership.user_id
        WHERE membership.user_id = ? AND membership.left_at IS NULL
+         AND membership.conversation_id IN (${placeholders})
        GROUP BY membership.conversation_id`,
-      userId
+      userId,
+      ...conversationIds
     ).map((row) => [requiredString(row.conversation_id), Number(row.count)]));
     const humanRows = this.db.all(
-      `WITH visible_conversations AS (
-         SELECT DISTINCT conversation_id FROM im_human_memberships WHERE user_id = ?
-       )
-       SELECT membership.id AS membership_id, membership.conversation_id, membership.user_id, membership.role,
+      `SELECT membership.id AS membership_id, membership.conversation_id, membership.user_id, membership.role,
               membership.joined_sequence, membership.left_sequence, membership.joined_at, membership.left_at,
               user.username, user.display_name, user.avatar_sha256
-       FROM visible_conversations visible
-       JOIN im_human_memberships membership ON membership.conversation_id = visible.conversation_id
+       FROM im_human_memberships membership
        JOIN users user ON user.id = membership.user_id
+       WHERE membership.conversation_id IN (${placeholders})
        ORDER BY membership.conversation_id, membership.joined_at, membership.id`,
-      userId
+      ...conversationIds
     );
     const characterRows = this.db.all(
-      `WITH visible_conversations AS (
-         SELECT DISTINCT conversation_id FROM im_human_memberships WHERE user_id = ?
-       )
-       SELECT membership.*, avatar.sha256 AS avatar_sha256
-       FROM visible_conversations visible
-       JOIN im_character_memberships membership ON membership.conversation_id = visible.conversation_id
+      `SELECT membership.*, avatar.sha256 AS avatar_sha256
+       FROM im_character_memberships membership
        LEFT JOIN character_avatars avatar ON avatar.character_id = membership.character_id
+       WHERE membership.conversation_id IN (${placeholders})
        ORDER BY membership.conversation_id, membership.joined_at, membership.id`,
-      userId
+      ...conversationIds
     );
     const humanRowsByConversation = new Map<string, Record<string, unknown>[]>();
     for (const membership of humanRows) {
@@ -1054,6 +1070,32 @@ export class ImService {
     })
       .sort((left, right) => requiredString(right.updatedAt).localeCompare(requiredString(left.updatedAt))
         || requiredString(right.createdAt).localeCompare(requiredString(left.createdAt)));
+  }
+
+  conversationUnreadTotals(userId: string): { unreadCount: number; mentionUnreadCount: number } {
+    const row = this.db.get(
+      `SELECT
+         (SELECT COUNT(message.id)
+          FROM im_human_memberships membership
+          JOIN im_messages message ON message.conversation_id = membership.conversation_id
+            AND message.sequence > membership.last_read_sequence
+            AND message.sequence > membership.joined_sequence
+          WHERE membership.user_id = ? AND membership.left_at IS NULL) AS unread_count,
+         (SELECT COUNT(DISTINCT message.id)
+          FROM im_human_memberships membership
+          JOIN im_messages message ON message.conversation_id = membership.conversation_id
+            AND message.sequence > membership.last_read_sequence
+            AND message.sequence > membership.joined_sequence
+          JOIN im_mentions mention ON mention.message_id = message.id
+            AND mention.target_kind = 'user' AND mention.target_id = membership.user_id
+          WHERE membership.user_id = ? AND membership.left_at IS NULL) AS mention_unread_count`,
+      userId,
+      userId
+    );
+    return {
+      unreadCount: Number(row?.unread_count ?? 0),
+      mentionUnreadCount: Number(row?.mention_unread_count ?? 0)
+    };
   }
 
   getConversationSummary(conversationId: string, userId: string): Record<string, unknown> {

@@ -512,7 +512,7 @@ describe("全局 IM API", () => {
       latestSequence: readOnly.body.data.latestSequence,
       updatedAt: readOnly.body.data.updatedAt
     });
-    const frozenListItem = (await lateMember.agent.get("/api/im/conversations").expect(200)).body.data
+    const frozenListItem = (await lateMember.agent.get("/api/im/conversations").expect(200)).body.data.items
       .find((conversation: { id: string }) => conversation.id === groupId);
     expect(frozenListItem).toMatchObject({
       title: readOnly.body.data.title,
@@ -637,15 +637,16 @@ describe("全局 IM API", () => {
     expect(listedConversations.length).toBeGreaterThanOrEqual(4);
     expect(allSpy).toHaveBeenCalledTimes(7);
     expect(getSpy).not.toHaveBeenCalled();
-    const scopedListQueries = allSpy.mock.calls
-      .map(([sql]) => String(sql))
-      .filter((sql) => sql.includes("WITH visible_conversations"));
-    expect(scopedListQueries).toHaveLength(3);
+    const scopedListQueries = allSpy.mock.calls.map(([sql]) => String(sql));
+    const latestQuery = scopedListQueries.find((sql) => sql.includes("MAX(message.sequence)"));
+    const humanQuery = scopedListQueries.find((sql) => sql.includes("JOIN users user"));
+    const characterQuery = scopedListQueries.find((sql) => sql.includes("FROM im_character_memberships membership"));
+    expect([latestQuery, humanQuery, characterQuery].every(Boolean)).toBe(true);
     allSpy.mockRestore();
     getSpy.mockRestore();
-    const plans = scopedListQueries.map((sql) => runtime.database.all(
+    const plans = [latestQuery, humanQuery, characterQuery].map((sql) => runtime.database.all(
       `EXPLAIN QUERY PLAN ${sql}`,
-      owner.user.userId
+      ...Array.from({ length: (String(sql).match(/\?/gu) ?? []).length }, () => pagedGroup.body.data.id)
     ).map((row) => String(row.detail)));
     expect(plans[0]).toEqual(expect.arrayContaining([
       expect.stringContaining("idx_im_messages_conversation")
@@ -656,6 +657,16 @@ describe("全局 IM API", () => {
     expect(plans[2]).toEqual(expect.arrayContaining([
       expect.stringContaining("idx_im_character_memberships_conversation")
     ]));
+    const firstConversationPage = (await owner.agent.get("/api/im/conversations?limit=2").expect(200)).body.data;
+    expect(firstConversationPage.items).toHaveLength(2);
+    expect(firstConversationPage.nextCursor).toEqual(expect.any(String));
+    expect(firstConversationPage.unreadCount).toEqual(expect.any(Number));
+    const nextConversationPage = (await owner.agent.get(`/api/im/conversations?limit=2&cursor=${encodeURIComponent(firstConversationPage.nextCursor)}`).expect(200)).body.data;
+    expect(nextConversationPage.items).toHaveLength(2);
+    expect(nextConversationPage.items.map((item: { id: string }) => item.id)).not.toEqual(expect.arrayContaining(
+      firstConversationPage.items.map((item: { id: string }) => item.id)
+    ));
+    await owner.agent.get("/api/im/conversations?cursor=invalid-cursor").expect(400);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 

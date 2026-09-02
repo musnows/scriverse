@@ -1959,7 +1959,35 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/im/conversations", (request, response) => {
     const user = requireImUser(request);
-    data(response, im.listConversations(user.userId));
+    const query = parse(z.object({
+      cursor: z.string().max(500).optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(50)
+    }).strict(), request.query);
+    let cursor: { updatedAt: string; createdAt: string; id: string } | undefined;
+    if (query.cursor) {
+      try {
+        cursor = parse(z.object({
+          updatedAt: z.string().datetime({ offset: true }),
+          createdAt: z.string().datetime({ offset: true }),
+          id: identifier
+        }).strict(), JSON.parse(Buffer.from(query.cursor, "base64url").toString("utf8")));
+      } catch {
+        throw new AppError(400, "IM_CONVERSATION_CURSOR_INVALID", "IM 会话分页游标无效");
+      }
+    }
+    const page = im.listConversations(user.userId, query.limit + 1, cursor);
+    const items = page.slice(0, query.limit);
+    const last = items.at(-1);
+    const totals = im.conversationUnreadTotals(user.userId);
+    data(response, {
+      items,
+      nextCursor: page.length > query.limit && last ? Buffer.from(JSON.stringify({
+        updatedAt: last.updatedAt,
+        createdAt: last.createdAt,
+        id: last.id
+      })).toString("base64url") : null,
+      ...totals
+    });
   });
   app.get("/api/im/conversations/:conversationId/summary", (request, response) => {
     const user = requireImUser(request);
