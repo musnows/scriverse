@@ -2081,10 +2081,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.patch("/api/im/conversations/:conversationId", (request, response) => {
     const user = requireImUser(request);
-    const updated = im.updateGroup(user, request.params.conversationId, parse(imGroupUpdateSchema, request.body));
-    imOrchestrator.cancelConversation(request.params.conversationId, "group_settings_changed");
-    imOrchestrator.publishConversation(request.params.conversationId);
-    data(response, updated);
+    const result = im.updateGroup(user, request.params.conversationId, parse(imGroupUpdateSchema, request.body));
+    if (result.changed) {
+      imOrchestrator.cancelConversation(request.params.conversationId, "group_settings_changed");
+      imOrchestrator.publishConversation(request.params.conversationId);
+    }
+    data(response, result.conversation);
   });
   app.post("/api/im/conversations/:conversationId/humans", (request, response) => {
     const user = requireImUser(request);

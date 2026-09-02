@@ -272,6 +272,24 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({})
       .expect(400);
+    const noOpOwner = runtime.auth.getUser(owner.user.userId);
+    const noOpGroup = runtime.im.createGroup(noOpOwner, {
+      title: "API 重复群设置",
+      characterIds: [character.body.data.id],
+      replyMode: "mention",
+      responseThreshold: 60,
+      maxAiMessages: 20
+    });
+    const noOpMessage = runtime.im.sendMessage(noOpOwner, String(noOpGroup.id), {
+      content: `mention://character/${character.body.data.id} 保持活动链。`,
+      requestId: "im-api-noop-group-settings-0001"
+    });
+    const noOpChainId = String((noOpMessage.chain as Record<string, unknown>).id);
+    await owner.agent.patch(`/api/im/conversations/${noOpGroup.id}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "API 重复群设置", replyMode: "mention", responseThreshold: 60, maxAiMessages: 20 })
+      .expect(200);
+    expect(runtime.database.get("SELECT status FROM im_chains WHERE id = ?", noOpChainId)).toEqual({ status: "queued" });
 
     await member.agent.post(`/api/im/conversations/${groupId}/announcements`)
       .set("X-CSRF-Token", member.csrfToken)

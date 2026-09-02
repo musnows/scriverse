@@ -1423,7 +1423,7 @@ export class ImService {
       );
   }
 
-  updateGroup(owner: AuthUser, conversationId: string, input: Partial<Pick<ImGroupInput, "title" | "replyMode" | "responseThreshold" | "maxAiMessages">>): Record<string, unknown> {
+  updateGroup(owner: AuthUser, conversationId: string, input: Partial<Pick<ImGroupInput, "title" | "replyMode" | "responseThreshold" | "maxAiMessages">>): { conversation: Record<string, unknown>; changed: boolean } {
     const conversation = this.assertOwner(conversationId, owner.userId);
     if (requiredString(conversation.kind) !== "group") throw new AppError(400, "IM_GROUP_REQUIRED", "单聊不能修改群设置");
     const next = {
@@ -1436,7 +1436,7 @@ export class ImService {
       || next.replyMode !== requiredString(conversation.reply_mode)
       || next.responseThreshold !== Number(conversation.response_threshold)
       || next.maxAiMessages !== Number(conversation.max_ai_messages);
-    if (!changed) return this.getConversation(conversationId, owner.userId);
+    if (!changed) return { conversation: this.getConversation(conversationId, owner.userId), changed: false };
     const timestamp = now();
     this.db.transaction(() => {
       this.cancelActiveChain(conversationId, "group_settings_changed");
@@ -1452,7 +1452,7 @@ export class ImService {
       );
       this.store.audit(null, "im.group-updated", "im-conversation", conversationId, input);
     });
-    return this.getConversation(conversationId, owner.userId);
+    return { conversation: this.getConversation(conversationId, owner.userId), changed: true };
   }
 
   addHuman(owner: AuthUser, conversationId: string, userId: string): Record<string, unknown> {
