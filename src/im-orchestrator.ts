@@ -1275,7 +1275,7 @@ export class ImOrchestrator {
     }
   }
 
-  private finishChain(chainId: string, status: "quiet" | "completed" | "cancelled" | "failed" | "limit", error?: { code: string; message: string }): void {
+  private finishChain(chainId: string, status: "quiet" | "completed" | "cancelled" | "failed" | "interrupted" | "limit", error?: { code: string; message: string }): void {
     const timestamp = now();
     const chain = this.chainRow(chainId);
     this.db.run(
@@ -1401,6 +1401,11 @@ export class ImOrchestrator {
       }
     } catch (error) {
       const failure = publicError(error);
+      if (failure.code === "IM_CHAIN_RUNTIME_RESTARTED") {
+        this.settlePendingReplyTurns(chain, "cancelled", failure);
+        this.finishChain(chainId, "interrupted", failure);
+        return;
+      }
       if (signal.aborted || failure.code === "IM_CHAIN_CANCELLED" || failure.code === "AI_STREAM_REQUEST_CANCELLED") {
         this.settlePendingReplyTurns(chain, "cancelled", failure);
         this.finishChain(chainId, "cancelled", failure);
@@ -1413,7 +1418,24 @@ export class ImOrchestrator {
 
   dispose(): void {
     this.disposed = true;
-    for (const controller of this.controllers.values()) controller.abort(new AppError(499, "IM_CHAIN_CANCELLED", "服务正在关闭"));
+    const interruption = new AppError(503, "IM_CHAIN_RUNTIME_RESTARTED", "服务关闭导致 IM 交流链中断，可从原消息重试");
+    for (const controller of this.controllers.values()) controller.abort(interruption);
+    const timestamp = now();
+    this.db.run(
+      `UPDATE im_chains SET status = 'interrupted', error_code = ?, error_message = ?, updated_at = ?, completed_at = ?
+       WHERE status IN ('queued', 'running')`,
+      interruption.code,
+      interruption.message,
+      timestamp,
+      timestamp
+    );
+    this.db.run(
+      `UPDATE im_chain_turns SET status = 'cancelled', failure = COALESCE(failure, ?), completed_at = ?
+       WHERE chain_id IN (SELECT id FROM im_chains WHERE status = 'interrupted')
+         AND status IN ('pending', 'running')`,
+      `${interruption.code}: ${interruption.message}`,
+      timestamp
+    );
     this.controllers.clear();
     this.streamingReplies.clear();
     this.recipientCache.clear();

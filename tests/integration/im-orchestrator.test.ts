@@ -439,6 +439,53 @@ describe("IM AI 调度", () => {
     )).toEqual({ count: 0 });
   });
 
+  it("优雅关闭把运行链保留为可重试的中断状态", async () => {
+    const responseControl: { release?: () => void } = {};
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-graceful-interruption-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        markStarted?.();
+        await responseGate;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return completion("服务关闭后的迟到结果。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "graceful_interruption_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "优雅关闭来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "优雅关闭角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "等待服务关闭。",
+      requestId: "im-graceful-interruption-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    runtime.imOrchestrator.dispose();
+    responseControl.release?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    expect(runtime.database.get("SELECT status, error_code FROM im_chains WHERE id = ?", chainId)).toEqual({
+      status: "interrupted",
+      error_code: "IM_CHAIN_RUNTIME_RESTARTED"
+    });
+    expect(() => runtime.im.retryChain(owner, String(direct.id), chainId)).not.toThrow();
+  });
+
   it("流式响应中断后按配置次数重试并只重置当前 turn", async () => {
     const encoder = new TextEncoder();
     let primaryCalls = 0;
