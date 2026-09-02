@@ -167,6 +167,14 @@ describe("IM AI 调度", () => {
     unsubscribe();
 
     expect(chain).toMatchObject({ status: "completed", model_stage: "fallback", generated_count: 1 });
+    const sentEvent = events.find((event) => event.type === "message"
+      && (event.payload.message as Record<string, unknown> | undefined)?.id === (sent.message as Record<string, unknown>).id);
+    expect(sentEvent?.payload.chain).toEqual({
+      id: (sent.chain as Record<string, unknown>).id,
+      status: "queued"
+    });
+    expect(JSON.stringify(sentEvent?.payload)).not.toContain("primary_model_id");
+    expect(JSON.stringify(sentEvent?.payload)).not.toContain("fallback_model_id");
     expect(primaryCalls).toBe(3);
     expect(fallbackCalls).toBe(1);
     const messages = runtime.database.all(

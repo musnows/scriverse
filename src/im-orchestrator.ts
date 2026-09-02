@@ -214,10 +214,14 @@ export class ImOrchestrator {
       : null;
     if (!message) return;
     const conversationId = requiredString(message.conversationId);
-    this.publish(conversationId, "message", { message, chain: result.chain ?? null, duplicate: result.duplicate === true });
     const chain = result.chain && typeof result.chain === "object" && !Array.isArray(result.chain)
       ? result.chain as Record<string, unknown>
       : null;
+    this.publish(conversationId, "message", {
+      message,
+      chain: chain ? { id: requiredString(chain.id), status: requiredString(chain.status) } : null,
+      duplicate: result.duplicate === true
+    });
     if (chain && requiredString(chain.status) === "queued") this.enqueue(requiredString(chain.id));
   }
 
