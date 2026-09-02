@@ -9861,7 +9861,11 @@ export class AiManager {
     };
   }
 
-  async generateIm(input: ImAiPromptInput, onDelta?: (delta: string) => void): Promise<GenerateResult> {
+  async generateIm(
+    input: ImAiPromptInput,
+    onDelta?: (delta: string) => void,
+    onStreamReset?: () => void
+  ): Promise<GenerateResult> {
     const roleplayReadTools: AgentToolId[] = [
       "recall_self",
       "recall_relationship",
@@ -9912,10 +9916,10 @@ export class AiManager {
         characterPrompt: input.characterPrompt,
         allowRoleplayMemory: input.allowRoleplayMemory
       }
-    }, input.kind === "reply" ? onDelta : undefined);
+    }, input.kind === "reply" ? onDelta : undefined, input.kind === "reply" ? onStreamReset : undefined);
   }
 
-  async generate(input: GenerateInput, onDelta?: (delta: string) => void): Promise<GenerateResult> {
+  async generate(input: GenerateInput, onDelta?: (delta: string) => void, onStreamReset?: () => void): Promise<GenerateResult> {
     const conversation = input.conversationId
       ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
       : null;
@@ -10355,7 +10359,9 @@ export class AiManager {
             if (error instanceof AppError && error.code === "AI_STREAM_NETWORK_ERROR") {
               retryLimit = aiHttpRetryCount(error.status, requestRetryPolicy);
               retryDelayMs = aiHttpRetryDelayMs(error.status, attempt);
-            } else if (isInteractiveStreamError(error)) retryable = false;
+            } else if (isInteractiveStreamError(error)) {
+              retryable = Boolean(onStreamReset) && error.code !== "AI_STREAM_REQUEST_CANCELLED";
+            }
             if (traceAttempt.status === "running") {
               traceAttempt.completedAt = now();
               traceAttempt.status = "failed";
@@ -10364,16 +10370,21 @@ export class AiManager {
                 : "AI request failed";
               saveTrace();
             }
+            const canRetryAttempt = retryable
+              && attempt <= retryLimit
+              && attempt < maximumAttempts
+              && !input.signal?.aborted
+              && (!attemptEmitted || Boolean(onStreamReset));
             logger.warn("ai.call.attempt_failed", {
               callId,
               attempt,
-              retryable: retryable && !attemptEmitted && attempt <= retryLimit && attempt < maximumAttempts && !input.signal?.aborted,
+              retryable: canRetryAttempt,
               durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000,
               streaming: streamResponse,
               error: aiErrorForLog(error)
             });
-            if (input.signal?.aborted || attemptEmitted) throw error;
-            if (!retryable || attempt > retryLimit || attempt >= maximumAttempts) throw error;
+            if (input.signal?.aborted || !canRetryAttempt) throw error;
+            if (attemptEmitted) onStreamReset?.();
           }
           if (attempt < maximumAttempts) await this.retrySleep(retryDelayMs, input.signal);
         }

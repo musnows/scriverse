@@ -436,11 +436,9 @@ export class ImOrchestrator {
     ].includes(error.code);
   }
 
-  private resetStreamingReply(chainId: string, characterId: string): void {
-    for (const snapshot of this.streamingReplies.values()) {
-      if (requiredString(snapshot.payload.chainId) !== chainId || requiredString(snapshot.payload.characterId) !== characterId) continue;
-      snapshot.payload.content = "";
-    }
+  private resetStreamingReply(turnId: string): void {
+    const snapshot = this.streamingReplies.get(turnId);
+    if (snapshot) snapshot.payload.content = "";
   }
 
   private async invoke(
@@ -451,7 +449,8 @@ export class ImOrchestrator {
     sourceMessage: Record<string, unknown>,
     signal: AbortSignal,
     onDelta?: (delta: string) => void,
-    validateContent?: (content: string) => void
+    validateContent?: (content: string) => void,
+    streamTurnId?: string
   ): Promise<InvocationResult> {
     const conversation = this.conversationRow(requiredString(chain.conversation_id));
     const authorization = this.assertCharacterAuthorization(chain, membership);
@@ -489,7 +488,17 @@ export class ImOrchestrator {
         displayName: authorization.initiator.displayName,
         role: authorization.initiator.role,
         authentication: "session"
-      }, () => this.ai.generateIm({ ...common, modelId }, onDelta));
+      }, () => this.ai.generateIm({ ...common, modelId }, onDelta, streamTurnId ? () => {
+        this.resetStreamingReply(streamTurnId);
+        this.publish(requiredString(chain.conversation_id), "reset", {
+          chainId: requiredString(chain.id),
+          turnId: streamTurnId,
+          reason: "retry",
+          modelStage: stage,
+          kind,
+          characterId: membership.character_id
+        });
+      } : undefined));
       validateContent?.(result.content);
       return {
         callId: result.callId,
@@ -520,9 +529,10 @@ export class ImOrchestrator {
       if (!this.shouldFailover(error) || signal.aborted) throw error;
       const fallbackModelId = optionalString(chain.fallback_model_id);
       if (!fallbackModelId) throw error;
-      this.resetStreamingReply(requiredString(chain.id), requiredString(membership.character_id));
+      if (streamTurnId) this.resetStreamingReply(streamTurnId);
       this.publish(requiredString(chain.conversation_id), "reset", {
         chainId: requiredString(chain.id),
+        ...(streamTurnId ? { turnId: streamTurnId } : {}),
         reason: "fallback",
         modelStage: "fallback",
         kind,
@@ -870,7 +880,9 @@ export class ImOrchestrator {
             characterId: membership.character_id,
             delta
           });
-        }
+        },
+        undefined,
+        turnId
       );
       if (!result.content.trim()) throw new AppError(502, "IM_AI_EMPTY_REPLY", "AI 返回了空消息");
       if (Array.from(result.content).length > IM_MESSAGE_MAX_CHARACTERS) {

@@ -145,6 +145,82 @@ describe("IM AI 调度", () => {
     expect(String(work.id)).toBeTruthy();
   });
 
+  it("流式响应中断后按配置次数重试并只重置当前 turn", async () => {
+    const encoder = new TextEncoder();
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+    const interrupted = (content: string): Response => {
+      let emitted = false;
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (!emitted) {
+            emitted = true;
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`));
+            return;
+          }
+          controller.error(new Error("stream interrupted"));
+        }
+      }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    };
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-partial-stream-retry-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (body.model === "primary-model") {
+          primaryCalls += 1;
+          return interrupted(`主模型残片${primaryCalls}`);
+        }
+        fallbackCalls += 1;
+        return fallbackCalls < 3
+          ? interrupted(`fallback 残片${fallbackCalls}`)
+          : completion("fallback 完整回复。", true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "partial_stream_retry_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "流式重试来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "流式重试角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 3
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => events.push({ type: event.type, payload: event.payload }));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "测试流式中断重试。",
+      requestId: "im-partial-stream-retry-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+    unsubscribe();
+
+    expect(chain).toMatchObject({ status: "completed", model_stage: "fallback", generated_count: 1 });
+    expect(primaryCalls).toBe(3);
+    expect(fallbackCalls).toBe(3);
+    const reply = runtime.database.get(
+      "SELECT content, metadata_json FROM im_messages WHERE conversation_id = ? AND sender_kind = 'character'",
+      String(direct.id)
+    );
+    expect(reply?.content).toBe("fallback 完整回复。");
+    expect(JSON.parse(String(reply?.metadata_json))).toMatchObject({
+      primaryAttemptCount: 3,
+      fallbackAttemptCount: 3,
+      attemptCount: 6
+    });
+    const resetEvents = events.filter((event) => event.type === "reset");
+    expect(resetEvents).toHaveLength(5);
+    expect(new Set(resetEvents.map((event) => event.payload.turnId))).toEqual(new Set([
+      events.find((event) => event.type === "turn" && event.payload.kind === "reply")?.payload.turnId
+    ]));
+  });
+
   it("非 HTTP 可重试错误也遵守每个模型的失败次数", async () => {
     let primaryCalls = 0;
     let fallbackCalls = 0;
