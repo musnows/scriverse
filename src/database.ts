@@ -5372,7 +5372,10 @@ export class Database {
     });
     const imChainRetrySourcePresent = this.all<{ name: string }>("PRAGMA table_info(im_chains)")
       .some((column) => column.name === "retry_source_chain_id");
-    if (!applied.has(130) || !imChainRetrySourcePresent) {
+    const imChainRetrySourceIndexPresent = this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_chains_retry_source'"
+    ) !== undefined;
+    if (!applied.has(130) || !imChainRetrySourcePresent || !imChainRetrySourceIndexPresent) {
       this.transaction(() => {
         if (!imChainRetrySourcePresent) {
           this.run("ALTER TABLE im_chains ADD COLUMN retry_source_chain_id TEXT REFERENCES im_chains(id) ON DELETE SET NULL");

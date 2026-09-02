@@ -204,6 +204,27 @@ describe("数据库版本化迁移", () => {
     migrated.close();
   });
 
+  it("schema 130 自动修复缺失的 IM 重试幂等索引", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-im-retry-index-"));
+    roots.push(root);
+    const filename = join(root, "im-retry-index.db");
+    const current = new Database(filename);
+    current.run("DROP INDEX idx_im_chains_retry_source");
+    expect(current.get(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_chains_retry_source'"
+    )).toBeUndefined();
+    current.close();
+
+    const repaired = new Database(filename);
+    expect(repaired.get(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_chains_retry_source'"
+    )).toEqual({ name: "idx_im_chains_retry_source" });
+    expect(repaired.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 130")).toEqual({ count: 1 });
+    expect(repaired.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(repaired.all("PRAGMA foreign_key_check")).toEqual([]);
+    repaired.close();
+  });
+
   it("迁移 126 创建按作品级联清理的加密远程 MCP 配置表", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-remote-mcp-"));
     roots.push(root);
