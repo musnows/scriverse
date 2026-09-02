@@ -160,6 +160,7 @@ describe("数据库版本化迁移", () => {
     current.run("DROP INDEX idx_im_chains_retry_source");
     current.run("ALTER TABLE im_chains DROP COLUMN retry_source_chain_id");
     current.run("DELETE FROM schema_migrations WHERE version = 130");
+    current.run("DELETE FROM schema_migrations WHERE version = 131");
     current.close();
 
     const migrated = new Database(filename);
@@ -167,6 +168,7 @@ describe("数据库版本化迁移", () => {
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 128")).toEqual({ count: 1 });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 129")).toEqual({ count: 1 });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 130")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 131")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA table_info(im_human_memberships)").map((column) => column.name)).toContain("conversation_snapshot_json");
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'im_avatar_versions'")).toEqual({ name: "im_avatar_versions" });
     expect(migrated.get(
@@ -201,7 +203,22 @@ describe("数据库版本化迁移", () => {
     expect(migrated.get("SELECT status FROM im_chain_turns WHERE id = 'im-turn'")).toEqual({ status: "cancelled" });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.run(
+      "UPDATE character_avatars SET sha256 = ?, storage_key = 'avatars/character-im-new.png' WHERE character_id = 'character-im'",
+      "e".repeat(64)
+    );
+    migrated.run(
+      "UPDATE user_avatars SET sha256 = ?, content = ? WHERE user_id = ?",
+      "f".repeat(64),
+      Buffer.from("next"),
+      SYSTEM_USER_ID
+    );
     migrated.close();
+
+    const restarted = new Database(filename);
+    expect(restarted.get("SELECT COUNT(*) AS count FROM im_avatar_versions WHERE conversation_id = 'im-conversation'")).toEqual({ count: 2 });
+    expect(restarted.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 131")).toEqual({ count: 1 });
+    restarted.close();
   });
 
   it("schema 130 自动修复缺失的 IM 重试幂等索引", () => {
