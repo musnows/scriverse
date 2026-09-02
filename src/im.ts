@@ -1264,9 +1264,12 @@ export class ImService {
     const conversation = this.assertActiveMembership(conversationId, user.userId);
     const source = this.db.get("SELECT * FROM im_chains WHERE id = ? AND conversation_id = ?", sourceChainId, conversationId);
     if (!source) throw notFound("IM 交流链");
+    if (!["failed", "interrupted", "waiting_config"].includes(requiredString(source.status))) {
+      throw new AppError(409, "IM_CHAIN_NOT_RETRYABLE", "只有失败、中断或等待模型配置的 IM 交流链可以重试");
+    }
     const triggerMessageId = requiredString(source.trigger_message_id);
     const trigger = this.db.get(
-      `SELECT message.id FROM im_messages message
+      `SELECT message.id, message.context_epoch FROM im_messages message
        WHERE message.id = ? AND message.conversation_id = ?
          AND EXISTS (
            SELECT 1 FROM im_human_memberships membership
@@ -1278,6 +1281,9 @@ export class ImService {
       user.userId
     );
     if (!trigger) throw new AppError(403, "IM_MESSAGE_ACCESS_DENIED", "不能重试加入群聊前的消息");
+    if (Number(trigger.context_epoch) !== Number(conversation.context_epoch)) {
+      throw new AppError(409, "IM_CHAIN_CONTEXT_CHANGED", "群成员或上下文已经变化，不能重试旧上下文中的交流链");
+    }
     const settings = this.getSettings(user.userId);
     const chainId = id("imChain");
     const timestamp = now();

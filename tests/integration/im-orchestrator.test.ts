@@ -203,6 +203,22 @@ describe("IM AI 调度", () => {
 
     expect(() => runtime.im.retryChain(owner, String(direct.id), "missing-chain", () => { cancellationCalled = true; })).toThrowError("IM 交流链不存在");
     expect(cancellationCalled).toBe(false);
+
+    const waiting = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "等待模型配置",
+      requestId: "im-retry-contract-waiting-0001"
+    });
+    const waitingChainId = String((waiting.chain as Record<string, unknown>).id);
+    runtime.database.run("UPDATE im_chains SET status = 'completed' WHERE id = ?", waitingChainId);
+    expect(() => runtime.im.retryChain(owner, String(direct.id), waitingChainId, () => { cancellationCalled = true; }))
+      .toThrowError("只有失败、中断或等待模型配置的 IM 交流链可以重试");
+    expect(cancellationCalled).toBe(false);
+
+    runtime.database.run("UPDATE im_chains SET status = 'waiting_config' WHERE id = ?", waitingChainId);
+    runtime.database.run("UPDATE im_conversations SET context_epoch = context_epoch + 1 WHERE id = ?", String(direct.id));
+    expect(() => runtime.im.retryChain(owner, String(direct.id), waitingChainId, () => { cancellationCalled = true; }))
+      .toThrowError("群成员或上下文已经变化，不能重试旧上下文中的交流链");
+    expect(cancellationCalled).toBe(false);
   });
 
   it("SSE 重连时重放正在生成气泡的完整流式快照", async () => {
