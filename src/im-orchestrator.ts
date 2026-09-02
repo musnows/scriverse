@@ -449,7 +449,8 @@ export class ImOrchestrator {
     instruction: string,
     sourceMessage: Record<string, unknown>,
     signal: AbortSignal,
-    onDelta?: (delta: string) => void
+    onDelta?: (delta: string) => void,
+    validateContent?: (content: string) => void
   ): Promise<InvocationResult> {
     const conversation = this.conversationRow(requiredString(chain.conversation_id));
     const authorization = this.assertCharacterAuthorization(chain, membership);
@@ -488,6 +489,7 @@ export class ImOrchestrator {
         role: authorization.initiator.role,
         authentication: "session"
       }, () => this.ai.generateIm({ ...common, modelId }, onDelta));
+      validateContent?.(result.content);
       return {
         callId: result.callId,
         attemptCount: result.attemptCount,
@@ -498,10 +500,21 @@ export class ImOrchestrator {
         durationMs: Math.round(Number(process.hrtime.bigint() - started) / 1_000_000)
       };
     };
+    const invokeValidatedModel = async (modelId: string, stage: "primary" | "fallback"): Promise<InvocationResult> => {
+      const semanticAttemptLimit = Math.max(1, Number(chain.retry_count));
+      for (let semanticAttempt = 1; semanticAttempt <= semanticAttemptLimit; semanticAttempt += 1) {
+        try {
+          return await invokeModel(modelId, stage);
+        } catch (error) {
+          if (!(error instanceof AppError) || error.code !== "IM_JUDGE_INVALID_SCORE" || semanticAttempt >= semanticAttemptLimit) throw error;
+        }
+      }
+      throw new AppError(502, "IM_JUDGE_INVALID_SCORE", "AI 没有返回有效的发言意愿分数");
+    };
     const primaryModelId = optionalString(chain.primary_model_id);
     if (!primaryModelId) throw new AppError(409, "IM_MODEL_NOT_CONFIGURED", "主模型未配置");
     try {
-      return await invokeModel(primaryModelId, "primary");
+      return await invokeValidatedModel(primaryModelId, "primary");
     } catch (error) {
       if (!this.shouldFailover(error) || signal.aborted) throw error;
       const fallbackModelId = optionalString(chain.fallback_model_id);
@@ -514,7 +527,8 @@ export class ImOrchestrator {
         kind,
         characterId: membership.character_id
       });
-      const fallback = await invokeModel(fallbackModelId, "fallback");
+      const fallback = await invokeValidatedModel(fallbackModelId, "fallback");
+      this.db.run("UPDATE im_chains SET model_stage = 'fallback', updated_at = ? WHERE id = ?", now(), requiredString(chain.id));
       const details = error instanceof AppError && error.details && typeof error.details === "object"
         ? error.details as Record<string, unknown>
         : {};
@@ -657,7 +671,11 @@ export class ImOrchestrator {
         "judge",
         "根据最新已送达消息和当前角色立场，判断自己现在是否需要发言。",
         sourceMessage,
-        signal
+        signal,
+        undefined,
+        (content) => {
+          if (scoreFromContent(content) === null) throw new AppError(502, "IM_JUDGE_INVALID_SCORE", "AI 没有返回有效的发言意愿分数");
+        }
       );
       const score = scoreFromContent(result.content);
       if (score === null) throw new AppError(502, "IM_JUDGE_INVALID_SCORE", "AI 没有返回有效的发言意愿分数");

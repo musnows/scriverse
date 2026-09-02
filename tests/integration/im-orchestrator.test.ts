@@ -99,7 +99,7 @@ describe("IM AI 调度", () => {
     const chain = await waitForChain(runtime, chainId);
     unsubscribe();
 
-    expect(chain).toMatchObject({ status: "completed", model_stage: "primary", generated_count: 1 });
+    expect(chain).toMatchObject({ status: "completed", model_stage: "fallback", generated_count: 1 });
     expect(primaryCalls).toBe(3);
     expect(fallbackCalls).toBe(1);
     const messages = runtime.database.all(
@@ -571,6 +571,57 @@ describe("IM AI 调度", () => {
       "SELECT sender_character_id, content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
       String(chain.id)
     )).toEqual({ sender_character_id: character.id, content: "我来回答。" });
+  });
+
+  it("judge 语义无效时按失败次数重试主模型并切换 fallback", async () => {
+    let primaryJudgeCalls = 0;
+    let fallbackJudgeCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-invalid-judge-score-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const judge = messages[0]?.content.includes("只判断当前角色现在是否有必要发送一条新消息");
+        if (!judge) return completion("语义校验后的正常回复。", body.stream === true);
+        if (body.model === "primary-model") {
+          primaryJudgeCalls += 1;
+          return completion("不是合法分数", false);
+        }
+        fallbackJudgeCalls += 1;
+        return completion('{"score":100}', false);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "invalid_judge_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "无效判断来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "判断角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 3
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "无效判断群",
+      characterIds: [String(character.id)],
+      replyMode: "proactive",
+      responseThreshold: 60,
+      maxAiMessages: 5
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "请判断是否回答。",
+      requestId: "im-invalid-judge-score-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "quiet", generated_count: 1 });
+    expect(primaryJudgeCalls).toBe(3);
+    expect(fallbackJudgeCalls).toBe(1);
   });
 
   it("主动模式中的 mention 角色优先回复且完全跳过自身发言判断", async () => {
