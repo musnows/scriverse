@@ -476,6 +476,17 @@ describe("IM AI 调度", () => {
     })).toThrowError("当前 IM 会话没有可用的 AI 角色");
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM im_messages WHERE conversation_id = ?", String(direct.id)))
       .toEqual({ count: 0 });
+
+    runtime.store.restoreCharacter(String(character.id), 1);
+    const restoredDirect = runtime.im.createDirect(owner, String(character.id));
+    expect(restoredDirect.id).toBe(direct.id);
+    expect(restoredDirect.participants).toMatchObject({
+      characters: [expect.objectContaining({ characterId: character.id, status: "active" })]
+    });
+    expect(runtime.im.sendMessage(owner, String(direct.id), {
+      content: "恢复后应重新使用既有单聊。",
+      requestId: "im-restored-character-message-0001"
+    }).message).toMatchObject({ content: "恢复后应重新使用既有单聊。" });
   });
 
   it("SSE 重连时重放正在生成气泡的完整流式快照", async () => {

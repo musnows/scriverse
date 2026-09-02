@@ -455,7 +455,11 @@ export class ImService {
       user.userId,
       characterId
     );
-    if (existing) return this.getConversation(requiredString(existing.id), user.userId);
+    if (existing) {
+      const existingConversationId = requiredString(existing.id);
+      this.refreshCharacterAvailability(existingConversationId);
+      return this.getConversation(existingConversationId, user.userId);
+    }
     const conversationId = id("imConversation");
     const timestamp = now();
     this.db.transaction(() => {
@@ -1143,26 +1147,43 @@ export class ImService {
     } catch {
       owner = null;
     }
-    this.db.run(
-      `UPDATE im_character_memberships SET status = 'suspended'
-       WHERE conversation_id = ? AND left_at IS NULL AND character_id IS NULL`,
-      conversationId
-    );
     for (const membership of this.db.all(
-      `SELECT id, character_id FROM im_character_memberships
-       WHERE conversation_id = ? AND left_at IS NULL AND character_id IS NOT NULL`,
+      `SELECT id, character_id, source_work_id, snapshot_json FROM im_character_memberships
+       WHERE conversation_id = ? AND left_at IS NULL`,
       conversationId
     )) {
+      const snapshot = json<Record<string, unknown>>(requiredString(membership.snapshot_json), {});
+      const currentCharacterId = optionalString(membership.character_id);
+      const characterId = currentCharacterId ?? optionalString(snapshot.id);
       let status: "active" | "suspended" = "suspended";
-      if (owner?.status === "active") {
+      let restoredCharacterId: string | null = null;
+      if (owner?.status === "active" && characterId) {
         try {
-          this.assertCharacterAvailable(owner, requiredString(membership.character_id));
-          status = "active";
+          const character = this.assertCharacterAvailable(owner, characterId);
+          const sourceWorkId = optionalString(membership.source_work_id) ?? optionalString(snapshot.workId);
+          if (!sourceWorkId || requiredString(character.workId) === sourceWorkId) {
+            const duplicate = currentCharacterId ? undefined : this.db.get(
+              `SELECT 1 AS present FROM im_character_memberships
+               WHERE conversation_id = ? AND character_id = ? AND left_at IS NULL AND id <> ?`,
+              conversationId,
+              characterId,
+              requiredString(membership.id)
+            );
+            if (!duplicate) {
+              status = "active";
+              restoredCharacterId = characterId;
+            }
+          }
         } catch {
           status = "suspended";
         }
       }
-      this.db.run("UPDATE im_character_memberships SET status = ? WHERE id = ?", status, requiredString(membership.id));
+      this.db.run(
+        "UPDATE im_character_memberships SET character_id = COALESCE(character_id, ?), status = ? WHERE id = ?",
+        restoredCharacterId,
+        status,
+        requiredString(membership.id)
+      );
     }
   }
 
