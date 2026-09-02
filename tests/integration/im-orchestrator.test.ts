@@ -485,6 +485,54 @@ describe("IM AI 调度", () => {
     expect(() => runtime.im.retryChain(owner, String(direct.id), chainId)).not.toThrow();
   });
 
+  it("主动判断请求在关闭时同样保留中断状态", async () => {
+    let markStarted: (() => void) | null = null;
+    const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-judge-shutdown-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        markStarted?.();
+        return await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) reject(new Error("transport aborted"));
+          else signal?.addEventListener("abort", () => reject(new Error("transport aborted")), { once: true });
+        });
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "judge_shutdown_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const characters = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "主动判断关闭来源" });
+      return [
+        runtime.store.createCharacter(String(work.id), { name: "关闭判断角色一" }),
+        runtime.store.createCharacter(String(work.id), { name: "关闭判断角色二" })
+      ];
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "主动判断关闭群",
+      characterIds: characters.map((character) => String(character.id)),
+      replyMode: "proactive"
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "触发主动判断后关闭。",
+      requestId: "im-judge-shutdown-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    await requestStarted;
+    await runtime.imOrchestrator.dispose();
+
+    expect(runtime.database.get("SELECT status, error_code FROM im_chains WHERE id = ?", String((sent.chain as Record<string, unknown>).id)))
+      .toEqual({ status: "interrupted", error_code: "IM_CHAIN_RUNTIME_RESTARTED" });
+  });
+
   it("流式响应中断后按配置次数重试并只重置当前 turn", async () => {
     const encoder = new TextEncoder();
     let primaryCalls = 0;

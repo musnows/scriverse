@@ -48,6 +48,10 @@ function publicError(error: unknown): { code: string; message: string } {
   return { code: "IM_AI_CHAIN_FAILED", message: "IM AI 交流链失败" };
 }
 
+function effectiveAbortError(signal: AbortSignal, error: unknown): unknown {
+  return signal.aborted && signal.reason instanceof Error ? signal.reason : error;
+}
+
 function scoreFromContent(content: string): number | null {
   const candidate = content.match(/\{[\s\S]*\}/u)?.[0] ?? "";
   try {
@@ -527,8 +531,9 @@ export class ImOrchestrator {
         );
         this.finishTurn(turnId, result);
       } catch (error) {
-        this.failTurn(turnId, error);
-        if (signal.aborted) throw error;
+        const effectiveError = effectiveAbortError(signal, error);
+        this.failTurn(turnId, effectiveError, signal.aborted ? "cancelled" : "failed");
+        if (signal.aborted) throw effectiveError;
         if (totalTokens > historyLimit) {
           throw new AppError(502, "IM_CONTEXT_COMPACTION_FAILED", "角色上下文压缩失败，无法在不丢失历史的情况下继续回答");
         }
@@ -1016,8 +1021,9 @@ export class ImOrchestrator {
       });
       return score;
     } catch (error) {
-      this.failTurn(turnId, error);
-      if (signal.aborted) throw error;
+      const effectiveError = effectiveAbortError(signal, error);
+      this.failTurn(turnId, effectiveError, signal.aborted ? "cancelled" : "failed");
+      if (signal.aborted) throw effectiveError;
       return null;
     }
   }
@@ -1256,26 +1262,27 @@ export class ImOrchestrator {
       this.streamingReplies.delete(turnId);
       return this.messageRow(requiredString(message.id));
     } catch (error) {
+      const effectiveError = effectiveAbortError(signal, error);
       if (streamed) this.publish(requiredString(chain.conversation_id), "reset", { chainId: requiredString(chain.id), turnId, reason: "retry" });
-      const failure = publicError(error);
+      const failure = publicError(effectiveError);
       const cancelled = signal.aborted || failure.code === "IM_CHAIN_CANCELLED" || failure.code === "AI_STREAM_REQUEST_CANCELLED";
       const failureForTurn = result ? new AppError(
-        error instanceof AppError ? error.status : 502,
+        effectiveError instanceof AppError ? effectiveError.status : 502,
         failure.code,
         failure.message,
         {
-          ...(error instanceof AppError && error.details && typeof error.details === "object" ? error.details : {}),
+          ...(effectiveError instanceof AppError && effectiveError.details && typeof effectiveError.details === "object" ? effectiveError.details : {}),
           modelRecordId: result.model.id,
           modelStage: result.stage,
           attemptCount: result.primaryAttemptCount + result.attemptCount,
           callId: result.callId,
           callIds: result.callIds
         }
-      ) : error;
+      ) : effectiveError;
       this.failTurn(turnId, failureForTurn, cancelled ? "cancelled" : "failed");
       this.publishReplyTurn(chain, membership, turnId, cancelled ? "cancelled" : "failed", failure);
       this.streamingReplies.delete(turnId);
-      throw error;
+      throw effectiveError;
     }
   }
 
@@ -1408,7 +1415,8 @@ export class ImOrchestrator {
         forcedQueue.unshift(...prioritizedMentions);
       }
     } catch (error) {
-      const failure = publicError(error);
+      const effectiveError = effectiveAbortError(signal, error);
+      const failure = publicError(effectiveError);
       if (failure.code === "IM_CHAIN_RUNTIME_RESTARTED") {
         this.settlePendingReplyTurns(chain, "cancelled", failure);
         this.finishChain(chainId, "interrupted", failure);
