@@ -62,14 +62,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v62");
+    expect(page.text).toContain("feature=global-im-v63");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260902-global-im-v62');
+    expect(application.text).toContain('/im.js?v=20260902-global-im-v63');
     expect(application.text).toContain("createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf })");
     expect(application.text).toContain("imWorkspace.start();");
     expect(application.text).toContain("imWorkspace.activate()");
@@ -132,6 +132,7 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain("#im-details-toggle, #im-details-close { display: none; }");
     expect(styles.text).toContain("#im-details-toggle { display: inline-flex; }");
     expect(styles.text).toContain(".im-group-form fieldset > label");
+    expect(styles.text).toContain("min-height: 0; overflow: hidden; background: var(--paper)");
     expect(im.text).toContain('title: "转让群主", confirmLabel: "确认转让"');
     expect(im.text).toContain('title: "解散群聊", confirmLabel: "确认解散"');
     expect((im.text.match(/const conversationId = current\.id;/gu) ?? []).length).toBeGreaterThanOrEqual(2);

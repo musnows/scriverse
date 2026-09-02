@@ -4708,7 +4708,7 @@ body { font-size: var(--ui-font-size); }
 .im-icon-button:hover, .im-icon-button:focus-visible { border-color: color-mix(in srgb, var(--muted) 62%, var(--line)); background: var(--paper-deep); color: var(--ink); outline: none; }
 #im-details-content > .danger-button, #im-disband { border-color: #c44949; background: color-mix(in srgb, #c44949 15%, var(--surface)); color: color-mix(in srgb, #c44949 78%, var(--ink)); }
 #im-details-content > .danger-button:hover, #im-details-content > .danger-button:focus-visible, #im-disband:hover, #im-disband:focus-visible { background: color-mix(in srgb, #c44949 25%, var(--surface)); }
-.im-view { display: grid; grid-template-columns: var(--im-conversations-width, 300px) minmax(420px, 1fr) minmax(260px, 320px); width: 100%; height: 100%; min-height: 0; background: var(--paper); }
+.im-view { display: grid; grid-template-columns: var(--im-conversations-width, 300px) minmax(420px, 1fr) minmax(260px, 320px); width: 100%; height: 100%; min-height: 0; overflow: hidden; background: var(--paper); }
 .im-conversations, .im-details { min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); background: var(--panel); }
 .im-conversations { position: relative; display: flex; flex-direction: column; }
 .im-conversations-resize-handle { position: absolute; z-index: 8; top: 0; right: -5px; bottom: 0; width: 10px; cursor: ew-resize; touch-action: none; }
