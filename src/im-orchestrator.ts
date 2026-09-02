@@ -263,6 +263,25 @@ export class ImOrchestrator {
     this.publish(conversationId, "chain", { status: "cancelled", reason });
   }
 
+  abortConversationRuns(conversationId: string, reason: string, preservedChainId: string | null): void {
+    this.recipientCache.delete(conversationId);
+    for (const [chainId, controller] of this.controllers) {
+      if (chainId === preservedChainId) continue;
+      const chain = this.db.get("SELECT conversation_id FROM im_chains WHERE id = ?", chainId);
+      if (requiredString(chain?.conversation_id) === conversationId) {
+        controller.abort(new AppError(499, "IM_CHAIN_CANCELLED", reason));
+      }
+    }
+    for (let index = this.queuedChainIds.length - 1; index >= 0; index -= 1) {
+      const chainId = this.queuedChainIds[index];
+      if (!chainId || chainId === preservedChainId) continue;
+      const chain = this.db.get("SELECT conversation_id FROM im_chains WHERE id = ?", chainId);
+      if (requiredString(chain?.conversation_id) !== conversationId) continue;
+      this.queuedChainIds.splice(index, 1);
+      this.queuedChainSet.delete(chainId);
+    }
+  }
+
   private drain(): void {
     if (this.disposed) return;
     for (let index = 0; index < this.queuedChainIds.length;) {

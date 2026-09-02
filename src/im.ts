@@ -1849,7 +1849,7 @@ export class ImService {
     );
   }
 
-  sendMessage(user: AuthUser, conversationId: string, input: ImMessageInput, beforeCreate?: () => void): Record<string, unknown> {
+  sendMessage(user: AuthUser, conversationId: string, input: ImMessageInput, afterCreate?: (chainId: string | null) => void): Record<string, unknown> {
     const conversation = this.assertActiveMembership(conversationId, user.userId);
     this.refreshCharacterAvailability(conversationId);
     const existing = this.db.get(
@@ -1878,7 +1878,6 @@ export class ImService {
       throw new AppError(409, "IM_CHARACTER_UNAVAILABLE", "当前 IM 会话没有可用的 AI 角色，无法发送消息");
     }
     const mentions = this.validatedMentions(conversationId, input.content);
-    beforeCreate?.();
     const settings = this.getSettings(user.userId);
     const mode = requiredString(conversation.kind) === "direct"
       ? "direct"
@@ -1891,7 +1890,7 @@ export class ImService {
     const messageId = id("imMessage");
     const chainId = shouldCreateChain ? id("imChain") : null;
     const timestamp = now();
-    return this.db.transaction(() => {
+    const result = this.db.transaction(() => {
       this.cancelActiveChain(conversationId, "human_message_received");
       this.captureHumanAvatarVersion(conversationId, user.userId, timestamp);
       const sequence = this.nextSequence(conversationId);
@@ -1967,6 +1966,8 @@ export class ImService {
       if (!message) throw notFound("IM 消息");
       return { message: this.mapMessage(message), chain, duplicate: false };
     });
+    afterCreate?.(chainId);
+    return result;
   }
 
   publishAnnouncement(owner: AuthUser, conversationId: string, input: ImMessageInput): Record<string, unknown> {
@@ -2064,7 +2065,7 @@ export class ImService {
     this.db.transaction(() => this.cancelActiveChain(conversationId, "stopped_by_user"));
   }
 
-  retryChain(user: AuthUser, conversationId: string, sourceChainId: string, beforeCreate?: () => void): Record<string, unknown> {
+  retryChain(user: AuthUser, conversationId: string, sourceChainId: string, afterCreate?: (chainId: string) => void): Record<string, unknown> {
     const conversation = this.assertActiveMembership(conversationId, user.userId);
     const source = this.db.get("SELECT * FROM im_chains WHERE id = ? AND conversation_id = ?", sourceChainId, conversationId);
     if (!source) throw notFound("IM 交流链");
@@ -2101,8 +2102,7 @@ export class ImService {
     const mode = requiredString(conversation.kind) === "direct"
       ? "direct"
       : requiredString(conversation.reply_mode) === "proactive" ? "proactive" : "mention";
-    beforeCreate?.();
-    return this.db.transaction(() => {
+    const result = this.db.transaction(() => {
       this.cancelActiveChain(conversationId, "manual_retry");
       const configured = Boolean(settings.primaryModelId && settings.fallbackModelId);
       this.db.run(
@@ -2131,6 +2131,8 @@ export class ImService {
       this.store.audit(null, "im.chain-retried", "im-chain", chainId, { sourceChainId, conversationId, triggerMessageId });
       return this.db.get("SELECT * FROM im_chains WHERE id = ?", chainId) ?? {};
     });
+    afterCreate?.(chainId);
+    return result;
   }
 
   getDiagnostics(owner: AuthUser, conversationId: string): Record<string, unknown> {

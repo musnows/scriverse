@@ -2176,8 +2176,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }).strict(), request.body);
     const current = im.getConversation(request.params.conversationId, user.userId);
     if (current.active !== true) throw new AppError(403, "IM_MEMBERSHIP_INACTIVE", "你已经退出这个 IM 会话");
-    const result = im.sendMessage(user, request.params.conversationId, input, () => {
-      imOrchestrator.cancelConversation(request.params.conversationId, "human_message_received");
+    const result = im.sendMessage(user, request.params.conversationId, input, (chainId) => {
+      imOrchestrator.abortConversationRuns(request.params.conversationId, "human_message_received", chainId);
     });
     imOrchestrator.publishMessageResult(result);
     data(response, result, 201);
@@ -2211,8 +2211,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/im/conversations/:conversationId/chains/:chainId/retry", (request, response) => {
     const user = requireImUser(request);
     parse(z.object({}).strict(), request.body ?? {});
-    const chain = im.retryChain(user, request.params.conversationId, request.params.chainId, () => {
-      imOrchestrator.cancelConversation(request.params.conversationId, "manual_retry");
+    const chain = im.retryChain(user, request.params.conversationId, request.params.chainId, (chainId) => {
+      imOrchestrator.abortConversationRuns(request.params.conversationId, "manual_retry", chainId);
     });
     if (String(chain.status) === "queued") imOrchestrator.enqueue(String(chain.id));
     imOrchestrator.publishConversation(request.params.conversationId);

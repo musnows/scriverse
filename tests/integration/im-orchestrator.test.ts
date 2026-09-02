@@ -447,6 +447,78 @@ describe("IM AI 调度", () => {
     )).toEqual({ count: 0 });
   });
 
+  it("消息或重试写入回滚时不提前中止原活动链", () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-atomic-replacement-secret-with-enough-length",
+      serveUi: false
+    });
+    const owner = runtime.auth.register({ username: "atomic_replacement_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "原子替换活动链作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "原子替换角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const first = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "保留第一条活动链。",
+      requestId: "im-atomic-replacement-0001"
+    });
+    const firstChainId = String((first.chain as Record<string, unknown>).id);
+    const originalAudit = runtime.store.audit.bind(runtime.store);
+    let messageAbortCalled = false;
+    runtime.store.audit = (_workId, action) => {
+      if (action === "im.message-sent") throw new Error("forced IM message audit failure");
+      originalAudit(_workId, action, "im-test", null);
+    };
+    try {
+      expect(() => runtime.im.sendMessage(owner, String(direct.id), {
+        content: "这条消息必须完整回滚。",
+        requestId: "im-atomic-replacement-0002"
+      }, () => { messageAbortCalled = true; })).toThrow(/forced IM message audit failure/u);
+    } finally {
+      runtime.store.audit = originalAudit;
+    }
+    expect(messageAbortCalled).toBe(false);
+    expect(runtime.database.get("SELECT status FROM im_chains WHERE id = ?", firstChainId)).toEqual({ status: "queued" });
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM im_messages WHERE conversation_id = ?", String(direct.id)))
+      .toEqual({ count: 1 });
+
+    const second = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "建立第二条活动链。",
+      requestId: "im-atomic-replacement-0003"
+    });
+    const secondChainId = String((second.chain as Record<string, unknown>).id);
+    runtime.database.run(
+      "UPDATE im_chains SET status = 'failed', completed_at = ?, updated_at = ? WHERE id = ?",
+      "2026-09-03T00:00:00.000Z",
+      "2026-09-03T00:00:00.000Z",
+      firstChainId
+    );
+    let retryAbortCalled = false;
+    runtime.store.audit = (_workId, action) => {
+      if (action === "im.chain-retried") throw new Error("forced IM retry audit failure");
+      originalAudit(_workId, action, "im-test", null);
+    };
+    try {
+      expect(() => runtime.im.retryChain(owner, String(direct.id), firstChainId, () => { retryAbortCalled = true; }))
+        .toThrow(/forced IM retry audit failure/u);
+    } finally {
+      runtime.store.audit = originalAudit;
+    }
+    expect(retryAbortCalled).toBe(false);
+    expect(runtime.database.get("SELECT status FROM im_chains WHERE id = ?", secondChainId)).toEqual({ status: "queued" });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_chains WHERE retry_source_chain_id = ?",
+      firstChainId
+    )).toEqual({ count: 0 });
+  });
+
   it("停止后不接受忽略 abort 的迟到主动判断结果", async () => {
     const responseControl: { release?: () => void } = {};
     let markStarted: (() => void) | null = null;
