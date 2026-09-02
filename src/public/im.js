@@ -125,6 +125,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let conversationNextCursor = null;
   let conversationUnreadTotal = 0;
   let conversationPageLoading = false;
+  let unreadRequest = 0;
   let current = null;
   let works = [];
   let createCharacters = [];
@@ -271,7 +272,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   async function refreshUnreadTotal() {
+    const request = ++unreadRequest;
     const totals = await api("/api/im/unread");
+    if (request !== unreadRequest) return;
     conversationUnreadTotal = Number(totals.unreadCount ?? 0);
     renderUnread();
   }
@@ -281,6 +284,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const page = await api("/api/im/conversations?limit=50");
     if (request !== conversationListRequest) return;
     conversations = array(page.items ?? page);
+    if (current && !conversations.some((conversation) => conversation.id === current.id)) conversations.push(current);
     conversationNextCursor = page.nextCursor ?? null;
     conversationUnreadTotal = Number(page.unreadCount ?? conversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0));
     renderUnread();
@@ -1220,7 +1224,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.addEventListener("visibilitychange", () => {
       if (!current || !shouldMarkImConversationRead(opened, document.visibilityState) || !current.active || current.latestSequence <= 0) return;
       void api(`/api/im/conversations/${encodeURIComponent(current.id)}/read`, { method: "POST", body: { sequence: current.latestSequence } })
-        .then(upsertConversationSummary)
+        .then(async (summary) => {
+          upsertConversationSummary(summary);
+          await refreshUnreadTotal();
+        })
         .catch(() => undefined);
     });
     document.querySelector("#im-create-search").addEventListener("input", () => {
