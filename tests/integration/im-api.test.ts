@@ -148,17 +148,30 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ primaryModelId: models.primaryModelId, fallbackModelId: models.primaryModelId })
       .expect(400);
+    await owner.agent.patch("/api/im/settings")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ fallbackModelId: null })
+      .expect(200);
     runtime.database.run("UPDATE models SET enabled = 0 WHERE id = ?", models.fallbackModelId);
     await owner.agent.patch("/api/im/settings")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ fallbackModelId: models.fallbackModelId })
       .expect(400);
     runtime.database.run("UPDATE models SET enabled = 1 WHERE id = ?", models.fallbackModelId);
-    runtime.database.run("UPDATE providers SET connection_status = 'failed' WHERE id = 'provider-im'");
     await owner.agent.patch("/api/im/settings")
       .set("X-CSRF-Token", owner.csrfToken)
-      .send({ primaryModelId: models.primaryModelId })
-      .expect(400);
+      .send({ fallbackModelId: models.fallbackModelId })
+      .expect(200);
+    runtime.database.run("UPDATE providers SET connection_status = 'failed' WHERE id = 'provider-im'");
+    const identityOnlyUpdate = await owner.agent.patch("/api/im/settings")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ preferredName: "模型失效时仍可改身份", primaryModelId: models.primaryModelId, fallbackModelId: models.fallbackModelId })
+      .expect(200);
+    expect(identityOnlyUpdate.body.data).toMatchObject({
+      preferredName: "模型失效时仍可改身份",
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId
+    });
     runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = 'provider-im'");
 
     const direct = await owner.agent.post("/api/im/conversations/direct")

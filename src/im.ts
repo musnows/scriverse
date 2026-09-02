@@ -165,8 +165,8 @@ export class ImService {
     const current = this.getSettings(userId);
     const primaryModelId = input.primaryModelId === undefined ? current.primaryModelId as string | null : input.primaryModelId;
     const fallbackModelId = input.fallbackModelId === undefined ? current.fallbackModelId as string | null : input.fallbackModelId;
-    if (primaryModelId) this.assertModel(primaryModelId);
-    if (fallbackModelId) this.assertModel(fallbackModelId);
+    if (input.primaryModelId !== undefined && primaryModelId !== current.primaryModelId && primaryModelId) this.assertModel(primaryModelId);
+    if (input.fallbackModelId !== undefined && fallbackModelId !== current.fallbackModelId && fallbackModelId) this.assertModel(fallbackModelId);
     if (primaryModelId && fallbackModelId && primaryModelId === fallbackModelId) {
       throw new AppError(400, "IM_FALLBACK_MODEL_DUPLICATE", "主模型和 fallback 模型不能相同");
     }

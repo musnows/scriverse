@@ -656,8 +656,14 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#im-setting-pronouns").value = settings.pronouns || "";
     document.querySelector("#im-setting-identity").value = settings.identitySummary || "";
     document.querySelector("#im-setting-notes").value = settings.additionalNotes || "";
-    document.querySelector("#im-setting-primary").innerHTML = '<option value="">选择主模型</option>' + models.map((model) => `<option value="${esc(model.id)}" ${settings.primaryModelId === model.id ? "selected" : ""}>${esc(model.displayName)} · ${esc(model.providerName)}</option>`).join("");
-    document.querySelector("#im-setting-fallback").innerHTML = '<option value="">选择 fallback 模型</option>' + models.map((model) => `<option value="${esc(model.id)}" ${settings.fallbackModelId === model.id ? "selected" : ""}>${esc(model.displayName)} · ${esc(model.providerName)}</option>`).join("");
+    const modelOptions = (selectedId, placeholder) => {
+      const unavailable = selectedId && !models.some((model) => model.id === selectedId)
+        ? `<option value="${esc(selectedId)}" selected>当前模型暂不可用 · ${esc(selectedId)}</option>`
+        : "";
+      return `<option value="">${placeholder}</option>${unavailable}${models.map((model) => `<option value="${esc(model.id)}" ${selectedId === model.id ? "selected" : ""}>${esc(model.displayName)} · ${esc(model.providerName)}</option>`).join("")}`;
+    };
+    document.querySelector("#im-setting-primary").innerHTML = modelOptions(settings.primaryModelId, "选择主模型");
+    document.querySelector("#im-setting-fallback").innerHTML = modelOptions(settings.fallbackModelId, "选择 fallback 模型");
     document.querySelector("#im-setting-retries").value = String(settings.retryCount || 3);
     dialog.showModal();
   }
