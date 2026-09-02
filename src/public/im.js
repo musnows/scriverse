@@ -846,7 +846,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
           const detail = memberAddKind === "character"
             ? `${characterPreferenceBadges(item)}${item.code ? `<em>${esc(item.code)}</em>` : ""}<span>${esc(item.workTitle)}</span>`
             : `<span>@${esc(item.username)}</span>`;
-          return `<button class="im-member-picker-option" type="button" role="option" aria-selected="${selected}" data-im-member-add-candidate="${esc(candidateId)}">${imAvatarHtml(item, memberAddKind === "character" ? "character" : "user", "im-member-picker-avatar")}<span><strong>${esc(memberAddKind === "character" ? item.name : item.displayName)}</strong><small>${detail}</small></span></button>`;
+          return `<button class="im-member-picker-option" type="button" aria-pressed="${selected}" data-im-member-add-candidate="${esc(candidateId)}">${imAvatarHtml(item, memberAddKind === "character" ? "character" : "user", "im-member-picker-avatar")}<span><strong>${esc(memberAddKind === "character" ? item.name : item.displayName)}</strong><small>${detail}</small></span></button>`;
         }).join("")
       : `<p class="im-empty">${emptyText}</p>`;
     bindImAvatarFallbacks(host);

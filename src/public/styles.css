@@ -4860,7 +4860,7 @@ body.is-im-composer-resizing { cursor: ns-resize; user-select: none; }
 .im-member-picker-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 7px; min-height: 92px; max-height: 340px; overflow-y: auto; }
 .im-member-picker-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; min-width: 0; min-height: 54px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); text-align: left; transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease; }
 .im-member-picker-option:hover, .im-member-picker-option:focus-visible { border-color: color-mix(in srgb, var(--accent) 62%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--surface)); outline: none; }
-.im-member-picker-option[aria-selected="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); box-shadow: inset 3px 0 0 var(--accent); }
+.im-member-picker-option[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); box-shadow: inset 3px 0 0 var(--accent); }
 .im-member-picker-option > span:last-child { display: grid; min-width: 0; gap: 3px; }
 .im-member-picker-option strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .im-member-picker-option small { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; color: var(--muted); font-size: 8px; line-height: 1.45; }
