@@ -73,6 +73,15 @@ export function shouldFollowImFeed(scrollHeight, scrollTop, clientHeight, force 
   return force === true || Number(scrollHeight) - Number(scrollTop) - Number(clientHeight) < 80;
 }
 
+export function mergeImMessagePages(previousMessages, nextMessages) {
+  const byId = new Map();
+  for (const message of [...array(previousMessages), ...array(nextMessages)]) {
+    const key = String(message?.id || `sequence:${Number(message?.sequence)}`);
+    byId.set(key, message);
+  }
+  return [...byId.values()].sort((left, right) => Number(left.sequence) - Number(right.sequence));
+}
+
 export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf }) {
   const workspace = document.querySelector("#im-view");
   const listHost = document.querySelector("#im-conversation-list");
@@ -586,7 +595,12 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       throw error;
     }
     if (request !== conversationRequest || (requestedConversationId && requestedConversationId !== conversationId)) return;
-    const conversationChanged = current?.id !== conversationId;
+    const previousConversation = current?.id === conversationId ? current : null;
+    const conversationChanged = !previousConversation;
+    if (previousConversation) {
+      nextConversation.messages = mergeImMessagePages(previousConversation.messages, nextConversation.messages);
+      nextConversation.hasMoreMessages = previousConversation.hasMoreMessages === true;
+    }
     current = nextConversation;
     if (requestedConversationId === conversationId) requestedConversationId = null;
     workspace.classList.add("has-conversation");

@@ -18,6 +18,11 @@ export function findImMentionQuery(text: string, caretOffset?: number): {
 
 export function shouldFollowImFeed(scrollHeight: number, scrollTop: number, clientHeight: number, force?: boolean): boolean;
 
+export function mergeImMessagePages(
+  previousMessages: Array<Record<string, unknown>>,
+  nextMessages: Array<Record<string, unknown>>
+): Array<Record<string, unknown>>;
+
 export function createImWorkspace(options: Record<string, unknown>): {
   start(): Promise<void>;
   open(): Promise<void>;

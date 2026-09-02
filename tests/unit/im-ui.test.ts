@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findImMentionQuery, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
+import { findImMentionQuery, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -45,5 +45,13 @@ describe("IM 编辑区域尺寸", () => {
     expect(shouldFollowImFeed(1000, 720, 240)).toBe(true);
     expect(shouldFollowImFeed(1000, 300, 240)).toBe(false);
     expect(shouldFollowImFeed(1000, 300, 240, true)).toBe(true);
+  });
+
+  it("实时刷新时合并已加载的旧页与服务端最新页", () => {
+    const previous = Array.from({ length: 59 }, (_, index) => ({ id: `message-${index + 1}`, sequence: index + 1 }));
+    const latest = Array.from({ length: 50 }, (_, index) => ({ id: `message-${index + 11}`, sequence: index + 11 }));
+    expect(mergeImMessagePages(previous, latest).map((message) => message.sequence)).toEqual(
+      Array.from({ length: 60 }, (_, index) => index + 1)
+    );
   });
 });
