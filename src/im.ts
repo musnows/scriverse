@@ -709,7 +709,7 @@ export class ImService {
   getConversation(conversationId: string, userId: string, beforeSequence?: number): Record<string, unknown> {
     const row = this.assertReadableConversation(conversationId, userId);
     const viewerMembership = this.db.get(
-      `SELECT joined_sequence, left_sequence FROM im_human_memberships
+      `SELECT joined_sequence, left_sequence, joined_at, left_at FROM im_human_memberships
        WHERE conversation_id = ? AND user_id = ?
        ORDER BY joined_sequence DESC, joined_at DESC LIMIT 1`,
       conversationId,
@@ -725,11 +725,16 @@ export class ImService {
        FROM im_chains chain JOIN im_messages trigger ON trigger.id = chain.trigger_message_id
        WHERE chain.conversation_id = ? AND trigger.sequence > ?
          AND (? IS NULL OR trigger.sequence <= ?)
+         AND chain.created_at >= ?
+         AND (? IS NULL OR chain.created_at <= ?)
        ORDER BY chain.created_at DESC LIMIT 1`,
       conversationId,
       Number(viewerMembership.joined_sequence),
       viewerLeftSequence,
-      viewerLeftSequence
+      viewerLeftSequence,
+      requiredString(viewerMembership.joined_at),
+      optionalString(viewerMembership.left_at),
+      optionalString(viewerMembership.left_at)
     );
     const replyTurns = activeChain ? this.db.all(
       `SELECT turn.*, membership.character_id, membership.snapshot_json

@@ -321,6 +321,16 @@ describe("全局 IM API", () => {
       .expect(204);
     const readOnly = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(readOnly.body.data.active).toBe(false);
+    runtime.database.run(
+      "UPDATE im_chains SET status = 'waiting_config', created_at = ?, updated_at = ? WHERE id = ?",
+      "9999-12-31T23:59:59.999Z",
+      "9999-12-31T23:59:59.999Z",
+      firstMessage.body.data.chain.id
+    );
+    const ownerRetryView = await owner.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(ownerRetryView.body.data.activeChain?.id).toBe(firstMessage.body.data.chain.id);
+    const departedRetryView = await lateMember.agent.get(`/api/im/conversations/${groupId}`).expect(200);
+    expect(departedRetryView.body.data.activeChain).toBeNull();
     const postDepartureAvatarSha256 = "d".repeat(64);
     runtime.store.setCharacterAvatar(pinnedCharacter.body.data.id, {
       mimeType: "image/png",
