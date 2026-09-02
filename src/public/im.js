@@ -261,13 +261,15 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   function messageHtml(message) {
     let source = String(message.content ?? "");
     const tokens = [];
-    let index = 0;
-    source = source.replace(mentionPattern, (raw) => {
-      const mention = array(message.mentions)[index];
-      if (!mention) return raw;
-      const token = `IMMENTION${String(message.id).replace(/[^A-Za-z0-9]/gu, "")}TOKEN${index}END`;
+    const mentions = array(message.mentions);
+    const consumedMentions = new Set();
+    source = source.replace(mentionPattern, (raw, kind, id) => {
+      const mentionIndex = mentions.findIndex((mention, index) => !consumedMentions.has(index) && mention.kind === kind && mention.id === id);
+      if (mentionIndex < 0) return raw;
+      const mention = mentions[mentionIndex];
+      consumedMentions.add(mentionIndex);
+      const token = `IMMENTION${String(message.id).replace(/[^A-Za-z0-9]/gu, "")}TOKEN${mentionIndex}END`;
       tokens.push({ token, mention });
-      index += 1;
       return token;
     });
     let html = renderMarkdown(source);
