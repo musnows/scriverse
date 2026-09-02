@@ -11,6 +11,7 @@ export const IM_MAX_HUMAN_PARTICIPANTS = 50;
 export const IM_DEFAULT_RESPONSE_THRESHOLD = 60;
 export const IM_DEFAULT_MAX_AI_MESSAGES = 20;
 export const IM_DEFAULT_RETRY_COUNT = 3;
+export const IM_MAX_MENTIONS_PER_MESSAGE = 50;
 
 export type ImReplyMode = "mention" | "proactive";
 export type ImMention = {
@@ -1582,38 +1583,53 @@ export class ImService {
   }
 
   private validatedMentions(conversationId: string, content: string): Array<ImMention & { snapshot: Record<string, unknown>; membershipId?: string }> {
+    const mentions = parseImMentions(content);
+    if (mentions.length > IM_MAX_MENTIONS_PER_MESSAGE) {
+      throw new AppError(400, "IM_MENTION_LIMIT_EXCEEDED", `单条 IM 消息最多允许 ${IM_MAX_MENTIONS_PER_MESSAGE} 个 mention`);
+    }
+    const userIds = [...new Set(mentions.filter((mention) => mention.kind === "user").map((mention) => mention.id))];
+    const characterIds = [...new Set(mentions.filter((mention) => mention.kind === "character").map((mention) => mention.id))];
+    const users = new Map<string, Record<string, unknown>>();
+    if (userIds.length > 0) {
+      const placeholders = userIds.map(() => "?").join(", ");
+      for (const row of this.db.all(
+        `SELECT user.id, user.username, user.display_name, user.avatar_sha256
+         FROM im_human_memberships membership JOIN users user ON user.id = membership.user_id
+         WHERE membership.conversation_id = ? AND membership.user_id IN (${placeholders}) AND membership.left_at IS NULL`,
+        conversationId,
+        ...userIds
+      )) users.set(requiredString(row.id), row);
+    }
+    const characters = new Map<string, Record<string, unknown>>();
+    if (characterIds.length > 0) {
+      const placeholders = characterIds.map(() => "?").join(", ");
+      for (const row of this.db.all(
+        `SELECT * FROM im_character_memberships
+         WHERE conversation_id = ? AND character_id IN (${placeholders}) AND left_at IS NULL AND status = 'active'`,
+        conversationId,
+        ...characterIds
+      )) characters.set(requiredString(row.character_id), row);
+    }
     const result: Array<ImMention & { snapshot: Record<string, unknown>; membershipId?: string }> = [];
-    for (const mention of parseImMentions(content)) {
+    for (const mention of mentions) {
       if (mention.kind === "user") {
-        const row = this.db.get(
-          `SELECT user.id, user.username, user.display_name, user.avatar_sha256
-           FROM im_human_memberships membership JOIN users user ON user.id = membership.user_id
-           WHERE membership.conversation_id = ? AND membership.user_id = ? AND membership.left_at IS NULL`,
-          conversationId,
-          mention.id
-        );
-        if (!row) continue;
-        result.push({ ...mention, snapshot: {
+        const row = users.get(mention.id);
+        if (row) result.push({ ...mention, snapshot: {
           userId: requiredString(row.id),
           username: requiredString(row.username),
           displayName: requiredString(row.display_name),
           avatarUrl: row.avatar_sha256
             ? `/api/user-avatars/${encodeURIComponent(requiredString(row.id))}?v=${encodeURIComponent(requiredString(row.avatar_sha256))}`
-            : null
+            : null,
+          avatarSha256: optionalString(row.avatar_sha256)
         } });
         continue;
       }
-      const row = this.db.get(
-        `SELECT * FROM im_character_memberships
-         WHERE conversation_id = ? AND character_id = ? AND left_at IS NULL AND status = 'active'`,
-        conversationId,
-        mention.id
-      );
-      if (!row) continue;
-      result.push({
+      const row = characters.get(mention.id);
+      if (row) result.push({
         ...mention,
         membershipId: requiredString(row.id),
-        snapshot: json(requiredString(row.snapshot_json), {})
+        snapshot: json<Record<string, unknown>>(requiredString(row.snapshot_json), {})
       });
     }
     return result;

@@ -301,6 +301,14 @@ describe("全局 IM API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ content: "公告不能作为普通消息幂等命中", requestId: "im-announcement-request-0001" })
       .expect(409);
+    const mentionOverflow = await owner.agent.post(`/api/im/conversations/${groupId}/messages`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        content: Array.from({ length: 51 }, () => `mention://character/${character.body.data.id}`).join(" "),
+        requestId: "im-message-mention-overflow-0001"
+      })
+      .expect(400);
+    expect(mentionOverflow.body.error.code).toBe("IM_MENTION_LIMIT_EXCEEDED");
 
     const memberView = await member.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(memberView.body.data.messages).toHaveLength(2);

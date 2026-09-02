@@ -921,10 +921,10 @@ describe("IM AI 调度", () => {
     });
     runtime.imOrchestrator.publishMessageResult(sent);
     const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
-    const turn = runtime.database.get("SELECT failure FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'", String(chain.id));
+    const turn = runtime.database.get("SELECT failure, attempt_count FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'", String(chain.id));
 
     expect(chain).toMatchObject({ status: "failed", error_code: "IM_AI_CHAIN_FAILED", error_message: "IM AI 交流链失败" });
-    expect(turn).toEqual({ failure: "IM_AI_CHAIN_FAILED: IM AI 交流链失败" });
+    expect(turn).toEqual({ failure: "IM_AI_CHAIN_FAILED: IM AI 交流链失败", attempt_count: 0 });
     expect(JSON.stringify({ chain, turn })).not.toContain("sensitive");
   });
 
@@ -1020,6 +1020,101 @@ describe("IM AI 调度", () => {
       "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
       String(chain.id)
     )).toEqual({ content: "fallback 长度正常。" });
+  });
+
+  it("同一模型重试无效流式输出前重置当前回复气泡", async () => {
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-output-validation-reset-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (body.model === "primary-model") {
+          primaryCalls += 1;
+          return completion(primaryCalls === 1 ? "长".repeat(20_001) : "第二次有效回复。", body.stream === true);
+        }
+        fallbackCalls += 1;
+        return completion("不应进入 fallback。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "output_validation_reset_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "无效输出重置来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "无效输出重置角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 2
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => events.push({ type: event.type, payload: event.payload }));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "验证输出重试重置。",
+      requestId: "im-output-validation-reset-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+    unsubscribe();
+
+    expect(chain).toMatchObject({ status: "completed", model_stage: "primary", generated_count: 1 });
+    expect(primaryCalls).toBe(2);
+    expect(fallbackCalls).toBe(0);
+    const resetEvents = events.filter((event) => event.type === "reset");
+    expect(resetEvents).toHaveLength(1);
+    expect(resetEvents[0]?.payload).toMatchObject({ reason: "output_validation_retry", modelStage: "primary" });
+    expect(resetEvents[0]?.payload.turnId).toBeTruthy();
+    expect(runtime.database.get(
+      "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      String(chain.id)
+    )).toEqual({ content: "第二次有效回复。" });
+  });
+
+  it("AI 输出 mention 超限时切换 fallback 且不逐项查询", async () => {
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-output-mention-limit-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (body.model === "primary-model") {
+          primaryCalls += 1;
+          return completion(Array.from({ length: 51 }, () => "mention://user/nonexistent").join(" "), body.stream === true);
+        }
+        fallbackCalls += 1;
+        return completion("fallback mention 数量正常。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "output_mention_limit_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "输出 Mention 限制来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "输出 Mention 限制角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "验证输出 mention 限制。",
+      requestId: "im-output-mention-limit-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "completed", model_stage: "fallback", generated_count: 1 });
+    expect(primaryCalls).toBe(1);
+    expect(fallbackCalls).toBe(1);
   });
 
   it("主模型回复空白时切换 fallback 生成有效消息", async () => {

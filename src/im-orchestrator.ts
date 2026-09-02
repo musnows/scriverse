@@ -4,7 +4,7 @@ import type { Store } from "./store.js";
 import type { AuthUser, UserAuthService } from "./user-auth.js";
 import { runWithRequestActor } from "./request-context.js";
 import { id, json, now } from "./utils.js";
-import { ImService, parseImMentions } from "./im.js";
+import { IM_MAX_MENTIONS_PER_MESSAGE, ImService, parseImMentions } from "./im.js";
 import { canReadWorkModule, type WorkModulePermissions } from "./work-permissions.js";
 
 export type ImRealtimeEvent = {
@@ -662,6 +662,11 @@ export class ImOrchestrator {
         ...(typeof details.callId === "string" ? [details.callId] : [])
       ])];
     };
+    const recordedAttemptCount = (details: Record<string, unknown>, fallback: number): number => (
+      Object.prototype.hasOwnProperty.call(details, "attemptCount") && Number.isFinite(Number(details.attemptCount))
+        ? Math.max(0, Number(details.attemptCount))
+        : fallback
+    );
     const enrichedError = (
       error: unknown,
       stage: "primary" | "fallback",
@@ -691,6 +696,7 @@ export class ImOrchestrator {
         "IM_JUDGE_INVALID_SCORE",
         "IM_AI_EMPTY_REPLY",
         "IM_AI_REPLY_TOO_LONG",
+        "IM_AI_MENTION_LIMIT_EXCEEDED",
         "IM_AI_EMPTY_COMPACTION",
         "AI_CALL_FAILED"
       ]);
@@ -712,7 +718,20 @@ export class ImOrchestrator {
           const consumedAttempts = Math.max(0, Number(details.attemptCount) || 0);
           attemptCount += consumedAttempts;
           if (error instanceof AppError && retryableOutputCodes.has(error.code)
-            && consumedAttempts > 0 && attemptCount < semanticAttemptLimit) continue;
+            && consumedAttempts > 0 && attemptCount < semanticAttemptLimit) {
+            if (streamTurnId) {
+              this.resetStreamingReply(streamTurnId);
+              this.publish(requiredString(chain.conversation_id), "reset", {
+                chainId: requiredString(chain.id),
+                turnId: streamTurnId,
+                reason: "output_validation_retry",
+                modelStage: stage,
+                kind,
+                characterId: membership.character_id
+              });
+            }
+            continue;
+          }
           throw enrichedError(error, stage, callIds, attemptCount, 0, modelId);
         }
       }
@@ -740,7 +759,7 @@ export class ImOrchestrator {
       this.db.run("UPDATE im_chains SET model_stage = 'fallback', updated_at = ? WHERE id = ?", now(), requiredString(chain.id));
       const primaryDetails = errorDetails(error);
       const primaryCallIds = errorCallIds(error);
-      const primaryAttemptCount = Number(primaryDetails.attemptCount) || Number(chain.retry_count);
+      const primaryAttemptCount = recordedAttemptCount(primaryDetails, Number(chain.retry_count));
       try {
         const fallback = await invokeValidatedModel(fallbackModelId, "fallback");
         return {
@@ -751,7 +770,7 @@ export class ImOrchestrator {
       } catch (fallbackError) {
         const fallbackDetails = errorDetails(fallbackError);
         const fallbackCallIds = errorCallIds(fallbackError);
-        const fallbackAttemptCount = Number(fallbackDetails.attemptCount) || Number(chain.retry_count);
+        const fallbackAttemptCount = recordedAttemptCount(fallbackDetails, Number(chain.retry_count));
         throw enrichedError(
           fallbackError,
           "fallback",
@@ -947,30 +966,53 @@ export class ImOrchestrator {
     snapshot: Record<string, unknown>;
     membershipId?: string;
   }> {
-    const result: Array<{ kind: "character" | "user"; id: string; snapshot: Record<string, unknown>; membershipId?: string }> = [];
-    for (const mention of parseImMentions(content)) {
-      if (mention.kind === "character") {
-        const row = this.db.get(
-          `SELECT * FROM im_character_memberships
-           WHERE conversation_id = ? AND character_id = ? AND left_at IS NULL AND status = 'active'`,
-          conversationId,
-          mention.id
-        );
-        if (!row) continue;
-        result.push({ kind: mention.kind, id: mention.id, membershipId: requiredString(row.id), snapshot: json(requiredString(row.snapshot_json), {}) });
-        continue;
-      }
-      const row = this.db.get(
+    const mentions = parseImMentions(content);
+    if (mentions.length > IM_MAX_MENTIONS_PER_MESSAGE) {
+      throw new AppError(502, "IM_AI_MENTION_LIMIT_EXCEEDED", `AI 回复超过 ${IM_MAX_MENTIONS_PER_MESSAGE} 个 mention，未写入会话`);
+    }
+    const characterIds = [...new Set(mentions.filter((mention) => mention.kind === "character").map((mention) => mention.id))];
+    const userIds = [...new Set(mentions.filter((mention) => mention.kind === "user").map((mention) => mention.id))];
+    const characters = new Map<string, Record<string, unknown>>();
+    if (characterIds.length > 0) {
+      const placeholders = characterIds.map(() => "?").join(", ");
+      for (const row of this.db.all(
+        `SELECT * FROM im_character_memberships
+         WHERE conversation_id = ? AND character_id IN (${placeholders}) AND left_at IS NULL AND status = 'active'`,
+        conversationId,
+        ...characterIds
+      )) characters.set(requiredString(row.character_id), row);
+    }
+    const users = new Map<string, Record<string, unknown>>();
+    if (userIds.length > 0) {
+      const placeholders = userIds.map(() => "?").join(", ");
+      for (const row of this.db.all(
         `SELECT user.id, user.username, user.display_name, user.avatar_sha256
          FROM im_human_memberships membership JOIN users user ON user.id = membership.user_id
-         WHERE membership.conversation_id = ? AND membership.user_id = ? AND membership.left_at IS NULL`,
+         WHERE membership.conversation_id = ? AND membership.user_id IN (${placeholders}) AND membership.left_at IS NULL`,
         conversationId,
-        mention.id
-      );
-      if (!row) continue;
-      result.push({ kind: mention.kind, id: mention.id, snapshot: {
-        userId: requiredString(row.id), username: requiredString(row.username), displayName: requiredString(row.display_name), avatarUrl: null
-      } });
+        ...userIds
+      )) users.set(requiredString(row.id), row);
+    }
+    const result: Array<{ kind: "character" | "user"; id: string; snapshot: Record<string, unknown>; membershipId?: string }> = [];
+    for (const mention of mentions) {
+      if (mention.kind === "character") {
+        const row = characters.get(mention.id);
+        if (row) result.push({
+          kind: mention.kind,
+          id: mention.id,
+          membershipId: requiredString(row.id),
+          snapshot: json<Record<string, unknown>>(requiredString(row.snapshot_json), {})
+        });
+        continue;
+      }
+      const row = users.get(mention.id);
+      if (row) result.push({ kind: mention.kind, id: mention.id, snapshot: {
+          userId: requiredString(row.id),
+          username: requiredString(row.username),
+          displayName: requiredString(row.display_name),
+          avatarUrl: null,
+          avatarSha256: optionalString(row.avatar_sha256)
+        } });
     }
     return result;
   }
@@ -1117,6 +1159,9 @@ export class ImOrchestrator {
           if (!content.trim()) throw new AppError(502, "IM_AI_EMPTY_REPLY", "AI 返回了空消息");
           if (Array.from(content).length > IM_MESSAGE_MAX_CHARACTERS) {
             throw new AppError(502, "IM_AI_REPLY_TOO_LONG", `AI 回复超过 ${IM_MESSAGE_MAX_CHARACTERS} 字符，未写入会话`);
+          }
+          if (parseImMentions(content).length > IM_MAX_MENTIONS_PER_MESSAGE) {
+            throw new AppError(502, "IM_AI_MENTION_LIMIT_EXCEEDED", `AI 回复超过 ${IM_MAX_MENTIONS_PER_MESSAGE} 个 mention，未写入会话`);
           }
         },
         turnId
