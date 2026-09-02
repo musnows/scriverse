@@ -2558,6 +2558,8 @@ describe("IM AI 调度", () => {
       String((announcement.message as Record<string, unknown>).id)
     )).toEqual({ count: 2 });
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM im_chains WHERE conversation_id = ?", String(group.id))).toEqual({ count: 0 });
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => events.push({ type: event.type, payload: event.payload }));
     const sent = runtime.im.sendMessage(owner, String(group.id), {
       content: "谁来安排今天的航线？",
       requestId: "im-proactive-request-0001"
@@ -2565,6 +2567,7 @@ describe("IM AI 调度", () => {
     runtime.imOrchestrator.publishMessageResult(sent);
     const chainId = String((sent.chain as Record<string, unknown>).id);
     const chain = await waitForChain(runtime, chainId);
+    unsubscribe();
     expect(chain).toMatchObject({ status: "limit", generated_count: 2 });
     expect(requestPrompts.length).toBeGreaterThanOrEqual(4);
     expect(requestPrompts.every((prompt) => prompt.includes("[1] 旁白：远方的风暴正在逼近，甲板开始剧烈摇晃。"))).toBe(true);
@@ -2581,6 +2584,8 @@ describe("IM AI 调度", () => {
       { character_id: characters[0]?.id, score: 85, selected: 1 },
       { character_id: characters[1]?.id, score: 75, selected: 1 }
     ]);
+    expect(events.filter((event) => event.type === "turn" && event.payload.kind === "judge" && event.payload.selected === true))
+      .toHaveLength(2);
     const characterMessages = runtime.database.all(
       "SELECT sender_character_id, sender_snapshot_json, content FROM im_messages WHERE conversation_id = ? AND sender_kind = 'character' ORDER BY sequence",
       String(group.id)

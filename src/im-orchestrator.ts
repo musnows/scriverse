@@ -1450,16 +1450,33 @@ export class ImOrchestrator {
           for (const item of selected) {
             const selectedReply = this.planReplyTurn(chain, item.membershipId, requiredString(sourceMessage.id));
             forcedQueue.push(selectedReply);
-            this.db.run(
-              `UPDATE im_chain_turns SET selected = 1
-               WHERE id = (
-                 SELECT id FROM im_chain_turns
-                 WHERE chain_id = ? AND character_membership_id = ? AND kind = 'judge' AND status = 'completed'
-                 ORDER BY created_at DESC, id DESC LIMIT 1
-              )`,
+            const judgeTurn = this.db.get(
+              `SELECT id FROM im_chain_turns
+               WHERE chain_id = ? AND character_membership_id = ? AND kind = 'judge' AND status = 'completed'
+               ORDER BY created_at DESC, id DESC LIMIT 1`,
               chainId,
               selectedReply.membershipId
             );
+            if (judgeTurn) {
+              const judgeTurnId = requiredString(judgeTurn.id);
+              const selectedMembership = this.characterMembership(selectedReply.membershipId);
+              this.db.run("UPDATE im_chain_turns SET selected = 1 WHERE id = ?", judgeTurnId);
+              this.publishToUser(requiredString(chain.authorization_user_id), {
+                id: id("imEvent"),
+                type: "turn",
+                conversationId,
+                payload: {
+                  chainId,
+                  turnId: judgeTurnId,
+                  kind: "judge",
+                  characterId: selectedMembership.character_id,
+                  score: item.score,
+                  selected: true,
+                  status: "completed"
+                },
+                createdAt: now()
+              });
+            }
           }
           plannedReply = forcedQueue.shift() ?? null;
           if (!plannedReply) throw new AppError(500, "IM_REPLY_QUEUE_EMPTY", "主动交流没有生成可执行的角色回复队列");
