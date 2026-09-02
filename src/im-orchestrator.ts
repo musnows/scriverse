@@ -395,7 +395,9 @@ export class ImOrchestrator {
         sourceMessage,
         signal,
         undefined,
-        undefined,
+        (content) => {
+          if (!content.trim()) throw new AppError(502, "IM_AI_EMPTY_COMPACTION", "AI 返回了空白的角色上下文摘要");
+        },
         undefined,
         { history: compactHistory, summary: requiredString(context?.summary) }
       );
@@ -1016,6 +1018,7 @@ export class ImOrchestrator {
           });
         },
         (content) => {
+          if (!content.trim()) throw new AppError(502, "IM_AI_EMPTY_REPLY", "AI 返回了空消息");
           if (Array.from(content).length > IM_MESSAGE_MAX_CHARACTERS) {
             throw new AppError(502, "IM_AI_REPLY_TOO_LONG", `AI 回复超过 ${IM_MESSAGE_MAX_CHARACTERS} 字符，未写入会话`);
           }

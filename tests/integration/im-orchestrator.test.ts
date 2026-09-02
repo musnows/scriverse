@@ -477,6 +477,8 @@ describe("IM AI 调度", () => {
 
   it("按实际送入模型的最早完整历史推进角色压缩游标", async () => {
     let compactPrompt = "";
+    let primaryCompactCalls = 0;
+    let fallbackCompactCalls = 0;
     runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "im-compaction-prefix-secret-with-enough-length",
@@ -487,6 +489,11 @@ describe("IM AI 调度", () => {
         const prompt = messages.map((message) => message.content).join("\n");
         if (prompt.includes("只把已送达给当前角色的 IM 历史压缩")) {
           compactPrompt = prompt;
+          if (body.model === "primary-model") {
+            primaryCompactCalls += 1;
+            return completion("   ", false);
+          }
+          fallbackCompactCalls += 1;
           return completion("已压缩的完整前缀摘要。", false);
         }
         return completion("压缩后继续回答。", body.stream === true);
@@ -526,12 +533,70 @@ describe("IM AI 调度", () => {
     expect(chain.generated_count).toBe(1);
     expect(compactPrompt).toContain("[1] 旁白：公告编号 001");
     expect(compactPrompt).toContain("[62] 旁白：公告编号 062");
+    expect(primaryCompactCalls).toBe(1);
+    expect(fallbackCompactCalls).toBe(1);
     expect(runtime.database.get(
       `SELECT context.summarized_through_sequence FROM im_character_contexts context
        JOIN im_character_memberships membership ON membership.id = context.character_membership_id
        WHERE membership.conversation_id = ?`,
       String(group.id)
     )).toEqual({ summarized_through_sequence: 62 });
+  });
+
+  it("主模型和 fallback 都返回空白摘要时不推进压缩游标", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-empty-compaction-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const compact = messages.some((message) => message.content.includes("只把已送达给当前角色的 IM 历史压缩"));
+        return completion(compact ? " \n " : "压缩失败后仍正常回复。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "empty_compaction_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "空白压缩来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "空白压缩角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "空白压缩群",
+      characterIds: [String(character.id)],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    for (let index = 1; index <= 61; index += 1) {
+      runtime.im.publishAnnouncement(owner, String(group.id), {
+        content: `空白压缩公告 ${index}`,
+        requestId: `im-empty-compaction-announcement-${index}`
+      });
+    }
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://character/${character.id} 继续。`,
+      requestId: "im-empty-compaction-message-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain.generated_count).toBe(1);
+    expect(runtime.database.get(
+      `SELECT COUNT(*) AS count FROM im_character_contexts context
+       JOIN im_character_memberships membership ON membership.id = context.character_membership_id
+       WHERE membership.conversation_id = ?`,
+      String(group.id)
+    )).toEqual({ count: 0 });
+    expect(runtime.database.get(
+      "SELECT failure FROM im_chain_turns WHERE chain_id = ? AND kind = 'compact'",
+      String(chain.id)
+    )).toEqual({ failure: expect.any(String) });
   });
 
   it("在角色生成前发布气泡状态并把最终错误保留在角色 turn 中", async () => {
@@ -664,6 +729,52 @@ describe("IM AI 调度", () => {
       "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
       String(chain.id)
     )).toEqual({ content: "fallback 长度正常。" });
+  });
+
+  it("主模型回复空白时切换 fallback 生成有效消息", async () => {
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-primary-empty-fallback-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (body.model === "primary-model") {
+          primaryCalls += 1;
+          return completion(" \n ", body.stream === true);
+        }
+        fallbackCalls += 1;
+        return completion("fallback 有效回复。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "primary_empty_fallback_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "空白 fallback 来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "空白 fallback 角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const direct = runtime.im.createDirect(owner, String(character.id));
+    const sent = runtime.im.sendMessage(owner, String(direct.id), {
+      content: "生成非空回复。",
+      requestId: "im-primary-empty-fallback-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "completed", model_stage: "fallback", generated_count: 1 });
+    expect(primaryCalls).toBe(1);
+    expect(fallbackCalls).toBe(1);
+    expect(runtime.database.get(
+      "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      String(chain.id)
+    )).toEqual({ content: "fallback 有效回复。" });
   });
 
   it("一个角色回答失败时继续执行同批其他角色", async () => {
