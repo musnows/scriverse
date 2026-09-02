@@ -145,6 +145,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   const conversationSummaryRequests = new Map();
   let conversationRequest = 0;
   let diagnosticsRequest = 0;
+  let ownerConfirmationPending = false;
   let requestedConversationId = null;
   let models = [];
   let settings = null;
@@ -627,6 +628,14 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     }
   }
 
+  async function refreshAfterMutation(label, action) {
+    try {
+      await action();
+    } catch (error) {
+      toast(`${label}已完成，但刷新界面失败：${error.message}`, "error");
+    }
+  }
+
   function bindDetailActions(owner) {
     const threshold = document.querySelector("#im-detail-threshold");
     threshold?.addEventListener("input", () => { document.querySelector("#im-detail-threshold-output").textContent = threshold.value; });
@@ -638,7 +647,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         responseThreshold: Number(document.querySelector("#im-detail-threshold").value),
         maxAiMessages: Number(document.querySelector("#im-detail-limit").value)
       } }));
-      if (result.ok && current?.id === conversationId) await openConversation(conversationId);
+      if (result.ok && current?.id === conversationId) await refreshAfterMutation("群设置保存", () => openConversation(conversationId));
     });
     document.querySelectorAll("[data-im-open-member-add]").forEach((button) => button.addEventListener("click", () => openMemberAddDialog(button.dataset.imOpenMemberAdd)));
     document.querySelectorAll("[data-im-toggle-member-edit]").forEach((button) => button.addEventListener("click", () => {
@@ -650,46 +659,74 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelectorAll("[data-im-remove-human]").forEach((button) => button.addEventListener("click", async () => {
       const conversationId = current.id;
       const result = await performMutation(button, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/humans/${encodeURIComponent(button.dataset.imRemoveHuman)}`, { method: "DELETE", body: {} }));
-      if (result.ok && current?.id === conversationId) await openConversation(conversationId);
+      if (result.ok && current?.id === conversationId) await refreshAfterMutation("成员移除", () => openConversation(conversationId));
     }));
     document.querySelectorAll("[data-im-remove-character]").forEach((button) => button.addEventListener("click", async () => {
       const conversationId = current.id;
       const result = await performMutation(button, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(button.dataset.imRemoveCharacter)}`, { method: "DELETE", body: {} }));
-      if (result.ok && current?.id === conversationId) await openConversation(conversationId);
+      if (result.ok && current?.id === conversationId) await refreshAfterMutation("角色移除", () => openConversation(conversationId));
     }));
     document.querySelector("#im-transfer")?.addEventListener("click", async () => {
+      if (ownerConfirmationPending) return;
       const userId = document.querySelector("#im-transfer-select").value;
       if (!userId) return;
+      const button = document.querySelector("#im-transfer");
       const nextOwner = activeHumans().find((item) => item.userId === userId);
       const conversationId = current.id;
       const conversationTitle = current.title;
-      if (!await confirmToast(
-        `确认把群聊“${conversationTitle}”的群主转让给“${nextOwner?.displayName || nextOwner?.username || "所选成员"}”吗？转让后你将失去群主专属操作权限。`,
-        { title: "转让群主", confirmLabel: "确认转让" }
-      )) return;
-      const result = await performMutation(document.querySelector("#im-transfer"), () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/transfer`, { method: "POST", body: { userId } }));
+      ownerConfirmationPending = true;
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      let confirmed = false;
+      try {
+        confirmed = await confirmToast(
+          `确认把群聊“${conversationTitle}”的群主转让给“${nextOwner?.displayName || nextOwner?.username || "所选成员"}”吗？转让后你将失去群主专属操作权限。`,
+          { title: "转让群主", confirmLabel: "确认转让" }
+        );
+      } catch (error) {
+        toast(error.message, "error");
+      } finally {
+        ownerConfirmationPending = false;
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+      }
+      if (!confirmed) return;
+      const result = await performMutation(button, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/transfer`, { method: "POST", body: { userId } }));
       if (!result.ok) return;
-      if (current?.id === conversationId) await openConversation(conversationId);
-      else await refreshConversations();
+      await refreshAfterMutation("群主转让", () => current?.id === conversationId ? openConversation(conversationId) : refreshConversations());
       toast("群主已转让", "success");
     });
     document.querySelector("#im-disband")?.addEventListener("click", async () => {
+      if (ownerConfirmationPending) return;
+      const button = document.querySelector("#im-disband");
       const conversationId = current.id;
       const conversationTitle = current.title;
-      if (!await confirmToast(
-        `确认解散群聊“${conversationTitle}”吗？解散后所有成员只能查看各自可见的历史，群聊不能恢复。`,
-        { title: "解散群聊", confirmLabel: "确认解散" }
-      )) return;
-      const result = await performMutation(document.querySelector("#im-disband"), () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/disband`, { method: "POST", body: {} }));
+      ownerConfirmationPending = true;
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      let confirmed = false;
+      try {
+        confirmed = await confirmToast(
+          `确认解散群聊“${conversationTitle}”吗？解散后所有成员只能查看各自可见的历史，群聊不能恢复。`,
+          { title: "解散群聊", confirmLabel: "确认解散" }
+        );
+      } catch (error) {
+        toast(error.message, "error");
+      } finally {
+        ownerConfirmationPending = false;
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+      }
+      if (!confirmed) return;
+      const result = await performMutation(button, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/disband`, { method: "POST", body: {} }));
       if (!result.ok) return;
-      if (current?.id === conversationId) await openConversation(conversationId);
-      else await refreshConversations();
+      await refreshAfterMutation("群聊解散", () => current?.id === conversationId ? openConversation(conversationId) : refreshConversations());
       toast("群聊已解散", "success");
     });
     document.querySelector("#im-leave")?.addEventListener("click", async (event) => {
       const conversationId = current.id;
       const result = await performMutation(event.currentTarget, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/leave`, { method: "POST", body: {} }));
-      if (result.ok && current?.id === conversationId) await openConversation(conversationId);
+      if (result.ok && current?.id === conversationId) await refreshAfterMutation("退出群聊", () => openConversation(conversationId));
     });
     if (!owner) return;
   }
@@ -1341,7 +1378,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const result = await performMutation(event.currentTarget, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/stop`, { method: "POST", body: {} }));
       if (!result.ok) return;
       provisionalReplies.clear();
-      if (current?.id === conversationId) await openConversation(conversationId);
+      if (current?.id === conversationId) await refreshAfterMutation("停止 AI", () => openConversation(conversationId));
     });
     document.querySelector("#im-retry").addEventListener("click", async (event) => {
       if (!current?.activeChain?.id) return;
@@ -1350,7 +1387,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const conversationId = current.id;
       const chainId = current.activeChain.id;
       const result = await performMutation(button, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/chains/${encodeURIComponent(chainId)}/retry`, { method: "POST", body: {} }));
-      if (result.ok && current?.id === conversationId) await openConversation(conversationId);
+      if (result.ok && current?.id === conversationId) await refreshAfterMutation("AI 重试", () => openConversation(conversationId));
     });
     document.querySelector("#im-details-toggle").addEventListener("click", (event) => {
       const expanded = document.querySelector("#im-details").classList.toggle("is-open");
@@ -1422,7 +1459,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       settings = result.value;
       document.querySelector("#im-settings-dialog").close();
       toast("IM 身份与模型设置已保存", "success");
-      if (current?.activeChain?.status === "waiting_config") await openConversation(current.id);
+      if (current?.activeChain?.status === "waiting_config") {
+        const conversationId = current.id;
+        await refreshAfterMutation("IM 设置保存", () => openConversation(conversationId));
+      }
     });
     document.querySelector("#im-announcement-form").addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -1438,7 +1478,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
           body: { content, requestId: requestId() }
         });
         document.querySelector("#im-announcement-dialog").close();
-        if (current?.id === conversationId) await openConversation(conversationId);
+        if (current?.id === conversationId) await refreshAfterMutation("旁白公告发布", () => openConversation(conversationId));
         toast("旁白公告已发布", "success");
       } catch (error) {
         toast(error.message, "error");
@@ -1459,7 +1499,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         const body = memberAddKind === "character" ? { characterId: selectedId } : { userId: selectedId };
         await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/${path}`, { method: "POST", body });
         document.querySelector("#im-member-add-dialog").close();
-        if (current?.id === conversationId) await openConversation(conversationId);
+        if (current?.id === conversationId) await refreshAfterMutation("成员添加", () => openConversation(conversationId));
         toast(memberAddKind === "character" ? "角色已加入群聊" : "用户已加入群聊", "success");
       } catch (error) {
         toast(error.message, "error");
@@ -1486,8 +1526,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       if (!result.ok) return;
       const conversation = result.value;
       document.querySelector("#im-group-dialog").close();
-      await refreshConversations();
-      await openConversation(conversation.id);
+      await refreshAfterMutation("会话创建", async () => {
+        await refreshConversations();
+        await openConversation(conversation.id);
+      });
     });
     document.querySelectorAll("[data-im-dialog-close]").forEach((button) => button.addEventListener("click", () => button.closest("dialog")?.close()));
   }

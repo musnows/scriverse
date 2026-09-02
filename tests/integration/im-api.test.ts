@@ -555,6 +555,17 @@ describe("全局 IM API", () => {
       lateMember.user.userId
     ]));
     expect(zeroMessageHistory.body.data.participants.characters.map((item: { characterId: string }) => item.characterId)).toContain(character.body.data.id);
+    runtime.database.run("UPDATE im_conversations SET updated_at = '9999-09-02T00:00:00.000Z' WHERE id = ?", groupId);
+    const firstFrozenPage = (await lateMember.agent.get("/api/im/conversations?limit=1").expect(200)).body.data;
+    const secondFrozenPage = (await lateMember.agent.get(
+      `/api/im/conversations?limit=1&cursor=${encodeURIComponent(firstFrozenPage.nextCursor)}`
+    ).expect(200)).body.data;
+    const frozenPages = [...firstFrozenPage.items, ...secondFrozenPage.items];
+    expect(new Set(frozenPages.map((item: { id: string }) => item.id))).toEqual(new Set([
+      groupId,
+      zeroMessageGroup.body.data.id
+    ]));
+    expect(frozenPages.find((item: { id: string }) => item.id === groupId).updatedAt).toBe(readOnly.body.data.updatedAt);
 
     const pagedGroup = await owner.agent.post("/api/im/conversations/group")
       .set("X-CSRF-Token", owner.csrfToken)
