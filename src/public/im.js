@@ -1334,6 +1334,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
 
   async function open() {
     start();
+    await Promise.all([loadCatalogs(), refreshConversations()]);
+    if (current) await openConversation(current.id);
+    else renderConversation();
     if (!opened && beforeOpen && !await beforeOpen()) return false;
     opened = true;
     hideMainViews();
@@ -1344,10 +1347,18 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.title = "IM · 叙界";
     window.history.replaceState(null, "", "#view=im");
     onRouteChange?.();
-    await Promise.all([loadCatalogs(), refreshConversations()]);
     if (!eventSource) connectEvents();
-    if (current) await openConversation(current.id);
-    else renderConversation();
+    if (current?.active && current.latestSequence > 0 && shouldMarkImConversationRead(opened, document.visibilityState)) {
+      const conversationId = current.id;
+      const sequence = current.latestSequence;
+      void api(`/api/im/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: { sequence } })
+        .then((summary) => {
+          upsertConversationSummary(summary);
+          void refreshUnreadTotal().catch(() => undefined);
+        })
+        .catch((error) => toast(`IM 已打开，但标记已读失败：${error.message}`, "error"));
+    }
+    return true;
   }
 
   function close() {
