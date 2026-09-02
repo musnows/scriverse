@@ -73,13 +73,24 @@ export function shouldFollowImFeed(scrollHeight, scrollTop, clientHeight, force 
   return force === true || Number(scrollHeight) - Number(scrollTop) - Number(clientHeight) < 80;
 }
 
-export function mergeImMessagePages(previousMessages, nextMessages) {
+export function mergeImMessagePages(previousMessages, ...nextPages) {
   const byId = new Map();
-  for (const message of [...array(previousMessages), ...array(nextMessages)]) {
+  for (const message of [...array(previousMessages), ...nextPages.flatMap(array)]) {
     const key = String(message?.id || `sequence:${Number(message?.sequence)}`);
     byId.set(key, message);
   }
   return [...byId.values()].sort((left, right) => Number(left.sequence) - Number(right.sequence));
+}
+
+export function imMessageSequenceBounds(messages) {
+  const sequences = array(messages).map((message) => Number(message?.sequence)).filter(Number.isFinite);
+  return sequences.length ? { minimum: Math.min(...sequences), maximum: Math.max(...sequences) } : null;
+}
+
+export function hasImMessageSequenceGap(previousMessages, nextMessages) {
+  const previous = imMessageSequenceBounds(previousMessages);
+  const next = imMessageSequenceBounds(nextMessages);
+  return Boolean(previous && next && previous.maximum + 1 < next.minimum);
 }
 
 export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToast, state, showShelf }) {
@@ -598,7 +609,22 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const previousConversation = current?.id === conversationId ? current : null;
     const conversationChanged = !previousConversation;
     if (previousConversation) {
-      nextConversation.messages = mergeImMessagePages(previousConversation.messages, nextConversation.messages);
+      const gapMessages = [];
+      const nextBounds = imMessageSequenceBounds(nextConversation.messages);
+      let cursor = imMessageSequenceBounds(previousConversation.messages)?.maximum ?? 0;
+      while (nextBounds && cursor + 1 < nextBounds.minimum) {
+        const page = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}?afterSequence=${encodeURIComponent(cursor)}`);
+        if (request !== conversationRequest || (requestedConversationId && requestedConversationId !== conversationId)) return;
+        const messages = array(page.messages);
+        const pageBounds = imMessageSequenceBounds(messages);
+        if (!pageBounds || pageBounds.maximum <= cursor) throw new Error("IM 历史消息补齐失败，请重试");
+        gapMessages.push(...messages);
+        cursor = pageBounds.maximum;
+        if (page.hasMoreMessagesAfter !== true && cursor + 1 < nextBounds.minimum) {
+          throw new Error("IM 历史消息存在缺口，请重新打开会话");
+        }
+      }
+      nextConversation.messages = mergeImMessagePages(previousConversation.messages, gapMessages, nextConversation.messages);
       nextConversation.hasMoreMessages = previousConversation.hasMoreMessages === true;
     }
     current = nextConversation;

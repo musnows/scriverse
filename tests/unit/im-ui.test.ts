@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findImMentionQuery, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
+import { findImMentionQuery, hasImMessageSequenceGap, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -53,5 +53,13 @@ describe("IM 编辑区域尺寸", () => {
     expect(mergeImMessagePages(previous, latest).map((message) => message.sequence)).toEqual(
       Array.from({ length: 60 }, (_, index) => index + 1)
     );
+  });
+
+  it("识别断线期间超过一页的新消息缺口", () => {
+    const previous = Array.from({ length: 50 }, (_, index) => ({ id: `old-${index + 1}`, sequence: index + 1 }));
+    const latest = Array.from({ length: 50 }, (_, index) => ({ id: `new-${index + 102}`, sequence: index + 102 }));
+    const gap = Array.from({ length: 51 }, (_, index) => ({ id: `gap-${index + 51}`, sequence: index + 51 }));
+    expect(hasImMessageSequenceGap(previous, latest)).toBe(true);
+    expect(hasImMessageSequenceGap(mergeImMessagePages(previous, gap), latest)).toBe(false);
   });
 });

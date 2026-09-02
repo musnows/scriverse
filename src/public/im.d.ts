@@ -20,8 +20,18 @@ export function shouldFollowImFeed(scrollHeight: number, scrollTop: number, clie
 
 export function mergeImMessagePages(
   previousMessages: Array<Record<string, unknown>>,
-  nextMessages: Array<Record<string, unknown>>
+  ...nextPages: Array<Array<Record<string, unknown>>>
 ): Array<Record<string, unknown>>;
+
+export function imMessageSequenceBounds(messages: Array<Record<string, unknown>>): {
+  minimum: number;
+  maximum: number;
+} | null;
+
+export function hasImMessageSequenceGap(
+  previousMessages: Array<Record<string, unknown>>,
+  nextMessages: Array<Record<string, unknown>>
+): boolean;
 
 export function createImWorkspace(options: Record<string, unknown>): {
   start(): Promise<void>;

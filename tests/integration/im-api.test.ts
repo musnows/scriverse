@@ -489,6 +489,15 @@ describe("全局 IM API", () => {
     const oldestPage = await owner.agent.get(`/api/im/conversations/${pagedGroup.body.data.id}?beforeSequence=6`).expect(200);
     expect(oldestPage.body.data.hasMoreMessages).toBe(false);
     expect(oldestPage.body.data.messages.map((message: { sequence: number }) => message.sequence)).toEqual([1, 2, 3, 4, 5]);
+    const firstForwardPage = await owner.agent.get(`/api/im/conversations/${pagedGroup.body.data.id}?afterSequence=1`).expect(200);
+    expect(firstForwardPage.body.data.hasMoreMessagesAfter).toBe(true);
+    expect(firstForwardPage.body.data.messages).toHaveLength(50);
+    expect(firstForwardPage.body.data.messages[0].sequence).toBe(2);
+    expect(firstForwardPage.body.data.messages.at(-1).sequence).toBe(51);
+    const secondForwardPage = await owner.agent.get(`/api/im/conversations/${pagedGroup.body.data.id}?afterSequence=51`).expect(200);
+    expect(secondForwardPage.body.data.hasMoreMessagesAfter).toBe(false);
+    expect(secondForwardPage.body.data.messages.map((message: { sequence: number }) => message.sequence)).toEqual([52, 53, 54, 55]);
+    await owner.agent.get(`/api/im/conversations/${pagedGroup.body.data.id}?beforeSequence=6&afterSequence=1`).expect(400);
 
     await owner.agent.post(`/api/im/conversations/${groupId}/transfer`)
       .set("X-CSRF-Token", owner.csrfToken)

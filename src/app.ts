@@ -1985,8 +1985,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/im/conversations/:conversationId", (request, response) => {
     const user = requireImUser(request);
-    const query = parse(z.object({ beforeSequence: z.coerce.number().int().positive().optional() }).strict(), request.query);
-    const conversation = im.getConversation(request.params.conversationId, user.userId, query.beforeSequence);
+    const query = parse(z.object({
+      beforeSequence: z.coerce.number().int().positive().optional(),
+      afterSequence: z.coerce.number().int().nonnegative().optional()
+    }).strict().refine((value) => value.beforeSequence === undefined || value.afterSequence === undefined, {
+      message: "beforeSequence 和 afterSequence 不能同时使用"
+    }), request.query);
+    const conversation = im.getConversation(request.params.conversationId, user.userId, query.beforeSequence, query.afterSequence);
     const activeChain = conversation.activeChain as Record<string, unknown> | null;
     data(response, {
       ...conversation,

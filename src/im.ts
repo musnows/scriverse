@@ -568,8 +568,32 @@ export class ImService {
     conversationId: string,
     userId: string,
     limit = 50,
-    beforeSequence?: number
-  ): { messages: Record<string, unknown>[]; hasMore: boolean } {
+    beforeSequence?: number,
+    afterSequence?: number
+  ): { messages: Record<string, unknown>[]; hasMore: boolean; hasMoreAfter: boolean } {
+    if (afterSequence !== undefined) {
+      const rows = this.db.all(
+        `SELECT message.* FROM im_messages message
+         WHERE message.conversation_id = ? AND message.sequence > ?
+           AND EXISTS (
+             SELECT 1 FROM im_human_memberships membership
+             WHERE membership.conversation_id = message.conversation_id AND membership.user_id = ?
+               AND message.sequence > membership.joined_sequence
+               AND (membership.left_sequence IS NULL OR message.sequence <= membership.left_sequence)
+           )
+         ORDER BY message.sequence ASC LIMIT ?`,
+        conversationId,
+        afterSequence,
+        userId,
+        limit + 1
+      );
+      const hasMoreAfter = rows.length > limit;
+      return {
+        messages: rows.slice(0, limit).map((row) => this.mapMessage(row, Boolean(this.activeMembership(conversationId, userId)))),
+        hasMore: false,
+        hasMoreAfter
+      };
+    }
     const params: SQLInputValue[] = [conversationId, userId];
     const before = beforeSequence === undefined ? "" : " AND message.sequence < ?";
     if (beforeSequence !== undefined) params.push(beforeSequence);
@@ -589,7 +613,7 @@ export class ImService {
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(rows.length - limit) : rows;
     const showCurrentCharacterAvatars = Boolean(this.activeMembership(conversationId, userId));
-    return { messages: pageRows.map((row) => this.mapMessage(row, showCurrentCharacterAvatars)), hasMore };
+    return { messages: pageRows.map((row) => this.mapMessage(row, showCurrentCharacterAvatars)), hasMore, hasMoreAfter: false };
   }
 
   private mapMessage(row: Record<string, unknown>, showCurrentCharacterAvatar = true): Record<string, unknown> {
@@ -747,7 +771,7 @@ export class ImService {
         || requiredString(right.createdAt).localeCompare(requiredString(left.createdAt)));
   }
 
-  getConversation(conversationId: string, userId: string, beforeSequence?: number): Record<string, unknown> {
+  getConversation(conversationId: string, userId: string, beforeSequence?: number, afterSequence?: number): Record<string, unknown> {
     const row = this.assertReadableConversation(conversationId, userId);
     const viewerMembership = this.db.get(
       `SELECT joined_sequence, left_sequence, joined_at, left_at FROM im_human_memberships
@@ -813,12 +837,13 @@ export class ImService {
         completedAt: optionalString(turn.completed_at)
       };
     }) : [];
-    const messagePage = this.visibleMessagePage(conversationId, userId, 50, beforeSequence);
+    const messagePage = this.visibleMessagePage(conversationId, userId, 50, beforeSequence, afterSequence);
     return {
       ...this.mapConversation(row, userId),
       participants: this.conversationParticipants(conversationId, userId),
       messages: messagePage.messages,
       hasMoreMessages: messagePage.hasMore,
+      hasMoreMessagesAfter: messagePage.hasMoreAfter,
       activeChain: activeChain ? {
         id: activeChain.id,
         status: activeChain.status,
