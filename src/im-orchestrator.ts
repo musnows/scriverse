@@ -1169,9 +1169,13 @@ export class ImOrchestrator {
         );
         const prioritizedMentions: typeof forcedQueue = [];
         for (const membershipId of newMentions) {
-          if (!forcedQueue.some((item) => item.membershipId === membershipId && item.sourceMessageId === requiredString(sourceMessage.id))) {
-            prioritizedMentions.push(this.planReplyTurn(chain, membershipId, requiredString(sourceMessage.id)));
+          const existingIndex = forcedQueue.findIndex((item) => item.membershipId === membershipId);
+          if (existingIndex >= 0) {
+            const [existing] = forcedQueue.splice(existingIndex, 1);
+            if (existing) prioritizedMentions.push({ ...existing, sourceMessageId: requiredString(sourceMessage.id) });
+            continue;
           }
+          prioritizedMentions.push(this.planReplyTurn(chain, membershipId, requiredString(sourceMessage.id)));
         }
         forcedQueue.unshift(...prioritizedMentions);
       }

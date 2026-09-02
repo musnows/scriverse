@@ -1055,6 +1055,65 @@ describe("IM AI 调度", () => {
     });
   });
 
+  it("已排队角色被 AI mention 时只保留一个高优先级回复 turn", async () => {
+    let secondCharacterReplies = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-queued-mention-priority-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const prompt = messages.map((message) => message.content).join("\n");
+        const characterCard = prompt.match(/<character_card>[\s\S]*?<\/character_card>/u)?.[0] ?? "";
+        const isFirstCharacter = characterCard.includes('"name":"甲角色"');
+        const judge = messages[0]?.content.includes("只判断当前角色现在是否有必要发送一条新消息");
+        if (judge) return completion(prompt.includes("乙已回复") ? '{"score":0}' : isFirstCharacter ? '{"score":100}' : '{"score":90}', false);
+        if (isFirstCharacter) {
+          const targetId = String(runtime.database.get("SELECT id FROM characters WHERE name = '乙角色'")?.id);
+          return completion(`mention://character/${targetId} 请接续。`, body.stream === true);
+        }
+        secondCharacterReplies += 1;
+        return completion("乙已回复", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "queued_mention_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const characters = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "排队 Mention 来源" });
+      return [
+        runtime.store.createCharacter(String(work.id), { name: "甲角色" }),
+        runtime.store.createCharacter(String(work.id), { name: "乙角色" })
+      ];
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "排队 Mention 群",
+      characterIds: characters.map((character) => String(character.id)),
+      replyMode: "proactive",
+      responseThreshold: 50,
+      maxAiMessages: 3
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "请依次讨论。",
+      requestId: "im-queued-mention-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "quiet", generated_count: 2 });
+    expect(secondCharacterReplies).toBe(1);
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM im_chain_turns WHERE chain_id = ? AND kind = 'reply'",
+      String(chain.id)
+    )).toEqual({ count: 2 });
+  });
+
   it("只剩一个活跃角色的主动群在回答后自然结束", async () => {
     runtime = createRuntime({
       databasePath: ":memory:",
