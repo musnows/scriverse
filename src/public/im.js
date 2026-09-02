@@ -138,6 +138,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   const conversationsResize = document.querySelector("#im-conversations-resize");
   const mentionMenu = document.querySelector("#im-mention-menu");
   const unreadBadge = document.querySelector("#im-unread-count");
+  const detailsDrawerMedia = window.matchMedia("(max-width: 980px)");
   let conversations = [];
   let conversationNextCursor = null;
   let conversationUnreadTotal = 0;
@@ -626,6 +627,22 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#im-announcement-button").disabled = !canAnnounce;
     document.querySelector("#im-stop").classList.toggle("hidden", !["queued", "running"].includes(current?.activeChain?.status));
     document.querySelector("#im-retry").classList.toggle("hidden", !["waiting_config", "failed", "interrupted"].includes(current?.activeChain?.status));
+  }
+
+  function syncDetailsDrawerAccessibility() {
+    const details = document.querySelector("#im-details");
+    const expanded = details.classList.contains("is-open");
+    const concealed = detailsDrawerMedia.matches && !expanded;
+    details.toggleAttribute("inert", concealed);
+    details.setAttribute("aria-hidden", String(concealed));
+    document.querySelector("#im-details-toggle").setAttribute("aria-expanded", String(expanded));
+  }
+
+  function setDetailsDrawerOpen(expanded, focusTarget = null) {
+    document.querySelector("#im-details").classList.toggle("is-open", expanded);
+    syncDetailsDrawerAccessibility();
+    if (focusTarget === "drawer") document.querySelector("#im-details-close").focus();
+    if (focusTarget === "toggle") document.querySelector("#im-details-toggle").focus();
   }
 
   function renderDetails() {
@@ -1382,8 +1399,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     requestedConversationId = null;
     workspace.classList.add("hidden");
     workspace.classList.remove("has-conversation");
-    document.querySelector("#im-details").classList.remove("is-open");
-    document.querySelector("#im-details-toggle").setAttribute("aria-expanded", "false");
+    setDetailsDrawerOpen(false);
     document.querySelector("#app").classList.remove("im-mode");
     provisionalReplies.clear();
     closeMentionMenu();
@@ -1392,6 +1408,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   function bind() {
     setupConversationsResize();
     setupComposerResize();
+    detailsDrawerMedia.addEventListener("change", syncDetailsDrawerAccessibility);
+    syncDetailsDrawerAccessibility();
     document.querySelector("#im-open-button").addEventListener("click", () => void open().catch((error) => toast(error.message, "error")));
     document.querySelector("#im-settings-button").addEventListener("click", openSettings);
     document.querySelector("#im-announcement-button").addEventListener("click", openAnnouncementDialog);
@@ -1531,11 +1549,10 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#im-details-toggle").addEventListener("click", (event) => {
       const expanded = document.querySelector("#im-details").classList.toggle("is-open");
       event.currentTarget.setAttribute("aria-expanded", String(expanded));
+      syncDetailsDrawerAccessibility();
+      if (expanded) document.querySelector("#im-details-close").focus();
     });
-    document.querySelector("#im-details-close").addEventListener("click", () => {
-      document.querySelector("#im-details").classList.remove("is-open");
-      document.querySelector("#im-details-toggle").setAttribute("aria-expanded", "false");
-    });
+    document.querySelector("#im-details-close").addEventListener("click", () => setDetailsDrawerOpen(false, "toggle"));
     document.querySelector("#im-mobile-back").addEventListener("click", () => {
       conversationRequest += 1;
       requestedConversationId = null;
@@ -1543,8 +1560,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       captureGroupSettingsDraft();
       current = null;
       workspace.classList.remove("has-conversation");
-      document.querySelector("#im-details").classList.remove("is-open");
-      document.querySelector("#im-details-toggle").setAttribute("aria-expanded", "false");
+      setDetailsDrawerOpen(false);
       provisionalReplies.clear();
       renderConversationList();
       renderConversation();
