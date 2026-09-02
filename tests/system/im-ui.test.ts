@@ -109,6 +109,7 @@ describe("全局 IM 工作区界面", () => {
     expect((im.text.match(/const conversationId = current\.id;/gu) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(im.text).toContain('encodeURIComponent(conversationId)}/transfer');
     expect(im.text).toContain('encodeURIComponent(conversationId)}/disband');
+    expect(im.text).not.toContain("loadConversations()");
     expect(im.text).not.toContain("window.confirm(");
     expect(im.text).toContain('class="im-owner-action-buttons"');
     expect(im.text.indexOf("主动判断诊断")).toBeLessThan(im.text.indexOf('class="im-owner-actions"'));

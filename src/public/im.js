@@ -605,7 +605,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       )) return;
       await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/transfer`, { method: "POST", body: { userId } });
       if (current?.id === conversationId) await openConversation(conversationId);
-      else await loadConversations();
+      else await refreshConversations();
       toast("群主已转让", "success");
     });
     document.querySelector("#im-disband")?.addEventListener("click", async () => {
@@ -617,7 +617,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       )) return;
       await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/disband`, { method: "POST", body: {} });
       if (current?.id === conversationId) await openConversation(conversationId);
-      else await loadConversations();
+      else await refreshConversations();
       toast("群聊已解散", "success");
     });
     document.querySelector("#im-leave")?.addEventListener("click", async () => {
