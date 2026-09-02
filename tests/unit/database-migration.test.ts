@@ -306,6 +306,39 @@ describe("数据库版本化迁移", () => {
     repaired.close();
   });
 
+  it("迁移 134 把旧头像索引升级为哈希表达式索引", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-im-avatar-index-"));
+    roots.push(root);
+    const filename = join(root, "im-avatar-index.db");
+    const current = new Database(filename);
+    current.run("DROP INDEX idx_im_messages_human_avatar");
+    current.run("DROP INDEX idx_im_messages_character_avatar");
+    current.run("DROP INDEX idx_im_messages_character_snapshot_avatar");
+    current.run(`CREATE INDEX idx_im_messages_human_avatar
+      ON im_messages(conversation_id, sender_user_id, sequence) WHERE sender_kind = 'human'`);
+    current.run(`CREATE INDEX idx_im_messages_character_avatar
+      ON im_messages(conversation_id, sender_character_id, sequence) WHERE sender_kind = 'character'`);
+    current.run(`CREATE INDEX idx_im_messages_character_snapshot_avatar
+      ON im_messages(conversation_id, json_extract(sender_snapshot_json, '$.id'), sequence)
+      WHERE sender_kind = 'character' AND sender_character_id IS NULL`);
+    current.run("DELETE FROM schema_migrations WHERE version = 134");
+    current.close();
+
+    const migrated = new Database(filename);
+    for (const index of [
+      "idx_im_messages_human_avatar",
+      "idx_im_messages_character_avatar",
+      "idx_im_messages_character_snapshot_avatar"
+    ]) {
+      expect(String(migrated.get(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+        index
+      )?.sql)).toContain("avatarSha256");
+    }
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 134")).toEqual({ count: 1 });
+    migrated.close();
+  });
+
   it("迁移 126 创建按作品级联清理的加密远程 MCP 配置表", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-remote-mcp-"));
     roots.push(root);
