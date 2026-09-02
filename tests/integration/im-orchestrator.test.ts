@@ -585,6 +585,21 @@ describe("IM AI 调度", () => {
        WHERE conversation_id = ? AND left_at IS NULL AND status = 'active' AND character_id IS NOT NULL`,
       String(group.id)
     )).toEqual({ count: 10 });
+    runtime.store.restoreCharacter(String(characters[0]!.id), 1);
+    runtime.im.refreshCharacterAvailability(String(group.id));
+    expect(runtime.database.get(
+      `SELECT status FROM im_character_memberships
+       WHERE conversation_id = ? AND character_id = ? AND left_at IS NULL`,
+      String(group.id),
+      String(characters[10]!.id)
+    )).toEqual({ status: "active" });
+    expect(runtime.database.get(
+      `SELECT status FROM im_character_memberships
+       WHERE conversation_id = ? AND character_id IS NULL
+         AND json_extract(snapshot_json, '$.id') = ? AND left_at IS NULL`,
+      String(group.id),
+      String(characters[0]!.id)
+    )).toEqual({ status: "suspended" });
     for (const character of characters.slice(1, 10)) {
       runtime.im.removeCharacter(owner, String(group.id), String(character.id));
     }

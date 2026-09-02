@@ -1172,7 +1172,8 @@ export class ImService {
        LEFT JOIN works work ON work.id = character.work_id AND work.deleted_at IS NULL
        LEFT JOIN work_memberships work_member ON work_member.work_id = work.id AND work_member.user_id = ?
        WHERE membership.conversation_id = ? AND membership.left_at IS NULL
-       ORDER BY membership.joined_at, membership.id`,
+       ORDER BY CASE WHEN membership.character_id IS NOT NULL AND membership.status = 'active' THEN 0 ELSE 1 END,
+                membership.joined_at, membership.id`,
       ownerUserId,
       ownerUserId,
       conversationId
