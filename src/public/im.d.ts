@@ -6,6 +6,8 @@ export function normalizeImConversationWidth(value: number, maximumWidth: number
 
 export function resolveImConversationWidth(preferredWidth: number, viewportWidth: number, maximumWidth: number): number;
 
+export function normalizeImDetailsWidth(value: number, maximumWidth: number, minimumWidth?: number, defaultWidth?: number): number;
+
 export function shouldMarkImConversationRead(opened: boolean, visibilityState: string): boolean;
 
 export function shouldRefreshImConversationListForEvent(type: string): boolean;

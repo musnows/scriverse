@@ -54,6 +54,12 @@ export function resolveImConversationWidth(preferredWidth, viewportWidth, maximu
   return Number(viewportWidth) <= 620 ? 72 : normalizeImConversationWidth(preferredWidth, maximumWidth);
 }
 
+export function normalizeImDetailsWidth(value, maximumWidth, minimumWidth = 240, defaultWidth = 320) {
+  const maximum = Math.max(minimumWidth, Number(maximumWidth) || minimumWidth);
+  const requested = Number.isFinite(Number(value)) ? Number(value) : defaultWidth;
+  return Math.min(maximum, Math.max(minimumWidth, requested));
+}
+
 export function shouldMarkImConversationRead(opened, visibilityState) {
   return opened === true && visibilityState !== "hidden";
 }
@@ -173,6 +179,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   const composerResize = document.querySelector("#im-composer-resize");
   const conversationsPanel = workspace.querySelector(".im-conversations");
   const conversationsResize = document.querySelector("#im-conversations-resize");
+  const detailsPanel = document.querySelector("#im-details");
+  const detailsResize = document.querySelector("#im-details-resize");
   const mentionMenu = document.querySelector("#im-mention-menu");
   const unreadBadge = document.querySelector("#im-unread-count");
   const detailsDrawerMedia = window.matchMedia("(max-width: 980px)");
@@ -220,11 +228,16 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let opened = false;
   let composerHeight = 68;
   let conversationsWidth = 300;
+  let detailsWidth = 320;
+  let detailsHidden = false;
   let bound = false;
   let preferredConversationsWidth = 300;
+  let preferredDetailsWidth = 320;
 
   const conversationsWidthStorageKey = "scriverse.im.conversations-width.v1";
+  const detailsWidthStorageKey = "scriverse.im.details-width.v1";
   const conversationsMaximumWidth = () => Math.max(72, Math.min(420, window.innerWidth - (window.innerWidth > 980 ? 680 : 360)));
+  const detailsMaximumWidth = () => Math.max(240, Math.min(520, window.innerWidth - conversationsWidth - 420));
 
   function applyConversationsWidth(width, persist = false) {
     conversationsWidth = resolveImConversationWidth(width, window.innerWidth, conversationsMaximumWidth());
@@ -233,6 +246,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     conversationsPanel.classList.toggle("is-compact", conversationsWidth <= 180);
     conversationsResize.setAttribute("aria-valuemax", String(conversationsMaximumWidth()));
     conversationsResize.setAttribute("aria-valuenow", String(Math.round(conversationsWidth)));
+    if (window.innerWidth > 980) applyDetailsWidth(preferredDetailsWidth);
     if (persist && window.innerWidth > 620) {
       try { localStorage.setItem(conversationsWidthStorageKey, String(Math.round(preferredConversationsWidth))); } catch { /* 浏览器禁用存储时仅保留当前布局。 */ }
     }
@@ -269,6 +283,50 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     });
     window.addEventListener("resize", () => applyConversationsWidth(preferredConversationsWidth));
     applyConversationsWidth(preferredConversationsWidth);
+  }
+
+  function applyDetailsWidth(width, persist = false) {
+    detailsWidth = normalizeImDetailsWidth(width, detailsMaximumWidth());
+    if (window.innerWidth > 980) preferredDetailsWidth = detailsWidth;
+    workspace.style.setProperty("--im-details-width", `${detailsWidth}px`);
+    detailsResize.setAttribute("aria-valuemax", String(detailsMaximumWidth()));
+    detailsResize.setAttribute("aria-valuenow", String(Math.round(detailsWidth)));
+    if (persist && window.innerWidth > 980) {
+      try { localStorage.setItem(detailsWidthStorageKey, String(Math.round(preferredDetailsWidth))); } catch { /* 浏览器禁用存储时仅保留当前布局。 */ }
+    }
+  }
+
+  function setupDetailsResize() {
+    let resize = null;
+    try { preferredDetailsWidth = Number(localStorage.getItem(detailsWidthStorageKey)) || preferredDetailsWidth; } catch { /* 浏览器禁用存储时使用默认宽度。 */ }
+    detailsWidth = preferredDetailsWidth;
+    detailsResize.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || window.innerWidth <= 980 || detailsHidden) return;
+      resize = { pointerId: event.pointerId, startX: event.clientX, startWidth: detailsWidth };
+      detailsResize.setPointerCapture(event.pointerId);
+      document.body.classList.add("is-im-details-resizing");
+    });
+    detailsResize.addEventListener("pointermove", (event) => {
+      if (!resize || event.pointerId !== resize.pointerId) return;
+      applyDetailsWidth(resize.startWidth + resize.startX - event.clientX);
+    });
+    const finish = (event) => {
+      if (!resize || event.pointerId !== resize.pointerId) return;
+      resize = null;
+      document.body.classList.remove("is-im-details-resizing");
+      applyDetailsWidth(detailsWidth, true);
+    };
+    detailsResize.addEventListener("pointerup", finish);
+    detailsResize.addEventListener("pointercancel", finish);
+    detailsResize.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || window.innerWidth <= 980 || detailsHidden) return;
+      event.preventDefault();
+      if (event.key === "Home") applyDetailsWidth(240, true);
+      else if (event.key === "End") applyDetailsWidth(detailsMaximumWidth(), true);
+      else applyDetailsWidth(detailsWidth + (event.key === "ArrowLeft" ? 16 : -16), true);
+    });
+    window.addEventListener("resize", () => applyDetailsWidth(preferredDetailsWidth));
+    applyDetailsWidth(preferredDetailsWidth);
   }
 
   const composerMaximumHeight = () => Math.max(64, Math.min(420, window.innerHeight - 280));
@@ -690,19 +748,27 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   }
 
   function syncDetailsDrawerAccessibility() {
-    const details = document.querySelector("#im-details");
-    const expanded = details.classList.contains("is-open");
-    const concealed = detailsDrawerMedia.matches && !expanded;
-    details.toggleAttribute("inert", concealed);
-    details.setAttribute("aria-hidden", String(concealed));
+    const expanded = detailsDrawerMedia.matches ? detailsPanel.classList.contains("is-open") : !detailsHidden;
+    workspace.classList.toggle("is-details-hidden", !detailsDrawerMedia.matches && detailsHidden);
+    detailsPanel.toggleAttribute("inert", !expanded);
+    detailsPanel.setAttribute("aria-hidden", String(!expanded));
     document.querySelector("#im-details-toggle").setAttribute("aria-expanded", String(expanded));
   }
 
   function setDetailsDrawerOpen(expanded, focusTarget = null) {
-    document.querySelector("#im-details").classList.toggle("is-open", expanded);
+    if (detailsDrawerMedia.matches) detailsPanel.classList.toggle("is-open", expanded);
+    else {
+      detailsHidden = !expanded;
+      detailsPanel.classList.remove("is-open");
+    }
     syncDetailsDrawerAccessibility();
     if (focusTarget === "drawer") document.querySelector("#im-details-close").focus();
     if (focusTarget === "toggle") document.querySelector("#im-details-toggle").focus();
+  }
+
+  function resetDetailsDrawer() {
+    detailsPanel.classList.remove("is-open");
+    syncDetailsDrawerAccessibility();
   }
 
   function renderDetails() {
@@ -1501,7 +1567,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     requestedConversationId = null;
     workspace.classList.add("hidden");
     workspace.classList.remove("has-conversation");
-    setDetailsDrawerOpen(false);
+    resetDetailsDrawer();
     document.querySelector("#app").classList.remove("im-mode");
     provisionalReplies.clear();
     closeMentionMenu();
@@ -1509,6 +1575,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
 
   function bind() {
     setupConversationsResize();
+    setupDetailsResize();
     setupComposerResize();
     detailsDrawerMedia.addEventListener("change", syncDetailsDrawerAccessibility);
     syncDetailsDrawerAccessibility();
@@ -1660,10 +1727,8 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       if (result.ok && current?.id === conversationId) await refreshAfterMutation("AI 重试", () => openConversation(conversationId));
     });
     document.querySelector("#im-details-toggle").addEventListener("click", (event) => {
-      const expanded = document.querySelector("#im-details").classList.toggle("is-open");
-      event.currentTarget.setAttribute("aria-expanded", String(expanded));
-      syncDetailsDrawerAccessibility();
-      if (expanded) document.querySelector("#im-details-close").focus();
+      const expanded = detailsDrawerMedia.matches ? !detailsPanel.classList.contains("is-open") : detailsHidden;
+      setDetailsDrawerOpen(expanded, expanded ? "drawer" : null);
     });
     document.querySelector("#im-details-close").addEventListener("click", () => setDetailsDrawerOpen(false, "toggle"));
     document.querySelector("#im-mobile-back").addEventListener("click", () => {
@@ -1677,7 +1742,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       captureGroupSettingsDraft();
       current = null;
       workspace.classList.remove("has-conversation");
-      setDetailsDrawerOpen(false);
+      resetDetailsDrawer();
       provisionalReplies.clear();
       renderConversationList();
       renderConversation();

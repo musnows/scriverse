@@ -52,6 +52,7 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain('id="im-new-conversation"');
     expect(page.text).toContain('class="im-new-conversation-full">新建会话</span><span class="im-new-conversation-compact" aria-hidden="true">+</span>');
     expect(page.text).toContain('id="im-conversations-resize" class="im-conversations-resize-handle" role="separator"');
+    expect(page.text).toContain('id="im-details-resize" class="im-details-resize-handle" role="separator"');
     expect(page.text).toContain('aria-label="调整 IM 会话列表宽度"');
     expect(page.text).toContain('id="im-create-work"');
     expect(page.text).toContain('id="im-create-search"');
@@ -65,14 +66,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v99");
+    expect(page.text).toContain("feature=global-im-v100");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260902-global-im-v99');
+    expect(application.text).toContain('/im.js?v=20260903-global-im-v100');
     expect(application.text).toContain("onRouteChange: schedulePresenceHeartbeat");
     expect(application.text).toContain('confirmDiscardChanges("当前章节有未保存修改，进入 IM 将放弃本地修改。是否继续？")');
     expect(application.text).toMatch(/beforeOpen: async \(\) => \{[\s\S]*?cancelChapterAutoSave\(\);[\s\S]*?state\.dirty = false;/);
@@ -166,7 +167,8 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain("void refreshUnreadTotal().catch(() => undefined)");
     expect(page.text).toContain('id="im-details-toggle"');
     expect(page.text).toContain('aria-expanded="false" disabled>成员与设置');
-    expect(styles.text).toContain("#im-details-toggle, #im-details-close { display: none; }");
+    expect(styles.text).toContain("#im-details-toggle { display: none; }");
+    expect(styles.text).toContain("#im-details-close { display: inline-grid; }");
     expect(styles.text).toContain("#im-details-toggle { display: inline-flex; }");
     expect(styles.text).toContain(".im-group-form fieldset > label");
     expect(styles.text).toContain("min-height: 0; overflow: hidden; background: var(--paper)");
@@ -219,8 +221,8 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain('conversationsWidth <= 180');
     expect(im.text).toContain('localStorage.setItem(conversationsWidthStorageKey');
     expect(im.text).toContain("setupComposerResize");
-    expect(im.text).toContain('details.toggleAttribute("inert", concealed)');
-    expect(im.text).toContain('details.setAttribute("aria-hidden", String(concealed))');
+    expect(im.text).toContain('detailsPanel.toggleAttribute("inert", !expanded)');
+    expect(im.text).toContain('detailsPanel.setAttribute("aria-hidden", String(!expanded))');
     expect(im.text).toContain('setDetailsDrawerOpen(false, "toggle")');
     expect(im.text).toContain('composerResize.addEventListener("pointermove"');
     expect(im.text).toContain('["ArrowUp", "ArrowDown", "Home", "End"]');
@@ -238,6 +240,10 @@ describe("全局 IM 工作区界面", () => {
     expect(styles.text).toContain(".im-view { position: relative; display: grid; grid-template-columns:");
     expect(styles.text).toContain("var(--im-conversations-width, 300px)");
     expect(styles.text).toContain(".im-conversations-resize-handle { position: absolute;");
+    expect(styles.text).toContain(".im-details-resize-handle { position: absolute;");
+    expect(styles.text).toContain(".im-view.is-details-hidden .im-details { display: none;");
+    expect(im.text).toContain("setupDetailsResize");
+    expect(im.text).toContain("localStorage.setItem(detailsWidthStorageKey");
     expect(styles.text).toContain(".im-conversations.is-compact .im-new-conversation-compact { display: block;");
     expect(styles.text).toContain(".im-conversations.is-compact .im-conversation-item > span:nth-child(2) { display: none;");
     expect(styles.text).toContain("@media (max-width: 620px)");

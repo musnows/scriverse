@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, imConversationAccessibleLabel, imDiagnosticStatusLabel, isImRealtimeChainCurrent, matchImProvisionalReplyTurn, mergeImFailedReplyPages, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, resolveImConversationWidth, sameImGroupSettings, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
+import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, imConversationAccessibleLabel, imDiagnosticStatusLabel, isImRealtimeChainCurrent, matchImProvisionalReplyTurn, mergeImFailedReplyPages, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, normalizeImDetailsWidth, resolveImConversationWidth, sameImGroupSettings, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -18,6 +18,14 @@ describe("IM 编辑区域尺寸", () => {
     expect(normalizeImConversationWidth(Number.NaN, 420)).toBe(300);
     expect(resolveImConversationWidth(300, 390, 72)).toBe(72);
     expect(resolveImConversationWidth(300, 1280, 420)).toBe(300);
+  });
+
+  it("把会话详情宽度限制在可用阅读空间以内", () => {
+    expect(normalizeImDetailsWidth(180, 520)).toBe(240);
+    expect(normalizeImDetailsWidth(360, 520)).toBe(360);
+    expect(normalizeImDetailsWidth(640, 520)).toBe(520);
+    expect(normalizeImDetailsWidth(Number.NaN, 520)).toBe(320);
+    expect(normalizeImDetailsWidth(360, 220)).toBe(240);
   });
 
   it("只在用户正在查看可见 IM 页面时标记会话已读", () => {
