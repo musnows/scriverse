@@ -1402,7 +1402,15 @@ describe("IM AI 调度", () => {
     const models = seedModels(runtime);
     const character = runWithRequestActor(actor(owner), () => {
       const work = runtime.store.createWork({ title: "压缩前缀来源" });
-      return runtime.store.createCharacter(String(work.id), { name: "压缩角色" });
+      const createdCharacter = runtime.store.createCharacter(String(work.id), {
+        name: "压缩角色",
+        attributes: { privateSecret: "COMPACTION_PRIVATE_CHARACTER_SECRET" }
+      });
+      runtime.store.createRoleplayMemory(String(createdCharacter.id), {
+        category: "knowledge",
+        content: "COMPACTION_PRIVATE_ROLEPLAY_MEMORY"
+      });
+      return createdCharacter;
     });
     runtime.im.updateSettings(owner.userId, {
       primaryModelId: models.primaryModelId,
@@ -1431,6 +1439,9 @@ describe("IM AI 调度", () => {
     expect(chain.generated_count).toBe(1);
     expect(compactPrompt).toContain("[1] 旁白：公告编号 001");
     expect(compactPrompt).toContain("[62] 旁白：公告编号 062");
+    expect(compactPrompt).not.toContain("COMPACTION_PRIVATE_CHARACTER_SECRET");
+    expect(compactPrompt).not.toContain("COMPACTION_PRIVATE_ROLEPLAY_MEMORY");
+    expect(compactPrompt).not.toContain("recall_roleplay_memory");
     expect(primaryCompactCalls).toBe(1);
     expect(fallbackCompactCalls).toBe(1);
     expect(runtime.database.get(

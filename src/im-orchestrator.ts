@@ -679,14 +679,16 @@ export class ImOrchestrator {
       participantContext,
       history: historyOverride?.history ?? context.history,
       summary: historyOverride?.summary ?? context.summary,
-      characterPrompt: authorization.initiatorPermissions && canReadWorkModule(authorization.initiatorPermissions, "characters")
-        ? undefined
-        : this.publicCharacterPrompt(membership),
-      allowRoleplayMemory: Boolean(
-        authorization.initiatorPermissions
-        && canReadWorkModule(authorization.initiatorPermissions, "characters")
-        && canReadWorkModule(authorization.initiatorPermissions, "ai-chat")
-      ),
+      characterPrompt: kind === "compact"
+        ? this.publicCharacterPrompt(membership)
+        : authorization.initiatorPermissions && canReadWorkModule(authorization.initiatorPermissions, "characters")
+          ? undefined
+          : this.publicCharacterPrompt(membership),
+      allowRoleplayMemory: kind !== "compact" && Boolean(
+          authorization.initiatorPermissions
+          && canReadWorkModule(authorization.initiatorPermissions, "characters")
+          && canReadWorkModule(authorization.initiatorPermissions, "ai-chat")
+        ),
       retryCount: Number(chain.retry_count),
       createdByUserId: requiredString(chain.initiator_user_id),
       signal
