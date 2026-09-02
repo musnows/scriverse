@@ -327,6 +327,22 @@ export class ImOrchestrator {
     return { history, summary: requiredString(context?.summary) };
   }
 
+  private maximumHistoryChars(chain: Record<string, unknown>): number {
+    const modelIds = [optionalString(chain.primary_model_id), optionalString(chain.fallback_model_id)]
+      .filter((modelId): modelId is string => Boolean(modelId));
+    const contextWindows = modelIds.map((modelId) => Number(
+      this.db.get("SELECT context_window FROM models WHERE id = ?", modelId)?.context_window ?? 128_000
+    ));
+    const minimumContextWindow = contextWindows.length ? Math.min(...contextWindows) : 128_000;
+    return Math.max(2_000, Math.floor(minimumContextWindow * 2));
+  }
+
+  private historyLine(row: Record<string, unknown>): string {
+    const sender = json<Record<string, unknown>>(requiredString(row.sender_snapshot_json), {});
+    const label = sender.name ?? sender.displayName ?? (requiredString(row.sender_kind) === "system" ? "系统" : "成员");
+    return `[${Number(row.sequence)}] ${String(label)}：${requiredString(row.content)}`;
+  }
+
   private async maybeCompact(
     chain: Record<string, unknown>,
     membership: Record<string, unknown>,
@@ -336,14 +352,14 @@ export class ImOrchestrator {
     const conversation = this.conversationRow(requiredString(chain.conversation_id));
     const contextEpoch = Number(conversation.context_epoch);
     const context = this.db.get(
-      `SELECT summarized_through_sequence FROM im_character_contexts
+      `SELECT summary, summarized_through_sequence FROM im_character_contexts
        WHERE character_membership_id = ? AND context_epoch = ?`,
       requiredString(membership.id),
       contextEpoch
     );
     const summarizedThroughSequence = Number(context?.summarized_through_sequence ?? 0);
     const rows = this.db.all(
-      `SELECT message.sequence FROM im_message_deliveries delivery
+      `SELECT message.* FROM im_message_deliveries delivery
        JOIN im_messages message ON message.id = delivery.message_id
        WHERE delivery.character_membership_id = ? AND message.context_epoch = ?
          AND message.sequence > ? AND message.sequence <= ?
@@ -354,8 +370,21 @@ export class ImOrchestrator {
       Number(sourceMessage.sequence)
     );
     if (rows.length <= 60) return;
-    const compactThrough = Number(rows[Math.max(0, rows.length - 20)]?.sequence ?? 0);
+    const historyLimit = this.maximumHistoryChars(chain);
+    const compactCandidates = rows.slice(0, Math.max(0, rows.length - 20));
+    const compactLines: string[] = [];
+    let compactLength = 0;
+    let compactThrough = summarizedThroughSequence;
+    for (const row of compactCandidates) {
+      const line = this.historyLine(row);
+      const additionLength = line.length + (compactLines.length ? 2 : 0);
+      if (compactLength + additionLength > historyLimit) break;
+      compactLines.push(line);
+      compactLength += additionLength;
+      compactThrough = Number(row.sequence);
+    }
     if (compactThrough <= summarizedThroughSequence) return;
+    const compactHistory = compactLines.join("\n\n");
     const turnId = this.createTurn(requiredString(chain.id), requiredString(membership.id), "compact");
     try {
       const result = await this.invoke(
@@ -364,7 +393,11 @@ export class ImOrchestrator {
         "compact",
         `把已送达历史压缩为当前角色可继续使用的第一人称 IM 记忆；压缩到消息序号 ${compactThrough}，只保留事实、关系变化、承诺、未决事项和重要称呼。`,
         sourceMessage,
-        signal
+        signal,
+        undefined,
+        undefined,
+        undefined,
+        { history: compactHistory, summary: requiredString(context?.summary) }
       );
       this.db.run(
         `INSERT INTO im_character_contexts (
@@ -457,24 +490,22 @@ export class ImOrchestrator {
     signal: AbortSignal,
     onDelta?: (delta: string) => void,
     validateContent?: (content: string) => void,
-    streamTurnId?: string
+    streamTurnId?: string,
+    historyOverride?: { history: string; summary: string }
   ): Promise<InvocationResult> {
     const conversation = this.conversationRow(requiredString(chain.conversation_id));
     const authorization = this.assertCharacterAuthorization(chain, membership);
     const snapshot = json<Record<string, unknown>>(requiredString(sourceMessage.sender_snapshot_json), {});
     const context = this.characterHistory(membership, conversation, Number(sourceMessage.sequence));
-    const modelIds = [optionalString(chain.primary_model_id), optionalString(chain.fallback_model_id)].filter((modelId): modelId is string => Boolean(modelId));
-    const contextWindows = modelIds.map((modelId) => Number(this.db.get("SELECT context_window FROM models WHERE id = ?", modelId)?.context_window ?? 128_000));
-    const minimumContextWindow = contextWindows.length ? Math.min(...contextWindows) : 128_000;
-    const maximumHistoryChars = Math.max(2_000, Math.floor(minimumContextWindow * 2));
+    const maximumHistoryChars = this.maximumHistoryChars(chain);
     const common = {
       workId: authorization.workId,
       characterId: authorization.characterId,
       kind,
       instruction,
       participantContext: this.participantContext(requiredString(conversation.id), snapshot),
-      history: context.history.slice(-maximumHistoryChars),
-      summary: context.summary,
+      history: historyOverride?.history ?? context.history.slice(-maximumHistoryChars),
+      summary: historyOverride?.summary ?? context.summary,
       characterPrompt: authorization.initiatorPermissions && canReadWorkModule(authorization.initiatorPermissions, "characters")
         ? undefined
         : this.publicCharacterPrompt(membership),

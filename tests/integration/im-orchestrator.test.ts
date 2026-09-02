@@ -433,6 +433,65 @@ describe("IM AI 调度", () => {
     )).toEqual({ content: "前半后半" });
   });
 
+  it("按实际送入模型的最早完整历史推进角色压缩游标", async () => {
+    let compactPrompt = "";
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-compaction-prefix-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const prompt = messages.map((message) => message.content).join("\n");
+        if (prompt.includes("只把已送达给当前角色的 IM 历史压缩")) {
+          compactPrompt = prompt;
+          return completion("已压缩的完整前缀摘要。", false);
+        }
+        return completion("压缩后继续回答。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "compaction_prefix_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "压缩前缀来源" });
+      return runtime.store.createCharacter(String(work.id), { name: "压缩角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "压缩前缀群",
+      characterIds: [String(character.id)],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    for (let index = 1; index <= 81; index += 1) {
+      runtime.im.publishAnnouncement(owner, String(group.id), {
+        content: `公告编号 ${String(index).padStart(3, "0")}`,
+        requestId: `im-compaction-announcement-${index}`
+      });
+    }
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://character/${character.id} 请继续。`,
+      requestId: "im-compaction-prefix-message-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain.generated_count).toBe(1);
+    expect(compactPrompt).toContain("[1] 旁白：公告编号 001");
+    expect(compactPrompt).toContain("[62] 旁白：公告编号 062");
+    expect(runtime.database.get(
+      `SELECT context.summarized_through_sequence FROM im_character_contexts context
+       JOIN im_character_memberships membership ON membership.id = context.character_membership_id
+       WHERE membership.conversation_id = ?`,
+      String(group.id)
+    )).toEqual({ summarized_through_sequence: 62 });
+  });
+
   it("在角色生成前发布气泡状态并把最终错误保留在角色 turn 中", async () => {
     runtime = createRuntime({
       databasePath: ":memory:",
