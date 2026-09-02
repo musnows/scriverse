@@ -1709,6 +1709,9 @@ export class ImService {
         snapshot: json<Record<string, unknown>>(requiredString(row.snapshot_json), {})
       });
     }
+    if (result.length !== mentions.length) {
+      throw new AppError(400, "IM_MENTION_TARGET_INVALID", "消息包含已经离开或不可用的 mention 目标，请重新选择群成员");
+    }
     return result;
   }
 

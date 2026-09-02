@@ -309,6 +309,14 @@ describe("全局 IM API", () => {
       })
       .expect(400);
     expect(mentionOverflow.body.error.code).toBe("IM_MENTION_LIMIT_EXCEEDED");
+    const invalidMention = await owner.agent.post(`/api/im/conversations/${groupId}/messages`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        content: "mention://user/missing-im-member 这条 mention 不应静默失效。",
+        requestId: "im-message-invalid-mention-0001"
+      })
+      .expect(400);
+    expect(invalidMention.body.error.code).toBe("IM_MENTION_TARGET_INVALID");
 
     const memberView = await member.agent.get(`/api/im/conversations/${groupId}`).expect(200);
     expect(memberView.body.data.messages).toHaveLength(2);
