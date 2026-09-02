@@ -739,6 +739,92 @@ describe("IM AI 调度", () => {
     )).toEqual({ content: "无关权限变化不影响这条回复。" });
   });
 
+  it("provider 队列真正 dispatch 前重新检查 IM 权限", async () => {
+    const blockerControl: { release?: () => void } = {};
+    let markBlockerStarted: (() => void) | null = null;
+    const blockerStarted = new Promise<void>((resolve) => { markBlockerStarted = resolve; });
+    const blockerGate = new Promise<void>((resolve) => { blockerControl.release = resolve; });
+    let requestCount = 0;
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-provider-queue-authorization-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        requestCount += 1;
+        if (requestCount === 1) {
+          markBlockerStarted?.();
+          await blockerGate;
+        }
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return completion("唯一真正发出的阻塞请求。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const workOwner = runtime.auth.register({ username: "queue_access_work_owner", password: "secure-password-123" }).session.user;
+    const initiator = runtime.auth.register({ username: "queue_access_initiator", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    runtime.database.run(
+      "UPDATE providers SET concurrency_limit = 1, rpm_limit = 1000 WHERE id = (SELECT provider_id FROM models WHERE id = ?)",
+      models.primaryModelId
+    );
+    const { work, blockerCharacter, targetCharacter } = runWithRequestActor(actor(workOwner), () => {
+      const work = runtime.store.createWork({ title: "Provider 队列撤权作品" });
+      return {
+        work,
+        blockerCharacter: runtime.store.createCharacter(String(work.id), { name: "队列阻塞角色" }),
+        targetCharacter: runtime.store.createCharacter(String(work.id), {
+          name: "队列撤权角色",
+          attributes: { privateSecret: "QUEUED_PRIVATE_CHARACTER_DATA" }
+        })
+      };
+    });
+    runtime.auth.addMember(String(work.id), initiator.userId, { role: "editor" }, workOwner.userId);
+    runtime.im.updateSettings(workOwner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    runtime.im.updateSettings(initiator.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const blockerDirect = runtime.im.createDirect(workOwner, String(blockerCharacter.id));
+    const targetGroup = runtime.im.createGroup(workOwner, {
+      title: "Provider 队列撤权群",
+      characterIds: [String(targetCharacter.id)],
+      humanUserIds: [initiator.userId],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    const blocker = runtime.im.sendMessage(workOwner, String(blockerDirect.id), {
+      content: "占用 provider 并发槽。",
+      requestId: "im-provider-queue-blocker-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(blocker);
+    await blockerStarted;
+    const target = runtime.im.sendMessage(initiator, String(targetGroup.id), {
+      content: `mention://character/${targetCharacter.id} 排队后回复。`,
+      requestId: "im-provider-queue-target-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(target);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(requestCount).toBe(1);
+    runtime.auth.updateMemberPermissions(String(work.id), initiator.userId, {
+      permissions: {
+        prose: "read", comments: "read", todos: "read", drafts: "read", settings: "read",
+        characters: "none", races: "read", organizations: "read", timeline: "read", relationships: "read",
+        outlines: "read", reviews: "read", "ai-chat": "none", "ai-analysis": "read", "ai-settings": "read"
+      }
+    });
+    blockerControl.release?.();
+    await waitForChain(runtime, String((blocker.chain as Record<string, unknown>).id));
+    const targetChain = await waitForChain(runtime, String((target.chain as Record<string, unknown>).id));
+
+    expect(targetChain).toMatchObject({ status: "failed", error_code: "IM_CHARACTER_ACCESS_DENIED", generated_count: 0 });
+    expect(requestCount).toBe(1);
+  });
+
   it("发起人停用后不再执行模型提出的角色工具", async () => {
     const responseControl: { release?: () => void } = {};
     let markStarted: (() => void) | null = null;

@@ -3165,6 +3165,7 @@ export class AiManager {
     queue: Array<{
       signal?: AbortSignal;
       run: () => Promise<unknown>;
+      beforeDispatch?: () => void;
       resolve: (value: unknown) => void;
       reject: (reason: unknown) => void;
       detachAbort: () => void;
@@ -8321,7 +8322,8 @@ export class AiManager {
     workId: string,
     attachmentId: string,
     signal: AbortSignal | undefined,
-    permissions: WorkModulePermissions
+    permissions: WorkModulePermissions,
+    beforeRequest?: () => void
   ): Promise<{ content: string; attachment: Record<string, unknown>; model: ModelRow; usage: ResolvedAiTokenUsage }> {
     const prepared = await this.loadImageAttachment(workId, attachmentId, permissions);
     const { attachment, dataUrl: imageDataUrl } = prepared;
@@ -8370,7 +8372,7 @@ export class AiManager {
           signal: controller.signal
         });
         return { ok: upstream.ok, status: upstream.status, body: await readResponseTextLimited(upstream) };
-      });
+      }, beforeRequest);
       if (!response.ok) throw new AppError(502, "IMAGE_MODEL_REQUEST_FAILED", "多模态模型读取图片失败");
       let payload: CompletionPayload;
       try {
@@ -8536,7 +8538,8 @@ export class AiManager {
     provider?: ProviderRow,
     chatContext?: { conversationId?: string | null; im?: boolean },
     stagedRoleplayMemoryCandidates?: RoleplayMemoryCandidate[],
-    allowedRemoteMcpToolNames?: ReadonlySet<string>
+    allowedRemoteMcpToolNames?: ReadonlySet<string>,
+    beforeRequest?: () => void
   ): Promise<AgentToolCallExecution> {
     const name = toolCall.function.name;
     const calledAt = now();
@@ -9001,7 +9004,7 @@ export class AiManager {
             nativeImage: { attachmentId, fileName, dataUrl: prepared.dataUrl }
           };
         }
-        const read = await this.readImageAttachment(workId, attachmentId, signal, permissions);
+        const read = await this.readImageAttachment(workId, attachmentId, signal, permissions, beforeRequest);
         onUsage?.(read.usage);
         return {
           id: toolCall.id,
@@ -10193,7 +10196,6 @@ export class AiManager {
           logger.info("ai.call.attempt_started", { callId, attempt, maximumAttempts, toolChoice, purpose });
           let streamedRoundContent = "";
           try {
-            input.beforeRequest?.();
             const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
               if (input.runtime) {
                 const response = await input.runtime.completionTransport({
@@ -10308,7 +10310,7 @@ export class AiManager {
                 streamWatchdog?.dispose();
                 input.signal?.removeEventListener("abort", forwardAbort);
               }
-            });
+            }, input.beforeRequest);
             logger.info("ai.call.attempt_completed", {
               callId,
               attempt,
@@ -10628,7 +10630,8 @@ export class AiManager {
             provider,
             { conversationId: input.conversationId ?? null, im: Boolean(input.im) },
             stagedRoleplayMemoryCandidates,
-            allowedRemoteMcpToolNames
+            allowedRemoteMcpToolNames,
+            input.beforeRequest
           );
           const { nativeImage, ...toolExecution } = execution;
           logger.info("ai.tool_call.completed", {
@@ -16411,7 +16414,7 @@ export class AiManager {
     return Math.round(clamp(numberValue(provider, "concurrency_limit") || 10, 1, 100));
   }
 
-  private scheduleProviderRequest<T>(provider: ProviderRow, signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
+  private scheduleProviderRequest<T>(provider: ProviderRow, signal: AbortSignal | undefined, run: () => Promise<T>, beforeDispatch?: () => void): Promise<T> {
     const providerId = stringValue(provider, "id");
     const concurrencyLimit = Math.round(clamp(numberValue(provider, "concurrency_limit") || 10, 1, 100));
     const rpmLimit = Math.round(clamp(numberValue(provider, "rpm_limit") || 10, 1, 10_000));
@@ -16437,6 +16440,7 @@ export class AiManager {
       entry = {
         signal,
         run,
+        beforeDispatch,
         resolve: (value) => resolve(value as T),
         reject,
         detachAbort: () => signal?.removeEventListener("abort", onAbort)
@@ -16469,6 +16473,12 @@ export class AiManager {
       entry.detachAbort();
       if (entry.signal?.aborted) {
         entry.reject(this.abortReason(entry.signal));
+        continue;
+      }
+      try {
+        entry.beforeDispatch?.();
+      } catch (error) {
+        entry.reject(error);
         continue;
       }
       schedule.active += 1;
