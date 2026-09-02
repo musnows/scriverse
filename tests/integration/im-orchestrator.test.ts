@@ -2028,7 +2028,8 @@ describe("IM AI 调度", () => {
     expect(requestPrompts.every((prompt) => prompt.includes("[1] 旁白：远方的风暴正在逼近，甲板开始剧烈摇晃。"))).toBe(true);
     expect(replyPrompts).toHaveLength(2);
     expect(replyPrompts.every((prompt) => prompt.includes("谁来安排今天的航线？"))).toBe(true);
-    expect(replyPrompts.every((prompt) => !prompt.includes("林舟：我来处理这件事。"))).toBe(true);
+    expect(replyPrompts[0]).not.toContain("林舟：我来处理这件事。");
+    expect(replyPrompts[1]).toContain("林舟：我来处理这件事。");
     expect(runtime.database.all(
       `SELECT membership.character_id, turn.score, turn.selected FROM im_chain_turns turn
        JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
@@ -2044,7 +2045,7 @@ describe("IM AI 调度", () => {
     );
     expect(characterMessages.map((message) => ({ sender_character_id: message.sender_character_id, content: message.content }))).toEqual([
       { sender_character_id: characters[0]?.id, content: "我来处理这件事。" },
-      { sender_character_id: characters[1]?.id, content: "我来处理这件事。" }
+      { sender_character_id: characters[1]?.id, content: "偏离原消息。" }
     ]);
     expect(JSON.parse(String(characterMessages[0]?.sender_snapshot_json))).toMatchObject({
       avatarUrl: `/api/im/conversations/${group.id}/characters/${characters[0]?.id}/avatar?v=${avatarSha256}`
