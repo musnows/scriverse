@@ -96,6 +96,12 @@ export class ImOrchestrator {
     };
   }
 
+  streamingReplySnapshots(conversationId: string): Record<string, unknown>[] {
+    return [...this.streamingReplies.values()]
+      .filter((event) => event.conversationId === conversationId)
+      .map((event) => structuredClone(event.payload));
+  }
+
   private publish(conversationId: string, type: ImRealtimeEvent["type"], payload: Record<string, unknown>): void {
     const event: ImRealtimeEvent = { id: id("imEvent"), type, conversationId, payload, createdAt: now() };
     const userIds = this.db.all(

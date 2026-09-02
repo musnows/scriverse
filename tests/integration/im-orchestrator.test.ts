@@ -340,6 +340,9 @@ describe("IM AI 调度", () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     expect(initialEvents.some((event) => event.type === "delta")).toBe(true);
+    expect(runtime.imOrchestrator.streamingReplySnapshots(String(direct.id))).toEqual([
+      expect.objectContaining({ status: "running", content: "前半" })
+    ]);
     let duplicateCancellationCalled = false;
     const duplicate = runtime.im.sendMessage(owner, String(direct.id), {
       content: "开始流式回复。",

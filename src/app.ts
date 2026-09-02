@@ -1986,7 +1986,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/im/conversations/:conversationId", (request, response) => {
     const user = requireImUser(request);
     const query = parse(z.object({ beforeSequence: z.coerce.number().int().positive().optional() }).strict(), request.query);
-    data(response, im.getConversation(request.params.conversationId, user.userId, query.beforeSequence));
+    const conversation = im.getConversation(request.params.conversationId, user.userId, query.beforeSequence);
+    const activeChain = conversation.activeChain as Record<string, unknown> | null;
+    data(response, {
+      ...conversation,
+      streamingReplies: conversation.active === true && activeChain
+        ? imOrchestrator.streamingReplySnapshots(request.params.conversationId)
+            .filter((snapshot) => snapshot.chainId === activeChain.id)
+        : []
+    });
   });
   app.patch("/api/im/conversations/:conversationId", (request, response) => {
     const user = requireImUser(request);

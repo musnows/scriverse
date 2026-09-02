@@ -308,12 +308,14 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
 
   function syncProvisionalReplies() {
     const previous = new Map(provisionalReplies);
+    const streaming = new Map(array(current?.streamingReplies).map((reply) => [String(reply.turnId || ""), reply]));
     provisionalReplies.clear();
     for (const turn of array(current?.activeChain?.turns)) {
       if (!['pending', 'running', 'failed', 'skipped'].includes(String(turn.status))) continue;
       const retained = previous.get(String(turn.id));
-      const next = upsertProvisionalReply({ ...turn, turnId: turn.id });
-      if (next && retained?.content) next.content = retained.content;
+      const snapshot = streaming.get(String(turn.id));
+      const next = upsertProvisionalReply({ ...turn, ...snapshot, turnId: turn.id });
+      if (next && !snapshot?.content && retained?.content) next.content = retained.content;
     }
   }
 
