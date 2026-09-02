@@ -242,7 +242,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
 
   function renderConversationList() {
     listHost.innerHTML = conversations.length
-      ? conversations.map((item) => `<button class="im-conversation-item${current?.id === item.id ? " is-active" : ""}" type="button" data-im-conversation="${esc(item.id)}">
+      ? conversations.map((item) => `<button class="im-conversation-item${current?.id === item.id ? " is-active" : ""}" type="button" data-im-conversation="${esc(item.id)}" aria-label="${esc(`${item.title}，${conversationSubtitle(item)}`)}" title="${esc(item.title)}">
           ${conversationAvatarHtml(item)}
           <span><strong>${esc(item.title)}</strong><small>${esc(conversationSubtitle(item))}</small></span>
           ${item.mentionUnreadCount ? `<b class="im-mention-unread">@${Number(item.mentionUnreadCount)}</b>` : item.unreadCount ? `<b class="im-item-unread">${Number(item.unreadCount)}</b>` : ""}
