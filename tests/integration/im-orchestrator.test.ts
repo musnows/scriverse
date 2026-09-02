@@ -614,6 +614,9 @@ describe("IM AI 调度", () => {
   });
 
   it("主动判断请求在关闭时同样保留中断状态", async () => {
+    const responseControl: { release?: () => void } = {};
+    const responseGate = new Promise<void>((resolve) => { responseControl.release = resolve; });
+    let requestCount = 0;
     let markStarted: (() => void) | null = null;
     const requestStarted = new Promise<void>((resolve) => { markStarted = resolve; });
     runtime = createRuntime({
@@ -621,7 +624,12 @@ describe("IM AI 调度", () => {
       masterSecret: "im-judge-shutdown-secret-with-enough-length",
       serveUi: false,
       fetchImpl: async (_url, init) => {
-        markStarted?.();
+        requestCount += 1;
+        if (requestCount === 2) markStarted?.();
+        if (requestCount === 2) {
+          await responseGate;
+          return completion('{"score":100}', false);
+        }
         return await new Promise<Response>((_resolve, reject) => {
           const signal = init?.signal;
           if (signal?.aborted) reject(new Error("transport aborted"));
@@ -655,10 +663,19 @@ describe("IM AI 调度", () => {
     });
     runtime.imOrchestrator.publishMessageResult(sent);
     await requestStarted;
-    await runtime.imOrchestrator.dispose();
+    let disposalCompleted = false;
+    const disposal = runtime.imOrchestrator.dispose().then(() => { disposalCompleted = true; });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(disposalCompleted).toBe(false);
+    responseControl.release?.();
+    await disposal;
 
     expect(runtime.database.get("SELECT status, error_code FROM im_chains WHERE id = ?", String((sent.chain as Record<string, unknown>).id)))
       .toEqual({ status: "interrupted", error_code: "IM_CHAIN_RUNTIME_RESTARTED" });
+    expect(runtime.database.all(
+      "SELECT status FROM im_chain_turns WHERE chain_id = ? AND kind = 'judge' ORDER BY created_at, id",
+      String((sent.chain as Record<string, unknown>).id)
+    )).toEqual([{ status: "cancelled" }, { status: "cancelled" }]);
   });
 
   it("流式响应中断后按配置次数重试并只重置当前 turn", async () => {

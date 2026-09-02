@@ -1379,10 +1379,16 @@ export class ImOrchestrator {
             this.finishChain(chainId, "quiet");
             return;
           }
-          const scores = await Promise.all(candidates.map(async (candidate) => ({
+          const settledScores = await Promise.allSettled(candidates.map(async (candidate) => ({
             membershipId: requiredString(candidate.id),
             score: await this.judge(chain, candidate, sourceMessage, signal)
           })));
+          if (signal.aborted) {
+            throw signal.reason instanceof Error ? signal.reason : new AppError(499, "IM_CHAIN_CANCELLED", "IM 交流链已取消");
+          }
+          const rejectedScore = settledScores.find((result) => result.status === "rejected");
+          if (rejectedScore?.status === "rejected") throw rejectedScore.reason;
+          const scores = settledScores.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
           const available = scores.filter((item): item is { membershipId: string; score: number } => item.score !== null)
             .sort((left, right) => right.score - left.score || left.membershipId.localeCompare(right.membershipId));
           if (available.length === 0) throw new AppError(502, "IM_JUDGE_ALL_FAILED", "所有 AI 角色的发言判断都失败了");
