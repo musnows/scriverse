@@ -1088,7 +1088,11 @@ const cliApiRules: Array<{ methods: string[]; path: RegExp }> = [
   { methods: ["GET"], path: /^\/api\/characters\/[^/]+\/versions$/u },
   { methods: ["POST"], path: /^\/api\/characters\/[^/]+\/restore$/u },
   { methods: ["GET"], path: /^\/api\/entity-versions\/[^/]+\/[^/]+$/u },
-  { methods: ["POST"], path: /^\/api\/entity-versions\/[^/]+\/[^/]+\/restore$/u }
+  { methods: ["POST"], path: /^\/api\/entity-versions\/[^/]+\/[^/]+\/restore$/u },
+  { methods: ["PATCH"], path: /^\/api\/ai-conversations\/[^/]+\/title$/u },
+  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/ai\/questions$/u },
+  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/ai\/questions\/[^/]+$/u },
+  { methods: ["POST"], path: /^\/api\/works\/[^/]+\/ai\/questions\/[^/]+\/(?:answer|reject)$/u }
 ];
 
 export function createCliApiScopeMiddleware(disabled = false): RequestHandler {

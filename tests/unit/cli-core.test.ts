@@ -544,4 +544,74 @@ describe("Scriverse CLI 核心", () => {
     expect(await runCli(["users", "list"], { stdout: stdout.stream, stderr: unknownError.stream })).toBe(1);
     expect(JSON.parse(unknownError.text())).toMatchObject({ error: { code: "CLI_COMMAND_UNKNOWN" } });
   });
+
+  it("支持 AI 对话重命名与批量提问的查看、回答和拒绝命令", async () => {
+    const root = temporaryRoot();
+    const configPath = join(root, "cli.json");
+    writeFileSync(configPath, JSON.stringify({
+      version: 2,
+      defaultServer: "http://127.0.0.1:13210",
+      servers: {
+        "http://127.0.0.1:13210": {
+          apiKey: "scrv_test_key",
+          apiKeyPrefix: "scrv_test",
+          user: { userId: "user-1", username: "writer", displayName: "Writer", role: "user" }
+        }
+      }
+    }));
+    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null });
+      return new Response(JSON.stringify({ data: { ok: true } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    const run = (args: string[]) => runCli([...args, "--config", configPath], { fetchImpl, stdout: outputCapture().stream, stderr: outputCapture().stream });
+    const answerPath = jsonFile(root, "question-answer.json", {
+      answers: [
+        { selectedOption: 1, customAnswer: "补充背景：星港在雨季封锁航道" },
+        { customAnswer: "沿用第三章的潮汐时间线" }
+      ]
+    });
+
+    expect(await run(["ai", "rename", "conversation-1", "--title", "  星港谈判线  "])).toBe(0);
+    expect(await run(["ai", "questions", "list", "work-1"])).toBe(0);
+    expect(await run(["ai", "questions", "list", "work-1", "--status", "pending", "--conversation-id", "conversation-1", "--limit", "12"])).toBe(0);
+    expect(await run(["ai", "questions", "get", "work-1", "question-1"])).toBe(0);
+    expect(await run(["ai", "questions", "answer", "work-1", "question-1", "--input", answerPath])).toBe(0);
+    expect(await run(["ai", "questions", "reject", "work-1", "question-1"])).toBe(0);
+    expect(calls).toEqual([
+      { url: "http://127.0.0.1:13210/api/ai-conversations/conversation-1/title", method: "PATCH", body: { title: "星港谈判线" } },
+      { url: "http://127.0.0.1:13210/api/works/work-1/ai/questions", method: "GET", body: null },
+      { url: "http://127.0.0.1:13210/api/works/work-1/ai/questions?conversationId=conversation-1&status=pending&limit=12", method: "GET", body: null },
+      { url: "http://127.0.0.1:13210/api/works/work-1/ai/questions/question-1", method: "GET", body: null },
+      {
+        url: "http://127.0.0.1:13210/api/works/work-1/ai/questions/question-1/answer",
+        method: "POST",
+        body: {
+          answers: [
+            { selectedOption: 1, customAnswer: "补充背景：星港在雨季封锁航道" },
+            { customAnswer: "沿用第三章的潮汐时间线" }
+          ]
+        }
+      },
+      { url: "http://127.0.0.1:13210/api/works/work-1/ai/questions/question-1/reject", method: "POST", body: {} }
+    ]);
+
+    const longTitle = outputCapture();
+    expect(await runCli(["ai", "rename", "conversation-1", "--title", "标".repeat(201), "--config", configPath], {
+      fetchImpl, stdout: longTitle.stream, stderr: longTitle.stream
+    })).toBe(1);
+    expect(JSON.parse(longTitle.text())).toMatchObject({ error: { code: "CLI_TITLE_INVALID" } });
+
+    const invalidStatus = outputCapture();
+    expect(await runCli(["ai", "questions", "list", "work-1", "--status", "closed", "--config", configPath], {
+      fetchImpl, stdout: invalidStatus.stream, stderr: invalidStatus.stream
+    })).toBe(1);
+    expect(JSON.parse(invalidStatus.text())).toMatchObject({ error: { code: "CLI_QUESTION_STATUS_INVALID" } });
+
+    const invalidLimit = outputCapture();
+    expect(await runCli(["ai", "questions", "list", "work-1", "--limit", "0", "--config", configPath], {
+      fetchImpl, stdout: invalidLimit.stream, stderr: invalidLimit.stream
+    })).toBe(1);
+    expect(JSON.parse(invalidLimit.text())).toMatchObject({ error: { code: "CLI_QUESTION_LIMIT_INVALID" } });
+  });
 });

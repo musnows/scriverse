@@ -287,6 +287,16 @@ async function run(): Promise<void> {
   assert.equal((cliJson(["work", "get", workId]) as Record<string, unknown>).id, workId);
   checked("work-commands", "work create, update, list and get passed with admin API key restricted to owned works");
 
+  const aiConversation = await sessionRequest(admin, `/api/works/${workId}/ai-conversations`, "POST", { title: "初始对话标题" }) as Record<string, unknown>;
+  const aiConversationId = String(aiConversation.id);
+  const renamedConversation = cliJson(["ai", "rename", aiConversationId, "--title", "CLI 重命名后的对话"]) as Record<string, unknown>;
+  assert.equal(renamedConversation.title, "CLI 重命名后的对话");
+  const conversationDetail = await sessionRequest(admin, `/api/ai-conversations/${aiConversationId}`) as Record<string, unknown>;
+  assert.equal(conversationDetail.title, "CLI 重命名后的对话");
+  const emptyQuestions = cliJson(["ai", "questions", "list", workId]) as { questions: unknown[] };
+  assert.equal(emptyQuestions.questions.length, 0);
+  checked("ai-commands", "ai rename and questions list passed against the real server");
+
   const volume = createResource("volume", workId, {
     title: "第一卷",
     kind: "main",
@@ -556,6 +566,7 @@ async function run(): Promise<void> {
   const writerWorks = cliJson(["work", "list"]) as Array<Record<string, unknown>>;
   assert.deepEqual(writerWorks.map((item) => item.id), [writerWork.id]);
   cliError(["work", "get", workId], "WORK_ACCESS_DENIED");
+  cliError(["ai", "rename", aiConversationId, "--title", "越权重命名"], "WORK_ACCESS_DENIED");
   await resetApiKey(writer);
   cliError(["auth", "status"], "API_KEY_INVALID");
   assert.deepEqual(cliJson(["auth", "logout"]), { authenticated: false, server: baseUrl, defaultServer: baseUrl, configPath });
