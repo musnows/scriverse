@@ -68,14 +68,14 @@ describe("全局 IM 工作区界面", () => {
     expect(page.text).toContain("单选角色创建单聊，多选角色创建群聊");
     expect(page.text).not.toContain('id="im-direct-character"');
     expect(page.text).not.toContain('id="im-new-group"');
-    expect(page.text).toContain("feature=global-im-v104");
+    expect(page.text).toContain("feature=global-im-v106");
     expect(page.text).toContain("feature=im-narration-contrast-v1");
     expect(page.text).toContain("feature=im-member-add-plus-v2");
     expect(page.text).toContain("feature=im-button-hierarchy-v1");
     expect(page.text).toContain("feature=im-settings-gear-v1");
     expect(page.text).toContain("feature=im-icon-button-size-v1");
     expect(page.text).toContain("feature=im-sidebar-compact-v1");
-    expect(application.text).toContain('/im.js?v=20260903-global-im-v104');
+    expect(application.text).toContain('/im.js?v=20260904-im-judge-outcomes-v106');
     expect(application.text).toContain("onRouteChange: schedulePresenceHeartbeat");
     expect(application.text).toContain('confirmDiscardChanges("当前章节有未保存修改，进入 IM 将放弃本地修改。是否继续？")');
     expect(application.text).toMatch(/beforeOpen: async \(\) => \{[\s\S]*?cancelChapterAutoSave\(\);[\s\S]*?state\.dirty = false;/);
@@ -249,6 +249,8 @@ describe("全局 IM 工作区界面", () => {
     expect(im.text).toContain('data-im-provisional-status="${esc(reply.status)}"');
     expect(im.text).toContain('data-im-provisional-judge="${esc(judge.turnId)}"');
     expect(im.text).toContain("模型判断当前无需回答");
+    expect(im.text).toContain("judgeOutcomes");
+    expect(im.text).toContain("judgesByMessage");
     expect(im.text).toContain("角色回答生成失败");
     expect(styles.text).toContain(".im-view { position: relative; display: grid; grid-template-columns:");
     expect(styles.text).toContain("var(--im-conversations-width, 300px)");

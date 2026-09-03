@@ -3687,15 +3687,30 @@ describe("IM AI 调度", () => {
     });
     runtime.imOrchestrator.publishMessageResult(sent);
     const chainId = String((sent.chain as Record<string, unknown>).id);
+    const firstMessageId = String((sent.message as Record<string, unknown>).id);
     const chain = await waitForChain(runtime, chainId);
+    const secondSent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "第二条消息也请分别判断。",
+      requestId: "im-judge-quiet-feedback-0002"
+    });
+    runtime.imOrchestrator.publishMessageResult(secondSent);
+    const secondChainId = String((secondSent.chain as Record<string, unknown>).id);
+    const secondMessageId = String((secondSent.message as Record<string, unknown>).id);
+    const secondChain = await waitForChain(runtime, secondChainId);
     unsubscribe();
 
     expect(chain).toMatchObject({ status: "quiet", generated_count: 0 });
+    expect(secondChain).toMatchObject({ status: "quiet", generated_count: 0 });
     const judgeEvents = events.filter((event) => event.type === "turn" && event.payload.kind === "judge");
-    expect(judgeEvents.filter((event) => event.payload.status === "running")).toHaveLength(2);
-    expect(judgeEvents.filter((event) => event.payload.status === "completed" && event.payload.selected === false)).toHaveLength(2);
+    expect(judgeEvents.filter((event) => event.payload.status === "running")).toHaveLength(4);
+    expect(judgeEvents.filter((event) => event.payload.status === "completed" && event.payload.selected === false)).toHaveLength(4);
     expect(judgeEvents.every((event) => event.payload.score === undefined)).toBe(true);
-    const activeChain = runtime.im.getConversation(String(group.id), owner.userId).activeChain as Record<string, unknown>;
+    expect(new Set(judgeEvents.map((event) => event.payload.sourceMessageId))).toEqual(new Set([
+      firstMessageId,
+      secondMessageId
+    ]));
+    const conversation = runtime.im.getConversation(String(group.id), owner.userId);
+    const activeChain = conversation.activeChain as Record<string, unknown>;
     expect(activeChain.turns).toEqual([]);
     expect(activeChain.judges).toEqual(expect.arrayContaining(characters.map((character) => expect.objectContaining({
       characterId: character.id,
@@ -3703,6 +3718,18 @@ describe("IM AI 调度", () => {
       score: 0,
       selected: false
     }))));
+    expect(conversation.judgeOutcomes).toEqual(expect.arrayContaining([
+      ...characters.map((character) => expect.objectContaining({
+        sourceMessageId: firstMessageId,
+        characterId: character.id,
+        status: "completed"
+      })),
+      ...characters.map((character) => expect.objectContaining({
+        sourceMessageId: secondMessageId,
+        characterId: character.id,
+        status: "completed"
+      }))
+    ]));
   });
 
   it("已排队角色被 AI mention 时只保留一个高优先级回复 turn", async () => {
