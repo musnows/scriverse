@@ -18,10 +18,226 @@ import {
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
 export const SYSTEM_USER_ID = "__scriverse_system_user__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0；版本 111 扩展模型思考强度为 auto；版本 112 为 CLI API Key 增加可复制的加密密文；版本 113 增加角色收藏状态与列表索引；版本 114 增加组织、设定档案与想法收藏状态及列表索引；版本 115 增加 AI 对话会话级场景钉；版本 116 增加可持久化且可撤销的 Desktop Bearer 会话；版本 117 增加作品离线授权、同步变更游标与幂等变更结果；版本 118 增加供应商分析请求超时配置；版本 119 记录分析任务是否由 API Key 创建；版本 120 将书籍资料收藏按用户隔离并增加书籍级共享置顶；版本 121 强制作品 Owner 非空并建立用户外键约束；版本 122 创建 AI 写入审批与持久化提问表，并增加按角色归属的共享角色扮演记忆及作品级正文编辑偏好；版本 123 为正文评论持久化逐行哈希锚点；版本 124 为正文行和评论锚点持久化稳定行身份；版本 125 增加显式语义检索配置、分片索引、模型类型与上下文快照；版本 126 为作品增加加密的远程 MCP 配置与工具目录。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0；版本 111 扩展模型思考强度为 auto；版本 112 为 CLI API Key 增加可复制的加密密文；版本 113 增加角色收藏状态与列表索引；版本 114 增加组织、设定档案与想法收藏状态及列表索引；版本 115 增加 AI 对话会话级场景钉；版本 116 增加可持久化且可撤销的 Desktop Bearer 会话；版本 117 增加作品离线授权、同步变更游标与幂等变更结果；版本 118 增加供应商分析请求超时配置；版本 119 记录分析任务是否由 API Key 创建；版本 120 将书籍资料收藏按用户隔离并增加书籍级共享置顶；版本 121 强制作品 Owner 非空并建立用户外键约束；版本 122 创建 AI 写入审批与持久化提问表，并增加按角色归属的共享角色扮演记忆及作品级正文编辑偏好；版本 123 为正文评论持久化逐行哈希锚点；版本 124 为正文行和评论锚点持久化稳定行身份；版本 125 增加显式语义检索配置、分片索引、模型类型与上下文快照；版本 126 为作品增加加密的远程 MCP 配置与工具目录；版本 127 创建跨作品 IM 会话、成员、消息、角色上下文与 AI 链路状态；版本 128 为退出成员冻结会话快照；版本 129 持久化 IM 历史头像版本；版本 130 为 IM 手动重试增加幂等来源；版本 131 限定迁移期回填已有 IM 头像版本；版本 132 优化 IM 会话成员范围查询；版本 133 优化 IM 历史头像授权查询；版本 134 为 IM 历史头像哈希建立表达式索引；版本 135 为 AI 提问增加批量问题与回答字段。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 126;
+export const DATABASE_SCHEMA_VERSION = 135;
 export const SQLITE_IOERR_SHMSIZE = 4874;
+
+const IM_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS im_user_settings (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    preferred_name TEXT NOT NULL DEFAULT '' CHECK(length(preferred_name) <= 80),
+    pronouns TEXT NOT NULL DEFAULT '' CHECK(length(pronouns) <= 80),
+    identity_summary TEXT NOT NULL DEFAULT '' CHECK(length(identity_summary) <= 2000),
+    additional_notes TEXT NOT NULL DEFAULT '' CHECK(length(additional_notes) <= 4000),
+    primary_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+    fallback_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+    retry_count INTEGER NOT NULL DEFAULT 3 CHECK(retry_count BETWEEN 1 AND 20),
+    updated_at TEXT NOT NULL,
+    CHECK(primary_model_id IS NULL OR fallback_model_id IS NULL OR primary_model_id <> fallback_model_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS im_conversations (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('direct', 'group')),
+    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    direct_character_id TEXT,
+    title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 80),
+    reply_mode TEXT NOT NULL DEFAULT 'mention' CHECK(reply_mode IN ('mention', 'proactive')),
+    response_threshold INTEGER NOT NULL DEFAULT 60 CHECK(response_threshold BETWEEN 0 AND 100),
+    max_ai_messages INTEGER NOT NULL DEFAULT 20 CHECK(max_ai_messages BETWEEN 1 AND 100),
+    context_epoch INTEGER NOT NULL DEFAULT 1 CHECK(context_epoch > 0),
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disbanded')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    disbanded_at TEXT,
+    UNIQUE(owner_user_id, direct_character_id),
+    CHECK((kind = 'direct' AND direct_character_id IS NOT NULL) OR (kind = 'group' AND direct_character_id IS NULL))
+  );
+
+  CREATE TABLE IF NOT EXISTS im_human_memberships (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES im_conversations(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK(role IN ('owner', 'member')),
+    joined_sequence INTEGER NOT NULL DEFAULT 0 CHECK(joined_sequence >= 0),
+    left_sequence INTEGER CHECK(left_sequence IS NULL OR left_sequence >= joined_sequence),
+    last_read_sequence INTEGER NOT NULL DEFAULT 0 CHECK(last_read_sequence >= 0),
+    conversation_snapshot_json TEXT CHECK(conversation_snapshot_json IS NULL OR (json_valid(conversation_snapshot_json) AND json_type(conversation_snapshot_json) = 'object')),
+    joined_at TEXT NOT NULL,
+    left_at TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_im_human_memberships_active
+    ON im_human_memberships(conversation_id, user_id) WHERE left_at IS NULL;
+  CREATE INDEX IF NOT EXISTS idx_im_human_memberships_user
+    ON im_human_memberships(user_id, left_at, conversation_id);
+  CREATE INDEX IF NOT EXISTS idx_im_human_memberships_conversation
+    ON im_human_memberships(conversation_id, joined_at, id);
+
+  CREATE TABLE IF NOT EXISTS im_character_memberships (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES im_conversations(id) ON DELETE CASCADE,
+    character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
+    source_work_id TEXT REFERENCES works(id) ON DELETE SET NULL,
+    snapshot_json TEXT NOT NULL CHECK(json_valid(snapshot_json) AND json_type(snapshot_json) = 'object'),
+    joined_sequence INTEGER NOT NULL DEFAULT 0 CHECK(joined_sequence >= 0),
+    left_sequence INTEGER CHECK(left_sequence IS NULL OR left_sequence >= joined_sequence),
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'suspended', 'removed')),
+    joined_at TEXT NOT NULL,
+    left_at TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_im_character_memberships_active
+    ON im_character_memberships(conversation_id, character_id) WHERE left_at IS NULL AND character_id IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_im_character_memberships_character
+    ON im_character_memberships(character_id, left_at, conversation_id);
+  CREATE INDEX IF NOT EXISTS idx_im_character_memberships_conversation
+    ON im_character_memberships(conversation_id, joined_at, id);
+
+  CREATE TABLE IF NOT EXISTS im_messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES im_conversations(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL CHECK(sequence > 0),
+    context_epoch INTEGER NOT NULL DEFAULT 1 CHECK(context_epoch > 0),
+    sender_kind TEXT NOT NULL CHECK(sender_kind IN ('human', 'character', 'system')),
+    sender_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    sender_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
+    sender_snapshot_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(sender_snapshot_json) AND json_type(sender_snapshot_json) = 'object'),
+    content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 20000),
+    chain_id TEXT,
+    request_id TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(metadata_json) AND json_type(metadata_json) = 'object'),
+    created_at TEXT NOT NULL,
+    UNIQUE(conversation_id, sequence),
+    UNIQUE(conversation_id, request_id),
+    CHECK(
+      (sender_kind = 'human' AND sender_user_id IS NOT NULL AND sender_character_id IS NULL)
+      OR (sender_kind = 'character' AND sender_user_id IS NULL)
+      OR (sender_kind = 'system' AND sender_user_id IS NULL AND sender_character_id IS NULL)
+    )
+  );
+  CREATE INDEX IF NOT EXISTS idx_im_messages_conversation
+    ON im_messages(conversation_id, sequence DESC);
+  CREATE INDEX IF NOT EXISTS idx_im_messages_human_avatar
+    ON im_messages(
+      conversation_id, sender_user_id,
+      COALESCE(NULLIF(json_extract(sender_snapshot_json, '$.avatarSha256'), ''),
+        CASE WHEN instr(json_extract(sender_snapshot_json, '$.avatarUrl'), '?v=') > 0
+          THEN substr(json_extract(sender_snapshot_json, '$.avatarUrl'), instr(json_extract(sender_snapshot_json, '$.avatarUrl'), '?v=') + 3) END),
+      sequence
+    ) WHERE sender_kind = 'human';
+  CREATE INDEX IF NOT EXISTS idx_im_messages_character_avatar
+    ON im_messages(
+      conversation_id, sender_character_id,
+      COALESCE(NULLIF(json_extract(sender_snapshot_json, '$.avatarSha256'), ''),
+        CASE WHEN instr(json_extract(sender_snapshot_json, '$.avatarUrl'), '?v=') > 0
+          THEN substr(json_extract(sender_snapshot_json, '$.avatarUrl'), instr(json_extract(sender_snapshot_json, '$.avatarUrl'), '?v=') + 3) END),
+      sequence
+    ) WHERE sender_kind = 'character';
+  CREATE INDEX IF NOT EXISTS idx_im_messages_character_snapshot_avatar
+    ON im_messages(
+      conversation_id, json_extract(sender_snapshot_json, '$.id'),
+      COALESCE(NULLIF(json_extract(sender_snapshot_json, '$.avatarSha256'), ''),
+        CASE WHEN instr(json_extract(sender_snapshot_json, '$.avatarUrl'), '?v=') > 0
+          THEN substr(json_extract(sender_snapshot_json, '$.avatarUrl'), instr(json_extract(sender_snapshot_json, '$.avatarUrl'), '?v=') + 3) END),
+      sequence
+    )
+    WHERE sender_kind = 'character' AND sender_character_id IS NULL;
+
+  CREATE TABLE IF NOT EXISTS im_mentions (
+    message_id TEXT NOT NULL REFERENCES im_messages(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL CHECK(position >= 0),
+    target_kind TEXT NOT NULL CHECK(target_kind IN ('character', 'user')),
+    target_id TEXT NOT NULL,
+    target_snapshot_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(target_snapshot_json) AND json_type(target_snapshot_json) = 'object'),
+    PRIMARY KEY(message_id, position)
+  ) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS idx_im_mentions_target
+    ON im_mentions(target_kind, target_id, message_id);
+
+  CREATE TABLE IF NOT EXISTS im_message_deliveries (
+    message_id TEXT NOT NULL REFERENCES im_messages(id) ON DELETE CASCADE,
+    character_membership_id TEXT NOT NULL REFERENCES im_character_memberships(id) ON DELETE CASCADE,
+    delivered_at TEXT NOT NULL,
+    PRIMARY KEY(message_id, character_membership_id)
+  ) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS idx_im_message_deliveries_character
+    ON im_message_deliveries(character_membership_id, message_id);
+
+  CREATE TABLE IF NOT EXISTS im_character_contexts (
+    character_membership_id TEXT NOT NULL REFERENCES im_character_memberships(id) ON DELETE CASCADE,
+    context_epoch INTEGER NOT NULL CHECK(context_epoch > 0),
+    summary TEXT NOT NULL DEFAULT '',
+    summarized_through_sequence INTEGER NOT NULL DEFAULT 0 CHECK(summarized_through_sequence >= 0),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(character_membership_id, context_epoch)
+  ) WITHOUT ROWID;
+
+  CREATE TABLE IF NOT EXISTS im_chains (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES im_conversations(id) ON DELETE CASCADE,
+    initiator_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    authorization_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    trigger_message_id TEXT NOT NULL REFERENCES im_messages(id) ON DELETE CASCADE,
+    retry_source_chain_id TEXT REFERENCES im_chains(id) ON DELETE SET NULL,
+    mode TEXT NOT NULL CHECK(mode IN ('direct', 'mention', 'proactive')),
+    threshold INTEGER NOT NULL CHECK(threshold BETWEEN 0 AND 100),
+    max_ai_messages INTEGER NOT NULL CHECK(max_ai_messages BETWEEN 1 AND 100),
+    retry_count INTEGER NOT NULL CHECK(retry_count BETWEEN 1 AND 20),
+    primary_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+    fallback_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+    model_stage TEXT NOT NULL DEFAULT 'primary' CHECK(model_stage IN ('primary', 'fallback')),
+    status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'waiting_config', 'quiet', 'completed', 'cancelled', 'failed', 'interrupted', 'limit')),
+    generated_count INTEGER NOT NULL DEFAULT 0 CHECK(generated_count >= 0),
+    error_code TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_im_chains_active
+    ON im_chains(conversation_id) WHERE status IN ('queued', 'running', 'waiting_config');
+  CREATE INDEX IF NOT EXISTS idx_im_chains_initiator
+    ON im_chains(initiator_user_id, status, created_at);
+
+  CREATE TABLE IF NOT EXISTS im_chain_turns (
+    id TEXT PRIMARY KEY,
+    chain_id TEXT NOT NULL REFERENCES im_chains(id) ON DELETE CASCADE,
+    character_membership_id TEXT NOT NULL REFERENCES im_character_memberships(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('judge', 'reply', 'compact')),
+    score INTEGER CHECK(score IS NULL OR score BETWEEN 0 AND 100),
+    selected INTEGER NOT NULL DEFAULT 0 CHECK(selected IN (0, 1)),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'completed', 'skipped', 'failed', 'cancelled')),
+    model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+    model_stage TEXT CHECK(model_stage IS NULL OR model_stage IN ('primary', 'fallback')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    duration_ms INTEGER CHECK(duration_ms IS NULL OR duration_ms >= 0),
+    failure TEXT,
+    ai_call_ids_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(ai_call_ids_json) AND json_type(ai_call_ids_json) = 'array'),
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_im_chain_turns_chain
+    ON im_chain_turns(chain_id, created_at, id);
+
+  CREATE TABLE IF NOT EXISTS im_avatar_versions (
+    conversation_id TEXT NOT NULL REFERENCES im_conversations(id) ON DELETE CASCADE,
+    participant_kind TEXT NOT NULL CHECK(participant_kind IN ('character', 'user')),
+    participant_id TEXT NOT NULL,
+    sha256 TEXT NOT NULL CHECK(length(sha256) = 64),
+    mime_type TEXT NOT NULL,
+    byte_length INTEGER NOT NULL CHECK(byte_length >= 0),
+    storage_key TEXT,
+    content BLOB,
+    width INTEGER NOT NULL CHECK(width > 0),
+    height INTEGER NOT NULL CHECK(height > 0),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(conversation_id, participant_kind, participant_id, sha256),
+    CHECK((participant_kind = 'character' AND storage_key IS NOT NULL AND content IS NULL)
+      OR (participant_kind = 'user' AND storage_key IS NULL AND content IS NOT NULL))
+  ) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS idx_im_avatar_versions_storage
+    ON im_avatar_versions(storage_key) WHERE storage_key IS NOT NULL;
+`;
 
 export type AvailableDiskSpace = {
   availableBytes: number;
@@ -88,9 +304,11 @@ export class Database {
 
   constructor(readonly filename: string) {
     logger.info("database.opening", { databasePath: filename, inMemory: filename === ":memory:" });
+    let raw: DatabaseSync | null = null;
     try {
       if (filename !== ":memory:") mkdirSync(dirname(filename), { recursive: true });
-      this.raw = new DatabaseSync(filename);
+      raw = new DatabaseSync(filename);
+      this.raw = raw;
       this.raw.exec("PRAGMA foreign_keys = ON");
       this.raw.exec("PRAGMA busy_timeout = 5000");
       if (filename !== ":memory:") this.raw.exec("PRAGMA journal_mode = WAL");
@@ -104,6 +322,11 @@ export class Database {
       const migration = this.get<{ version: number }>("SELECT MAX(version) AS version FROM schema_migrations");
       logger.info("database.ready", { inMemory: filename === ":memory:", schemaVersion: Number(migration?.version ?? 0) });
     } catch (error) {
+      try {
+        raw?.close();
+      } catch (closeError) {
+        logger.warn("database.open_failure_close_failed", { databasePath: filename, error: sanitizeError(closeError) });
+      }
       logSqliteDiskIoError(filename, error);
       logger.error("database.open_failed", { databasePath: filename, error: sanitizeError(error) });
       throw error;
@@ -919,6 +1142,7 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_foreshadow_occurrences_chapter ON foreshadow_occurrences(chapter_id, role);
       CREATE INDEX IF NOT EXISTS idx_continuation_guards_suggestion ON continuation_guard_runs(suggestion_id, created_at DESC);
     `);
+    this.raw.exec(IM_SCHEMA_SQL);
     this.applyDataMigrations();
   }
 
@@ -4688,7 +4912,7 @@ export class Database {
         this.run("CREATE INDEX IF NOT EXISTS idx_ai_write_plans_initiator ON ai_write_plans(initiator_user_id)");
         this.run("CREATE INDEX IF NOT EXISTS idx_ai_write_plans_owner ON ai_write_plans(conversation_owner_user_id)");
         this.run("CREATE INDEX IF NOT EXISTS idx_ai_write_plan_operations_plan ON ai_write_plan_operations(plan_id, seq)");
-        // AskUserQuestions 提问记录：一次一个问题，持久化保存，支持刷新后继续查看。
+        // AskUserQuestions 提问记录：一次工具调用对应一个问题批次，持久化保存，支持刷新后继续查看。
         this.run(`
           CREATE TABLE IF NOT EXISTS ai_user_questions (
             id TEXT PRIMARY KEY,
@@ -4698,10 +4922,12 @@ export class Database {
             recipient_user_id TEXT,
             question TEXT NOT NULL,
             options_json TEXT NOT NULL DEFAULT '[]',
+            questions_json TEXT NOT NULL DEFAULT '[]',
             status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'answered', 'rejected', 'expired')),
             selected_option INTEGER,
             answer_text TEXT NOT NULL DEFAULT '',
             is_custom_answer INTEGER NOT NULL DEFAULT 0,
+            answers_json TEXT NOT NULL DEFAULT '[]',
             tool_call_id TEXT,
             continuation_json TEXT NOT NULL DEFAULT '{}',
             resume_state TEXT NOT NULL DEFAULT 'pending' CHECK(resume_state IN ('pending', 'claimed', 'completed', 'failed')),
@@ -5046,6 +5272,333 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    const imTablesPresent = [
+      "im_user_settings",
+      "im_conversations",
+      "im_human_memberships",
+      "im_character_memberships",
+      "im_messages",
+      "im_mentions",
+      "im_message_deliveries",
+      "im_character_contexts",
+      "im_chains",
+      "im_chain_turns"
+    ].every((table) => this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?",
+      table
+    ) !== undefined);
+    const imMessageContextEpochPresent = this.all<{ name: string }>("PRAGMA table_info(im_messages)")
+      .some((column) => column.name === "context_epoch");
+    if (!applied.has(127) || !imTablesPresent || !imMessageContextEpochPresent) {
+      this.transaction(() => {
+        this.raw.exec(IM_SCHEMA_SQL);
+        const messageColumns = new Set(this.all<{ name: string }>("PRAGMA table_info(im_messages)").map((column) => column.name));
+        if (!messageColumns.has("context_epoch")) {
+          this.run("ALTER TABLE im_messages ADD COLUMN context_epoch INTEGER NOT NULL DEFAULT 1 CHECK(context_epoch > 0)");
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (127, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const imHumanConversationSnapshotPresent = this.all<{ name: string }>("PRAGMA table_info(im_human_memberships)")
+      .some((column) => column.name === "conversation_snapshot_json");
+    if (!applied.has(128) || !imHumanConversationSnapshotPresent) {
+      this.transaction(() => {
+        if (!imHumanConversationSnapshotPresent) {
+          this.run(`ALTER TABLE im_human_memberships ADD COLUMN conversation_snapshot_json TEXT
+            CHECK(conversation_snapshot_json IS NULL OR (json_valid(conversation_snapshot_json) AND json_type(conversation_snapshot_json) = 'object'))`);
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (128, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const imAvatarVersionsPresent = this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'im_avatar_versions'"
+    ) !== undefined;
+    if (!applied.has(129) || !imAvatarVersionsPresent) {
+      this.transaction(() => {
+        this.raw.exec(`CREATE TABLE IF NOT EXISTS im_avatar_versions (
+          conversation_id TEXT NOT NULL REFERENCES im_conversations(id) ON DELETE CASCADE,
+          participant_kind TEXT NOT NULL CHECK(participant_kind IN ('character', 'user')),
+          participant_id TEXT NOT NULL,
+          sha256 TEXT NOT NULL CHECK(length(sha256) = 64),
+          mime_type TEXT NOT NULL,
+          byte_length INTEGER NOT NULL CHECK(byte_length >= 0),
+          storage_key TEXT,
+          content BLOB,
+          width INTEGER NOT NULL CHECK(width > 0),
+          height INTEGER NOT NULL CHECK(height > 0),
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(conversation_id, participant_kind, participant_id, sha256),
+          CHECK((participant_kind = 'character' AND storage_key IS NOT NULL AND content IS NULL)
+            OR (participant_kind = 'user' AND storage_key IS NULL AND content IS NOT NULL))
+        ) WITHOUT ROWID;
+        CREATE INDEX IF NOT EXISTS idx_im_avatar_versions_storage
+          ON im_avatar_versions(storage_key) WHERE storage_key IS NOT NULL;`);
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (129, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const imChainRetrySourcePresent = this.all<{ name: string }>("PRAGMA table_info(im_chains)")
+      .some((column) => column.name === "retry_source_chain_id");
+    const imChainRetrySourceIndexPresent = this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_chains_retry_source'"
+    ) !== undefined;
+    if (!applied.has(130) || !imChainRetrySourcePresent || !imChainRetrySourceIndexPresent) {
+      this.transaction(() => {
+        if (!imChainRetrySourcePresent) {
+          this.run("ALTER TABLE im_chains ADD COLUMN retry_source_chain_id TEXT REFERENCES im_chains(id) ON DELETE SET NULL");
+        }
+        this.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_im_chains_retry_source
+          ON im_chains(retry_source_chain_id) WHERE retry_source_chain_id IS NOT NULL`);
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (130, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const imAvatarVersionsEmpty = Number(this.get(
+      "SELECT COUNT(*) AS count FROM im_avatar_versions"
+    )?.count ?? 0) === 0;
+    const imAvatarVersionRecoverySourcePresent = imAvatarVersionsEmpty && this.get(
+      `SELECT 1 AS present
+       WHERE EXISTS (
+         SELECT 1 FROM im_character_memberships membership
+         JOIN character_avatars avatar ON avatar.character_id = membership.character_id
+         WHERE membership.left_at IS NULL
+       ) OR EXISTS (
+         SELECT 1 FROM im_human_memberships membership
+         JOIN user_avatars avatar ON avatar.user_id = membership.user_id
+         WHERE membership.left_at IS NULL
+       )`
+    ) !== undefined;
+    if (!applied.has(131) || !imAvatarVersionsPresent || imAvatarVersionRecoverySourcePresent) {
+      this.transaction(() => {
+          this.run(`INSERT OR IGNORE INTO im_avatar_versions (
+            conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+            storage_key, content, width, height, created_at
+          )
+          SELECT membership.conversation_id, 'character', avatar.character_id, avatar.sha256,
+                 avatar.mime_type, avatar.byte_length, avatar.storage_key, NULL,
+                 avatar.width, avatar.height, avatar.updated_at
+          FROM im_character_memberships membership
+          JOIN character_avatars avatar ON avatar.character_id = membership.character_id
+          WHERE membership.left_at IS NULL`);
+          this.run(`INSERT OR IGNORE INTO im_avatar_versions (
+            conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+            storage_key, content, width, height, created_at
+          )
+          SELECT membership.conversation_id, 'user', avatar.user_id, avatar.sha256,
+                 avatar.mime_type, avatar.byte_length, NULL, avatar.content,
+                 avatar.width, avatar.height, avatar.updated_at
+          FROM im_human_memberships membership
+          JOIN user_avatars avatar ON avatar.user_id = membership.user_id
+          WHERE membership.left_at IS NULL`);
+          this.run(`INSERT OR IGNORE INTO im_avatar_versions (
+            conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+            storage_key, content, width, height, created_at
+          )
+          SELECT message.conversation_id, 'character', avatar.character_id, avatar.sha256,
+                 avatar.mime_type, avatar.byte_length, avatar.storage_key, NULL,
+                 avatar.width, avatar.height, message.created_at
+          FROM im_messages message
+          JOIN character_avatars avatar
+            ON avatar.character_id = COALESCE(message.sender_character_id, json_extract(message.sender_snapshot_json, '$.id'))
+           AND avatar.sha256 = COALESCE(
+             NULLIF(json_extract(message.sender_snapshot_json, '$.avatarSha256'), ''),
+             CASE WHEN instr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), '?v=') > 0
+               THEN substr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), instr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), '?v=') + 3)
+             END
+           )
+          WHERE message.sender_kind = 'character'`);
+          this.run(`INSERT OR IGNORE INTO im_avatar_versions (
+            conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+            storage_key, content, width, height, created_at
+          )
+          SELECT message.conversation_id, 'user', avatar.user_id, avatar.sha256,
+                 avatar.mime_type, avatar.byte_length, NULL, avatar.content,
+                 avatar.width, avatar.height, message.created_at
+          FROM im_messages message
+          JOIN user_avatars avatar
+            ON avatar.user_id = COALESCE(message.sender_user_id, json_extract(message.sender_snapshot_json, '$.userId'))
+           AND avatar.sha256 = COALESCE(
+             NULLIF(json_extract(message.sender_snapshot_json, '$.avatarSha256'), ''),
+             CASE WHEN instr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), '?v=') > 0
+               THEN substr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), instr(json_extract(message.sender_snapshot_json, '$.avatarUrl'), '?v=') + 3)
+             END
+           )
+          WHERE message.sender_kind = 'human'`);
+          this.run(`INSERT OR IGNORE INTO im_avatar_versions (
+            conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+            storage_key, content, width, height, created_at
+          )
+          SELECT viewer.conversation_id, 'character', avatar.character_id, avatar.sha256,
+                 avatar.mime_type, avatar.byte_length, avatar.storage_key, NULL,
+                 avatar.width, avatar.height, viewer.left_at
+          FROM im_human_memberships viewer, json_each(viewer.conversation_snapshot_json, '$.participants.characters') participant
+          JOIN character_avatars avatar
+            ON avatar.character_id = json_extract(participant.value, '$.characterId')
+           AND avatar.sha256 = substr(
+             json_extract(participant.value, '$.avatarUrl'),
+             instr(json_extract(participant.value, '$.avatarUrl'), '?v=') + 3
+           )
+          WHERE viewer.conversation_snapshot_json IS NOT NULL AND viewer.left_at IS NOT NULL`);
+          this.run(`INSERT OR IGNORE INTO im_avatar_versions (
+            conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+            storage_key, content, width, height, created_at
+          )
+          SELECT viewer.conversation_id, 'user', avatar.user_id, avatar.sha256,
+                 avatar.mime_type, avatar.byte_length, NULL, avatar.content,
+                 avatar.width, avatar.height, viewer.left_at
+          FROM im_human_memberships viewer, json_each(viewer.conversation_snapshot_json, '$.participants.humans') participant
+          JOIN user_avatars avatar
+            ON avatar.user_id = json_extract(participant.value, '$.userId')
+           AND avatar.sha256 = substr(
+             json_extract(participant.value, '$.avatarUrl'),
+             instr(json_extract(participant.value, '$.avatarUrl'), '?v=') + 3
+           )
+          WHERE viewer.conversation_snapshot_json IS NOT NULL AND viewer.left_at IS NOT NULL`);
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (131, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const imMembershipConversationIndexesPresent = [
+      "idx_im_human_memberships_conversation",
+      "idx_im_character_memberships_conversation"
+    ].every((index) => this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'index' AND name = ?",
+      index
+    ) !== undefined);
+    if (!applied.has(132) || !imMembershipConversationIndexesPresent) {
+      this.transaction(() => {
+        this.run(`CREATE INDEX IF NOT EXISTS idx_im_human_memberships_conversation
+          ON im_human_memberships(conversation_id, joined_at, id)`);
+        this.run(`CREATE INDEX IF NOT EXISTS idx_im_character_memberships_conversation
+          ON im_character_memberships(conversation_id, joined_at, id)`);
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (132, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const imMessageAvatarIndexesPresent = [
+      "idx_im_messages_human_avatar",
+      "idx_im_messages_character_avatar",
+      "idx_im_messages_character_snapshot_avatar"
+    ].every((index) => this.get(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'index' AND name = ?",
+      index
+    ) !== undefined);
+    if (!applied.has(133) || !imMessageAvatarIndexesPresent) {
+      this.transaction(() => {
+        this.run(`CREATE INDEX IF NOT EXISTS idx_im_messages_human_avatar
+          ON im_messages(conversation_id, sender_user_id, sequence) WHERE sender_kind = 'human'`);
+        this.run(`CREATE INDEX IF NOT EXISTS idx_im_messages_character_avatar
+          ON im_messages(conversation_id, sender_character_id, sequence) WHERE sender_kind = 'character'`);
+        this.run(`CREATE INDEX IF NOT EXISTS idx_im_messages_character_snapshot_avatar
+          ON im_messages(conversation_id, json_extract(sender_snapshot_json, '$.id'), sequence)
+          WHERE sender_kind = 'character' AND sender_character_id IS NULL`);
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (133, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const imMessageAvatarHashIndexesPresent = [
+      "idx_im_messages_human_avatar",
+      "idx_im_messages_character_avatar",
+      "idx_im_messages_character_snapshot_avatar"
+    ].every((index) => String(this.get(
+      "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+      index
+    )?.sql ?? "").includes("avatarSha256"));
+    if (!applied.has(134) || !imMessageAvatarHashIndexesPresent) {
+      this.transaction(() => {
+        this.run("DROP INDEX IF EXISTS idx_im_messages_human_avatar");
+        this.run("DROP INDEX IF EXISTS idx_im_messages_character_avatar");
+        this.run("DROP INDEX IF EXISTS idx_im_messages_character_snapshot_avatar");
+        this.raw.exec(`CREATE INDEX idx_im_messages_human_avatar
+          ON im_messages(
+            conversation_id, sender_user_id,
+            COALESCE(NULLIF(json_extract(sender_snapshot_json, '$.avatarSha256'), ''),
+              CASE WHEN instr(json_extract(sender_snapshot_json, '$.avatarUrl'), '?v=') > 0
+                THEN substr(json_extract(sender_snapshot_json, '$.avatarUrl'), instr(json_extract(sender_snapshot_json, '$.avatarUrl'), '?v=') + 3) END),
+            sequence
+          ) WHERE sender_kind = 'human';
+        CREATE INDEX idx_im_messages_character_avatar
+          ON im_messages(
+            conversation_id, sender_character_id,
+            COALESCE(NULLIF(json_extract(sender_snapshot_json, '$.avatarSha256'), ''),
+              CASE WHEN instr(json_extract(sender_snapshot_json, '$.avatarUrl'), '?v=') > 0
+                THEN substr(json_extract(sender_snapshot_json, '$.avatarUrl'), instr(json_extract(sender_snapshot_json, '$.avatarUrl'), '?v=') + 3) END),
+            sequence
+          ) WHERE sender_kind = 'character';
+        CREATE INDEX idx_im_messages_character_snapshot_avatar
+          ON im_messages(
+            conversation_id, json_extract(sender_snapshot_json, '$.id'),
+            COALESCE(NULLIF(json_extract(sender_snapshot_json, '$.avatarSha256'), ''),
+              CASE WHEN instr(json_extract(sender_snapshot_json, '$.avatarUrl'), '?v=') > 0
+                THEN substr(json_extract(sender_snapshot_json, '$.avatarUrl'), instr(json_extract(sender_snapshot_json, '$.avatarUrl'), '?v=') + 3) END),
+            sequence
+          ) WHERE sender_kind = 'character' AND sender_character_id IS NULL;`);
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (134, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const aiQuestionColumns = new Set(
+      this.all<{ name: string }>("PRAGMA table_info(ai_user_questions)").map((column) => column.name)
+    );
+    if (!applied.has(135) || !aiQuestionColumns.has("questions_json") || !aiQuestionColumns.has("answers_json")) {
+      this.transaction(() => {
+        if (!aiQuestionColumns.has("questions_json")) {
+          this.run("ALTER TABLE ai_user_questions ADD COLUMN questions_json TEXT NOT NULL DEFAULT '[]'");
+        }
+        if (!aiQuestionColumns.has("answers_json")) {
+          this.run("ALTER TABLE ai_user_questions ADD COLUMN answers_json TEXT NOT NULL DEFAULT '[]'");
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (135, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
   }
 
   private normalizeCharacterName(value: string): string {
@@ -5077,6 +5630,18 @@ export class Database {
     this.run(
       `UPDATE s3_backup_runs SET status = 'failed', error_message = COALESCE(error_message, '服务重启导致备份中断'), finished_at = ?
        WHERE status = 'running'`,
+      timestamp
+    );
+    this.run(
+      `UPDATE im_chains SET status = 'interrupted', error_code = 'IM_CHAIN_RUNTIME_RESTARTED',
+       error_message = '服务重启导致 IM 交流链中断，可从原消息重试', updated_at = ?, completed_at = ?
+       WHERE status IN ('queued', 'running')`,
+      timestamp,
+      timestamp
+    );
+    this.run(
+      `UPDATE im_chain_turns SET status = 'cancelled', failure = COALESCE(failure, '服务重启导致调用中断'), completed_at = ?
+       WHERE status IN ('pending', 'running')`,
       timestamp
     );
   }

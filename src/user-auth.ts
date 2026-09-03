@@ -63,6 +63,7 @@ export type AuthSession = {
   id: string;
   user: AuthUser;
   csrfToken: string;
+  expiresAt: string;
 };
 
 export type AuthDesktopSession = {
@@ -328,6 +329,7 @@ export class UserAuthService {
     const csrfToken = randomBytes(24).toString("base64url");
     const sessionId = randomUUID();
     const timestamp = new Date();
+    const expiresAt = new Date(timestamp.getTime() + SESSION_LIFETIME_MS).toISOString();
     this.database.run(
       `INSERT INTO user_sessions (id, user_id, token_hash, csrf_token, created_at, expires_at, last_seen_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -336,11 +338,11 @@ export class UserAuthService {
       sha256(token),
       csrfToken,
       timestamp.toISOString(),
-      new Date(timestamp.getTime() + SESSION_LIFETIME_MS).toISOString(),
+      expiresAt,
       timestamp.toISOString()
     );
     const user = this.getUser(userId);
-    return { token, session: { id: sessionId, user, csrfToken } };
+    return { token, session: { id: sessionId, user, csrfToken, expiresAt } };
   }
 
   private createDesktopSession(userId: string, input: {
@@ -506,7 +508,7 @@ export class UserAuthService {
     const user = mapUser(row);
     if (user.status !== "active") return null;
     this.database.run("UPDATE user_sessions SET last_seen_at = ? WHERE id = ?", new Date().toISOString(), String(row.session_id));
-    return { id: String(row.session_id), csrfToken: String(row.csrf_token), user };
+    return { id: String(row.session_id), csrfToken: String(row.csrf_token), user, expiresAt: String(row.expires_at) };
   }
 
   authenticateDesktop(request: Request): AuthDesktopSession | null {

@@ -7907,7 +7907,14 @@ export class Store {
   }
 
   characterAvatarStorageKeyInUse(storageKey: string): boolean {
-    return Number(this.db.get("SELECT COUNT(*) AS count FROM character_avatars WHERE storage_key = ?", storageKey)?.count ?? 0) > 0;
+    return Number(this.db.get(
+      `SELECT (
+         (SELECT COUNT(*) FROM character_avatars WHERE storage_key = ?)
+         + (SELECT COUNT(*) FROM im_avatar_versions WHERE storage_key = ?)
+       ) AS count`,
+      storageKey,
+      storageKey
+    )?.count ?? 0) > 0;
   }
 
   updateCharacter(

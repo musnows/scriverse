@@ -58,6 +58,17 @@ const mockAi = createServer(async (request, response) => {
   const latestUserMessage = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
   const joined = messages.map((message) => message.content ?? "").join("\n");
   const toolMessages = messages.filter((message) => message.role === "tool");
+  const batchQuestionResult = toolMessages.find((message) => message.tool_call_id === "browser-question-batch");
+  if (batchQuestionResult) {
+    const payload = JSON.parse(batchQuestionResult.content ?? "{}") as JsonObject;
+    const result = payload.result as JsonObject;
+    const answers = Array.isArray(result.answers) ? result.answers as JsonObject[] : [];
+    sendCompletion(response, {
+      content: `已同时收到 ${answers.length} 个回答并继续：${answers.map((answer) => String(answer.selectedOption ?? answer.answer ?? "")).join("、")}。`,
+      reasoning_content: "批量提问的全部工具结果已经返回，可以继续完成原工作流。"
+    });
+    return;
+  }
   if (messages[0]?.content?.includes("压缩已完成的 AI 工具调用上下文")) {
     sendCompletion(response, { content: "已压缩前一轮章节工具结果，保留了跃迁冷却证据。" });
     return;
@@ -103,7 +114,7 @@ const mockAi = createServer(async (request, response) => {
   if (latestUserMessage.includes("浏览器工具测试")) {
     if (toolMessages.length === 0) {
       sendToolCalls(response, [
-        { id: "browser-index", name: "story_index", arguments: { offset: 0, limit: 1 } },
+        { id: "browser-index", name: "story_index", arguments: { chapterOffset: 0, limit: 1 } },
         { id: "browser-read", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "both" } },
         { id: "browser-query", name: "search_story_entities", arguments: { query: "跃迁", categories: ["setting"] } }
       ]);
@@ -134,12 +145,23 @@ const mockAi = createServer(async (request, response) => {
   if (latestUserMessage.includes("浏览器思考步骤测试")) {
     if (toolMessages.length === 0) {
       sendToolCalls(response, [
-        { id: "browser-thinking-index", name: "story_index", arguments: { offset: 0, limit: 1 } }
+        { id: "browser-thinking-index", name: "story_index", arguments: { chapterOffset: 0, limit: 1 } }
       ], { content: "我先读取作品目录。", reasoningContent: "需要先确认作品结构和章节范围。" });
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 800));
     sendCompletion(response, { content: "最终结果：目录已经确认。", reasoning_content: "工具结果已经足够形成最终答案。" });
+    return;
+  }
+  if (latestUserMessage.includes("浏览器批量提问工具测试")) {
+    sendToolCalls(response, [{
+      id: "browser-question-batch",
+      name: "ask_user_question",
+      arguments: { questions: [
+        { question: "请选择故事的推进方向", options: ["调查旧港钟楼", "追踪北境舰队"] },
+        { question: "请选择叙事视角", options: ["第三人称", "第一人称"] }
+      ] }
+    }], { reasoningContent: "需要一次确认两个相关创作决策。" });
     return;
   }
   if (latestUserMessage.includes("浏览器分层上下文测试")) {
@@ -158,7 +180,7 @@ const mockAi = createServer(async (request, response) => {
       sendToolCalls(response, Array.from({ length: 8 }, (_, index) => ({
         id: `browser-scroll-${index}`,
         name: "story_index",
-        arguments: { offset: index, limit: 1 }
+        arguments: { chapterOffset: index, limit: 1 }
       })));
       return;
     }
@@ -236,7 +258,7 @@ const mockAi = createServer(async (request, response) => {
       sendToolCalls(response, [{ id: "browser-compact-read", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } }]);
       return;
     }
-    sendToolCalls(response, [{ id: "browser-compact-index", name: "story_index", arguments: { offset: 0, limit: 1 } }]);
+    sendToolCalls(response, [{ id: "browser-compact-index", name: "story_index", arguments: { chapterOffset: 0, limit: 1 } }]);
     return;
   }
   if (latestUserMessage.includes("浏览器压缩后测试")) {
@@ -395,7 +417,20 @@ const fixture = runWithRequestActor(registered.session.user, () => {
 let compactConversationId = "";
 const server = createServer((request, response) => {
   const requestUrl = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
-  if (requestUrl.pathname === "/__e2e/login") {
+  if (requestUrl.pathname === "/__e2e/login" || requestUrl.pathname === "/__e2e/login-question-batch") {
+    if (requestUrl.pathname === "/__e2e/login-question-batch") {
+      runtime.database.run(
+        `INSERT INTO work_ai_tool_settings (work_id, tools_json, updated_at, updated_by_user_id)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(work_id) DO UPDATE SET tools_json = excluded.tools_json,
+           updated_at = excluded.updated_at, updated_by_user_id = excluded.updated_by_user_id`,
+        fixture.workId,
+        JSON.stringify({ ask_user_questions: true }),
+        new Date().toISOString(),
+        registered.session.user.userId
+      );
+      runtime.database.run("UPDATE models SET context_window = 128000 WHERE id = ?", fixture.modelId);
+    }
     response.setHeader("Set-Cookie", `scriverse_session=${encodeURIComponent(registered.token)}; Path=/; HttpOnly; SameSite=Lax`);
     response.writeHead(302, { Location: `/#view=editor&work=${fixture.workId}&chapter=${fixture.chapterId}` });
     response.end();
