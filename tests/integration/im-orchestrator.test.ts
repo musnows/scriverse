@@ -631,6 +631,170 @@ describe("IM AI 调度", () => {
     )).toEqual({ content: "我记得那枚远航凭证。" });
   });
 
+  it("IM 群聊回复可以调用当前成员列表工具", async () => {
+    let requestCount = 0;
+    let toolResult = "";
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-list-members-tool-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        requestCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        if (requestCount === 1) {
+          expect((body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name))
+            .toContain("list_im_members");
+          return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+            id: "im-list-members",
+            type: "function",
+            function: { name: "list_im_members", arguments: "{}" }
+          }] }, finish_reason: "tool_calls" }] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        toolResult = messages.filter((message) => message.role === "tool").at(-1)?.content ?? "";
+        return completion("我已经确认过在场成员。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "list_members_owner", password: "secure-password-123" }).session.user;
+    const member = runtime.auth.register({ username: "list_members_human", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "群成员工具作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "成员工具角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "群成员工具群",
+      characterIds: [String(character.id)],
+      humanUserIds: [member.userId],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://character/${character.id} 请确认现在有哪些成员。`,
+      requestId: "im-list-members-tool-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "limit", generated_count: 1 });
+    expect(requestCount).toBe(2);
+    expect(toolResult).toContain(`mention://character/${character.id}`);
+    expect(toolResult).toContain(`mention://user/${owner.userId}`);
+    expect(toolResult).toContain(`mention://user/${member.userId}`);
+    expect(runtime.database.get(
+      "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      String(chain.id)
+    )).toEqual({ content: "我已经确认过在场成员。" });
+  });
+
+  it("IM 群聊角色可在列出成员后查询自己与指定成员的关系", async () => {
+    let requestCount = 0;
+    let memberToolResult = "";
+    let relationshipToolResult = "";
+    let otherCharacterId = "";
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-member-relationship-tool-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        requestCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        if (requestCount === 1) {
+          const toolNames = (body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name);
+          expect(toolNames).toEqual(expect.arrayContaining([
+            "list_im_members",
+            "recall_self",
+            "recall_relationship",
+            "recall_other",
+            "recall_known",
+            "recall_story",
+            "recall_roleplay_memory",
+            "image",
+            "calculate_time"
+          ]));
+          expect(toolNames).not.toContain("remember_roleplay");
+          return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+            id: "im-list-members-before-relationship",
+            type: "function",
+            function: { name: "list_im_members", arguments: "{}" }
+          }] }, finish_reason: "tool_calls" }] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        if (requestCount === 2) {
+          memberToolResult = messages.filter((message) => message.role === "tool").at(-1)?.content ?? "";
+          expect(memberToolResult).toContain(otherCharacterId);
+          return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+            id: "im-recall-member-relationship",
+            type: "function",
+            function: { name: "recall_relationship", arguments: JSON.stringify({ characters: [otherCharacterId] }) }
+          }] }, finish_reason: "tool_calls" }] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        relationshipToolResult = messages.filter((message) => message.role === "tool").at(-1)?.content ?? "";
+        return completion("我确认过我们是并肩作战的盟友。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "member_relationship_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const { character, otherCharacter } = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "群成员关系工具作品" });
+      const character = runtime.store.createCharacter(String(work.id), { name: "关系查询角色" });
+      const otherCharacter = runtime.store.createCharacter(String(work.id), { name: "关系成员角色" });
+      runtime.store.createRelationship(String(work.id), {
+        fromCharacterId: String(character.id),
+        toCharacterId: String(otherCharacter.id),
+        category: "alliance",
+        subtype: "并肩作战",
+        currentStatus: "active",
+        confirmationStatus: "confirmed"
+      });
+      return { character, otherCharacter };
+    });
+    otherCharacterId = String(otherCharacter.id);
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "群成员关系工具群",
+      characterIds: [String(character.id), String(otherCharacter.id)],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://character/${character.id} 请确认你和群内角色的关系。`,
+      requestId: "im-member-relationship-tool-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "limit", generated_count: 1 });
+    expect(requestCount).toBe(3);
+    expect(memberToolResult).toContain(`mention://character/${otherCharacterId}`);
+    expect(relationshipToolResult).toContain("alliance");
+    expect(relationshipToolResult).toContain("并肩作战");
+    expect(runtime.database.get(
+      "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      String(chain.id)
+    )).toEqual({ content: "我确认过我们是并肩作战的盟友。" });
+  });
+
   it("IM 记忆工具执行前重新检查发起人实时权限", async () => {
     const responseControl: { release?: () => void } = {};
     let markStarted: (() => void) | null = null;
@@ -3648,6 +3812,88 @@ describe("IM AI 调度", () => {
     expect(JSON.parse(String(characterMessages[0]?.sender_snapshot_json))).toMatchObject({
       avatarUrl: `/api/im/conversations/${group.id}/characters/${characters[0]?.id}/avatar?v=${avatarSha256}`
     });
+  });
+
+  it("主动判断期间推送角色气泡状态，并保留未选择角色的判断结果", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-judge-quiet-feedback-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async () => completion('{"score":0}', false),
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "judge_quiet_feedback_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const characters = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "判断气泡作品" });
+      return [
+        runtime.store.createCharacter(String(work.id), { name: "林舟" }),
+        runtime.store.createCharacter(String(work.id), { name: "顾遥" })
+      ];
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "判断气泡群",
+      characterIds: characters.map((character) => String(character.id)),
+      replyMode: "proactive",
+      responseThreshold: 60,
+      maxAiMessages: 2
+    });
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => events.push({ type: event.type, payload: event.payload }));
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "现在需要谁来回应？",
+      requestId: "im-judge-quiet-feedback-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const firstMessageId = String((sent.message as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+    const secondSent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "第二条消息也请分别判断。",
+      requestId: "im-judge-quiet-feedback-0002"
+    });
+    runtime.imOrchestrator.publishMessageResult(secondSent);
+    const secondChainId = String((secondSent.chain as Record<string, unknown>).id);
+    const secondMessageId = String((secondSent.message as Record<string, unknown>).id);
+    const secondChain = await waitForChain(runtime, secondChainId);
+    unsubscribe();
+
+    expect(chain).toMatchObject({ status: "quiet", generated_count: 0 });
+    expect(secondChain).toMatchObject({ status: "quiet", generated_count: 0 });
+    const judgeEvents = events.filter((event) => event.type === "turn" && event.payload.kind === "judge");
+    expect(judgeEvents.filter((event) => event.payload.status === "running")).toHaveLength(4);
+    expect(judgeEvents.filter((event) => event.payload.status === "completed" && event.payload.selected === false)).toHaveLength(4);
+    expect(judgeEvents.every((event) => event.payload.score === undefined)).toBe(true);
+    expect(new Set(judgeEvents.map((event) => event.payload.sourceMessageId))).toEqual(new Set([
+      firstMessageId,
+      secondMessageId
+    ]));
+    const conversation = runtime.im.getConversation(String(group.id), owner.userId);
+    const activeChain = conversation.activeChain as Record<string, unknown>;
+    expect(activeChain.turns).toEqual([]);
+    expect(activeChain.judges).toEqual(expect.arrayContaining(characters.map((character) => expect.objectContaining({
+      characterId: character.id,
+      status: "completed",
+      score: 0,
+      selected: false
+    }))));
+    expect(conversation.judgeOutcomes).toEqual(expect.arrayContaining([
+      ...characters.map((character) => expect.objectContaining({
+        sourceMessageId: firstMessageId,
+        characterId: character.id,
+        status: "completed"
+      })),
+      ...characters.map((character) => expect.objectContaining({
+        sourceMessageId: secondMessageId,
+        characterId: character.id,
+        status: "completed"
+      }))
+    ]));
   });
 
   it("已排队角色被 AI mention 时只保留一个高优先级回复 turn", async () => {

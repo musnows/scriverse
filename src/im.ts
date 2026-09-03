@@ -1151,7 +1151,7 @@ export class ImService {
       ? null
       : Number(viewerMembership.left_sequence);
     const activeChain = this.db.get(
-      `SELECT chain.id, chain.status, chain.model_stage, chain.generated_count, chain.error_code, chain.error_message,
+      `SELECT chain.id, chain.trigger_message_id, chain.status, chain.model_stage, chain.generated_count, chain.error_code, chain.error_message,
               chain.created_at, chain.updated_at, trigger.sequence AS trigger_sequence
        FROM im_chains chain JOIN im_messages trigger ON trigger.id = chain.trigger_message_id
        WHERE chain.conversation_id = ? AND trigger.sequence > ?
@@ -1168,23 +1168,25 @@ export class ImService {
       optionalString(viewerMembership.left_at)
     );
     const activeChainId = requiredString(activeChain?.id);
-    const replyTurnRows = activeChain ? this.db.all(
+    const visibleTurnRows = activeChain ? this.db.all(
       `SELECT turn.*, membership.character_id, membership.snapshot_json
        FROM im_chain_turns turn JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
-       WHERE turn.chain_id = ? AND turn.kind = 'reply' AND membership.joined_sequence <= ?
+       WHERE turn.chain_id = ? AND turn.kind IN ('reply', 'judge') AND membership.joined_sequence <= ?
          AND (membership.left_sequence IS NULL OR membership.left_sequence >= ?)
        ORDER BY turn.created_at, turn.id`,
       requiredString(activeChain.id),
       Number(activeChain.trigger_sequence),
       Number(activeChain.trigger_sequence)
     ) : [];
-    const replyCharacterIds = [...new Set(replyTurnRows.flatMap((turn) => optionalString(turn.character_id) ? [requiredString(turn.character_id)] : []))];
+    const replyTurnRows = visibleTurnRows.filter((turn) => requiredString(turn.kind) === "reply");
+    const judgeTurnRows = visibleTurnRows.filter((turn) => requiredString(turn.kind) === "judge");
+    const visibleTurnCharacterIds = [...new Set([...replyTurnRows, ...judgeTurnRows].flatMap((turn) => optionalString(turn.character_id) ? [requiredString(turn.character_id)] : []))];
     const replyAvatarShaByCharacterId = new Map<string, string>();
-    if (viewerLeftSequence === null && replyCharacterIds.length > 0) {
-      const placeholders = replyCharacterIds.map(() => "?").join(", ");
+    if (viewerLeftSequence === null && visibleTurnCharacterIds.length > 0) {
+      const placeholders = visibleTurnCharacterIds.map(() => "?").join(", ");
       for (const avatar of this.db.all(
         `SELECT character_id, sha256 FROM character_avatars WHERE character_id IN (${placeholders})`,
-        ...replyCharacterIds
+        ...visibleTurnCharacterIds
       )) {
         replyAvatarShaByCharacterId.set(requiredString(avatar.character_id), requiredString(avatar.sha256));
       }
@@ -1209,6 +1211,7 @@ export class ImService {
       return {
         id: requiredString(turn.id),
         chainId: activeChainId,
+        sourceMessageId: optionalString(turn.source_message_id) ?? requiredString(activeChain?.trigger_message_id),
         characterId,
         character: {
           characterId,
@@ -1222,29 +1225,66 @@ export class ImService {
         completedAt: optionalString(turn.completed_at)
       };
     });
+    const judgeTurns = judgeTurnRows.map((turn) => {
+      const snapshot = json<Record<string, unknown>>(requiredString(turn.snapshot_json), {});
+      const characterId = optionalString(turn.character_id) ?? requiredString(snapshot.id);
+      const currentAvatarSha256 = characterId ? replyAvatarShaByCharacterId.get(characterId) ?? null : null;
+      const frozenCharacter = Array.isArray(frozenParticipants.characters)
+        ? frozenParticipants.characters.find((item) => item && typeof item === "object" && !Array.isArray(item)
+          && optionalString((item as Record<string, unknown>).characterId) === characterId) as Record<string, unknown> | undefined
+        : undefined;
+      const avatarUrl = viewerLeftSequence === null
+        ? characterId && currentAvatarSha256
+          ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(currentAvatarSha256)}`
+          : null
+        : optionalString(frozenCharacter?.avatarUrl);
+      return {
+        id: requiredString(turn.id),
+        chainId: activeChainId,
+        sourceMessageId: optionalString(turn.source_message_id) ?? requiredString(activeChain?.trigger_message_id),
+        characterId,
+        character: {
+          characterId,
+          name: snapshot.name ?? "角色",
+          avatarUrl
+        },
+        kind: "judge",
+        status: requiredString(turn.status),
+        score: turn.score === null || turn.score === undefined ? null : Number(turn.score),
+        selected: booleanValue(turn.selected),
+        failure: optionalString(turn.failure),
+        createdAt: requiredString(turn.created_at),
+        completedAt: optionalString(turn.completed_at)
+      };
+    });
     const messagePage = this.visibleMessagePage(conversationId, userId, viewerLeftSequence === null, 50, beforeSequence, afterSequence);
     const visibleMessageIds = messagePage.messages.map((message) => requiredString(message.id));
-    const failedReplyRows = visibleMessageIds.length > 0 ? this.db.all(
-      `SELECT turn.*, chain.id AS chain_id, chain.trigger_message_id, trigger.sequence AS trigger_sequence,
+    const turnOutcomeRows = visibleMessageIds.length > 0 ? this.db.all(
+      `SELECT turn.*, chain.id AS chain_id, chain.trigger_message_id,
+              COALESCE(turn.source_message_id, chain.trigger_message_id) AS source_message_id,
+              source.sequence AS source_sequence,
               membership.character_id, membership.snapshot_json
        FROM im_chain_turns turn
        JOIN im_chains chain ON chain.id = turn.chain_id
-       JOIN im_messages trigger ON trigger.id = chain.trigger_message_id
+       JOIN im_messages source ON source.id = COALESCE(turn.source_message_id, chain.trigger_message_id)
        JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
-       WHERE chain.conversation_id = ? AND chain.trigger_message_id IN (${visibleMessageIds.map(() => "?").join(", ")})
-         AND turn.kind = 'reply' AND turn.status IN ('failed', 'skipped')
-       ORDER BY trigger.sequence, turn.created_at, turn.id`,
+       WHERE chain.conversation_id = ? AND source.id IN (${visibleMessageIds.map(() => "?").join(", ")})
+         AND (
+           (turn.kind = 'reply' AND turn.status IN ('failed', 'skipped'))
+           OR (turn.kind = 'judge' AND turn.selected = 0 AND turn.status IN ('completed', 'failed', 'cancelled'))
+         )
+       ORDER BY source.sequence, turn.created_at, turn.id`,
       conversationId,
       ...visibleMessageIds
     ) : [];
-    const failedReplies = failedReplyRows.map((turn) => {
+    const failedReplies = turnOutcomeRows.filter((turn) => requiredString(turn.kind) === "reply").map((turn) => {
       const snapshot = json<Record<string, unknown>>(requiredString(turn.snapshot_json), {});
       const characterId = optionalString(turn.character_id) ?? requiredString(snapshot.id);
       return {
         id: requiredString(turn.id),
         chainId: requiredString(turn.chain_id),
-        triggerMessageId: requiredString(turn.trigger_message_id),
-        triggerSequence: Number(turn.trigger_sequence),
+        triggerMessageId: requiredString(turn.source_message_id),
+        triggerSequence: Number(turn.source_sequence),
         characterId,
         character: {
           characterId,
@@ -1257,11 +1297,33 @@ export class ImService {
         completedAt: optionalString(turn.completed_at)
       };
     });
+    const judgeOutcomes = turnOutcomeRows.filter((turn) => requiredString(turn.kind) === "judge").map((turn) => {
+      const snapshot = json<Record<string, unknown>>(requiredString(turn.snapshot_json), {});
+      const characterId = optionalString(turn.character_id) ?? requiredString(snapshot.id);
+      return {
+        id: requiredString(turn.id),
+        chainId: requiredString(turn.chain_id),
+        sourceMessageId: requiredString(turn.source_message_id),
+        sourceSequence: Number(turn.source_sequence),
+        characterId,
+        character: {
+          characterId,
+          name: snapshot.name ?? "角色",
+          avatarUrl: optionalString(snapshot.avatarUrl)
+        },
+        status: requiredString(turn.status),
+        selected: false,
+        failure: optionalString(turn.failure),
+        createdAt: requiredString(turn.created_at),
+        completedAt: optionalString(turn.completed_at)
+      };
+    });
     return {
       ...this.mapConversation(row, userId),
       participants: this.conversationParticipants(conversationId, userId),
       messages: messagePage.messages,
       failedReplies,
+      judgeOutcomes,
       hasMoreMessages: messagePage.hasMore,
       hasMoreMessagesAfter: messagePage.hasMoreAfter,
       activeChain: activeChain ? {
@@ -1273,7 +1335,8 @@ export class ImService {
         error_message: activeChain.error_message,
         created_at: activeChain.created_at,
         updated_at: activeChain.updated_at,
-        turns: replyTurns
+        turns: replyTurns,
+        judges: judgeTurns
       } : null
     };
   }

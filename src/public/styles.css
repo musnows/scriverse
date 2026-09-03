@@ -4800,6 +4800,8 @@ body.is-im-conversations-resizing { cursor: ew-resize; user-select: none; }
 .im-generating-summary { width: min(78%, 720px); margin: 2px auto 9px 0; color: var(--muted); font-size: 9px; line-height: 1.4; }
 .im-message.is-provisional { opacity: .82; }
 .im-message.is-provisional.is-failed { opacity: 1; }
+.im-message.is-provisional.is-judge .im-message-body { border-style: dashed; background: color-mix(in srgb, var(--panel) 88%, var(--paper-deep)); }
+.im-message.is-provisional.is-judge.is-quiet { opacity: .72; }
 .im-provisional-status { color: var(--muted); font-size: 8px; }
 .im-provisional-placeholder { margin: 0; color: var(--muted); }
 .im-provisional-error { margin: 0; color: color-mix(in srgb, #c44949 82%, var(--ink)); font-weight: 600; }
