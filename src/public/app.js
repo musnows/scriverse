@@ -5418,8 +5418,11 @@ function showLineCitationMenu(event, lineIndex) {
     selectChapterLines(lineIndex, lineIndex);
   }
   const menu = $("#line-citation-menu");
-  $("#add-line-annotation").classList.toggle("hidden", !canWritePermissionModule(state.work, "comments"));
-  $("#add-line-todo").classList.toggle("hidden", !canWritePermissionModule(state.work, "todos"));
+  const canAddComment = canWritePermissionModule(state.work, "comments");
+  const canAddTodo = canWritePermissionModule(state.work, "todos");
+  $("#add-line-annotation").classList.toggle("hidden", !canAddComment);
+  $("#add-line-todo").classList.toggle("hidden", !canAddTodo);
+  $("#line-citation-annotation-separator").classList.toggle("hidden", !(canAddComment || canAddTodo));
   const { start, end } = chapterLineSelection;
   $("#line-citation-label").textContent = start === end ? `第 ${start + 1} 行` : `第 ${start + 1}-${end + 1} 行`;
   menu.classList.remove("hidden");

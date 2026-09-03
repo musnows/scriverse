@@ -32,6 +32,7 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('<span class="nav-label">正文评论</span>');
     expect(page.text).toContain('id="add-line-annotation"');
     expect(page.text).toContain('id="add-line-annotation" type="button" role="menuitem">添加评论</button>');
+    expect(page.text).toContain('id="line-citation-annotation-separator" class="line-citation-menu-separator hidden" role="separator" aria-orientation="horizontal"></div>');
     expect(page.text).toContain('id="add-line-todo"');
     expect(page.text).toContain('&feature=annotation-precise-locate-v1');
     expect(page.text).toContain('&feature=annotation-line-anchor-v1');
@@ -58,6 +59,7 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain('/chapter-annotations${parameters.size ? `?${parameters}` : ""}`');
     expect(application.text).toContain('renderModulePagination(pageResult, "comments", "正文评论与待办列表")');
     expect(application.text).toContain('$("#chapter-content").addEventListener("contextmenu"');
+    expect(application.text).toContain('$("#line-citation-annotation-separator").classList.toggle("hidden", !(canAddComment || canAddTodo));');
     expect(application.text).toContain("value: annotation.note");
     expect(application.text).toContain('"解决评论"');
     expect(application.text).toContain('"删除评论"');
@@ -65,6 +67,7 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain(".chapter-comment-module-list");
     expect(styles.text).toContain(".chapter-annotation-source");
     expect(styles.text).toContain(".chapter-line-annotation-count { position: absolute; top: -4px; right: -10px;");
+    expect(styles.text).toContain(".line-citation-menu-separator { height: 1px; margin: 5px 2px; background: var(--line); }");
     expect(styles.text).toContain("font-family: var(--font-mono), monospace; font-size: 10px; line-height: 1.6");
     expect(page.text).toContain(">编辑</button>");
     expect(styles.text).toContain('grid-template-areas: "path path" "title actions"');
