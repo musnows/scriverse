@@ -631,6 +631,71 @@ describe("IM AI 调度", () => {
     )).toEqual({ content: "我记得那枚远航凭证。" });
   });
 
+  it("IM 群聊回复可以调用当前成员列表工具", async () => {
+    let requestCount = 0;
+    let toolResult = "";
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-list-members-tool-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        requestCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        if (requestCount === 1) {
+          expect((body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name))
+            .toContain("list_im_members");
+          return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+            id: "im-list-members",
+            type: "function",
+            function: { name: "list_im_members", arguments: "{}" }
+          }] }, finish_reason: "tool_calls" }] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        toolResult = messages.filter((message) => message.role === "tool").at(-1)?.content ?? "";
+        return completion("我已经确认过在场成员。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "list_members_owner", password: "secure-password-123" }).session.user;
+    const member = runtime.auth.register({ username: "list_members_human", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "群成员工具作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "成员工具角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "群成员工具群",
+      characterIds: [String(character.id)],
+      humanUserIds: [member.userId],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://character/${character.id} 请确认现在有哪些成员。`,
+      requestId: "im-list-members-tool-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "limit", generated_count: 1 });
+    expect(requestCount).toBe(2);
+    expect(toolResult).toContain(`mention://character/${character.id}`);
+    expect(toolResult).toContain(`mention://user/${owner.userId}`);
+    expect(toolResult).toContain(`mention://user/${member.userId}`);
+    expect(runtime.database.get(
+      "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      String(chain.id)
+    )).toEqual({ content: "我已经确认过在场成员。" });
+  });
+
   it("IM 记忆工具执行前重新检查发起人实时权限", async () => {
     const responseControl: { release?: () => void } = {};
     let markStarted: (() => void) | null = null;

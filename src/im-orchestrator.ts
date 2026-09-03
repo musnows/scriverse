@@ -389,7 +389,7 @@ export class ImOrchestrator {
     return [...new Set(membershipIds)];
   }
 
-  private participantContext(conversationId: string, currentSender: Record<string, unknown>): string {
+  private participantList(conversationId: string): Record<string, unknown> {
     const humans = this.db.all(
       `SELECT user.id, user.username, user.display_name, user.avatar_sha256,
               settings.preferred_name, settings.pronouns, settings.identity_summary, settings.additional_notes
@@ -420,7 +420,11 @@ export class ImOrchestrator {
         publicSummary: snapshot.publicSummary ?? ""
       };
     });
-    return JSON.stringify({ humans, characters, currentSender });
+    return { humans, characters };
+  }
+
+  private participantContext(conversationId: string, currentSender: Record<string, unknown>): string {
+    return JSON.stringify({ ...this.participantList(conversationId), currentSender });
   }
 
   private characterHistory(
@@ -722,6 +726,7 @@ export class ImOrchestrator {
       kind,
       instruction,
       participantContext,
+      listMembers: () => this.participantList(requiredString(conversation.id)),
       history: historyOverride?.history ?? context.history,
       summary: historyOverride?.summary ?? context.summary,
       characterPrompt: kind === "compact"
