@@ -389,7 +389,7 @@ export class ImOrchestrator {
     return [...new Set(membershipIds)];
   }
 
-  private participantContext(conversationId: string, currentSender: Record<string, unknown>): string {
+  private participantList(conversationId: string): Record<string, unknown> {
     const humans = this.db.all(
       `SELECT user.id, user.username, user.display_name, user.avatar_sha256,
               settings.preferred_name, settings.pronouns, settings.identity_summary, settings.additional_notes
@@ -420,7 +420,11 @@ export class ImOrchestrator {
         publicSummary: snapshot.publicSummary ?? ""
       };
     });
-    return JSON.stringify({ humans, characters, currentSender });
+    return { humans, characters };
+  }
+
+  private participantContext(conversationId: string, currentSender: Record<string, unknown>): string {
+    return JSON.stringify({ ...this.participantList(conversationId), currentSender });
   }
 
   private characterHistory(
@@ -722,6 +726,7 @@ export class ImOrchestrator {
       kind,
       instruction,
       participantContext,
+      listMembers: () => this.participantList(requiredString(conversation.id)),
       history: historyOverride?.history ?? context.history,
       summary: historyOverride?.summary ?? context.summary,
       characterPrompt: kind === "compact"
@@ -951,14 +956,21 @@ export class ImOrchestrator {
     }
   }
 
-  private createTurn(chainId: string, membershipId: string, kind: "judge" | "reply" | "compact", status: "pending" | "running" = "running"): string {
+  private createTurn(
+    chainId: string,
+    membershipId: string,
+    kind: "judge" | "reply" | "compact",
+    status: "pending" | "running" = "running",
+    sourceMessageId?: string
+  ): string {
     const turnId = id("imTurn");
     this.db.run(
-      `INSERT INTO im_chain_turns (id, chain_id, character_membership_id, kind, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO im_chain_turns (id, chain_id, character_membership_id, source_message_id, kind, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       turnId,
       chainId,
       membershipId,
+      sourceMessageId ?? null,
       kind,
       status,
       now()
@@ -971,6 +983,7 @@ export class ImOrchestrator {
     membership: Record<string, unknown>,
     turnId: string,
     status: "pending" | "running" | "completed" | "failed" | "cancelled" | "skipped",
+    sourceMessageId?: string,
     error?: { code: string; message: string }
   ): Record<string, unknown> {
     const conversationId = requiredString(chain.conversation_id);
@@ -981,6 +994,7 @@ export class ImOrchestrator {
     return {
       chainId: requiredString(chain.id),
       turnId,
+      ...(sourceMessageId ? { sourceMessageId } : {}),
       kind: "reply",
       status,
       characterId,
@@ -1000,12 +1014,45 @@ export class ImOrchestrator {
     membership: Record<string, unknown>,
     turnId: string,
     status: "pending" | "running" | "completed" | "failed" | "cancelled" | "skipped",
+    sourceMessageId?: string,
     error?: { code: string; message: string }
   ): void {
     this.publish(
       requiredString(chain.conversation_id),
       "turn",
-      this.replyTurnPayload(chain, membership, turnId, status, error)
+      this.replyTurnPayload(chain, membership, turnId, status, sourceMessageId, error)
+    );
+  }
+
+  private judgeTurnPayload(
+    chain: Record<string, unknown>,
+    membership: Record<string, unknown>,
+    turnId: string,
+    status: "pending" | "running" | "completed" | "failed" | "cancelled" | "skipped",
+    selected = false,
+    sourceMessageId?: string,
+    error?: { code: string; message: string }
+  ): Record<string, unknown> {
+    return {
+      ...this.replyTurnPayload(chain, membership, turnId, status, sourceMessageId, error),
+      kind: "judge",
+      selected
+    };
+  }
+
+  private publishJudgeTurn(
+    chain: Record<string, unknown>,
+    membership: Record<string, unknown>,
+    turnId: string,
+    status: "pending" | "running" | "completed" | "failed" | "cancelled" | "skipped",
+    selected = false,
+    sourceMessageId?: string,
+    error?: { code: string; message: string }
+  ): void {
+    this.publish(
+      requiredString(chain.conversation_id),
+      "turn",
+      this.judgeTurnPayload(chain, membership, turnId, status, selected, sourceMessageId, error)
     );
   }
 
@@ -1015,8 +1062,8 @@ export class ImOrchestrator {
     sourceMessageId: string
   ): { membershipId: string; turnId: string; sourceMessageId: string } {
     const membership = this.characterMembership(membershipId);
-    const turnId = this.createTurn(requiredString(chain.id), membershipId, "reply", "pending");
-    this.publishReplyTurn(chain, membership, turnId, "pending");
+    const turnId = this.createTurn(requiredString(chain.id), membershipId, "reply", "pending", sourceMessageId);
+    this.publishReplyTurn(chain, membership, turnId, "pending", sourceMessageId);
     return { membershipId, turnId, sourceMessageId };
   }
 
@@ -1026,7 +1073,7 @@ export class ImOrchestrator {
     error: { code: string; message: string }
   ): void {
     const turns = this.db.all(
-      `SELECT turn.id AS turn_id, membership.* FROM im_chain_turns turn
+      `SELECT turn.id AS turn_id, turn.source_message_id, membership.* FROM im_chain_turns turn
        JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
        WHERE turn.chain_id = ? AND turn.kind = 'reply' AND turn.status = 'pending'
        ORDER BY turn.created_at, turn.id`,
@@ -1040,7 +1087,7 @@ export class ImOrchestrator {
         now(),
         requiredString(turn.turn_id)
       );
-      this.publishReplyTurn(chain, turn, requiredString(turn.turn_id), status, error);
+      this.publishReplyTurn(chain, turn, requiredString(turn.turn_id), status, optionalString(turn.source_message_id) ?? undefined, error);
     }
   }
 
@@ -1110,10 +1157,12 @@ export class ImOrchestrator {
     membership: Record<string, unknown>,
     sourceMessage: Record<string, unknown>,
     signal: AbortSignal
-  ): Promise<{ score: number; turnId: string } | null> {
-    await this.maybeCompact(chain, membership, sourceMessage, signal);
-    const turnId = this.createTurn(requiredString(chain.id), requiredString(membership.id), "judge");
+  ): Promise<{ score: number; turnId: string; sourceMessageId: string } | null> {
+    const sourceMessageId = requiredString(sourceMessage.id);
+    const turnId = this.createTurn(requiredString(chain.id), requiredString(membership.id), "judge", "running", sourceMessageId);
+    this.publishJudgeTurn(chain, membership, turnId, "running", false, sourceMessageId);
     try {
+      await this.maybeCompact(chain, membership, sourceMessage, signal);
       const result = await this.invoke(
         chain,
         membership,
@@ -1133,23 +1182,13 @@ export class ImOrchestrator {
       const currentAuthorization = this.assertCharacterAuthorization(chain, currentMembership);
       this.assertInvocationInitiatorPermissions(currentAuthorization.initiatorPermissions, result);
       this.finishTurn(turnId, result, score, false);
-      this.publishToUser(requiredString(chain.authorization_user_id), {
-        id: id("imEvent"),
-        type: "turn",
-        conversationId: requiredString(chain.conversation_id),
-        payload: {
-          chainId: requiredString(chain.id),
-          turnId,
-          kind: "judge",
-          characterId: membership.character_id,
-          score
-        },
-        createdAt: now()
-      });
-      return { score, turnId };
+      this.publishJudgeTurn(chain, currentMembership, turnId, "completed", false, sourceMessageId);
+      return { score, turnId, sourceMessageId };
     } catch (error) {
       const effectiveError = effectiveAbortError(signal, error);
-      this.failTurn(turnId, effectiveError, signal.aborted ? "cancelled" : "failed");
+      const status = signal.aborted ? "cancelled" : "failed";
+      this.failTurn(turnId, effectiveError, status);
+      this.publishJudgeTurn(chain, membership, turnId, status, false, sourceMessageId, publicError(effectiveError));
       if (signal.aborted) throw effectiveError;
       if (effectiveError instanceof AppError && [
         "IM_CHARACTER_ACCESS_DENIED",
@@ -1331,17 +1370,22 @@ export class ImOrchestrator {
     signal: AbortSignal
   ): Promise<Record<string, unknown>> {
     const membership = this.characterMembership(membershipId);
+    const sourceMessageId = requiredString(sourceMessage.id);
     let streamed = "";
     let result: InvocationResult | null = null;
     try {
       await this.maybeCompact(chain, membership, sourceMessage, signal);
-      this.db.run("UPDATE im_chain_turns SET status = 'running' WHERE id = ?", turnId);
-      this.publishReplyTurn(chain, membership, turnId, "running");
+      this.db.run(
+        "UPDATE im_chain_turns SET status = 'running', source_message_id = ? WHERE id = ?",
+        sourceMessageId,
+        turnId
+      );
+      this.publishReplyTurn(chain, membership, turnId, "running", sourceMessageId);
       this.streamingReplies.set(turnId, {
         id: id("imEvent"),
         type: "turn",
         conversationId: requiredString(chain.conversation_id),
-        payload: { ...this.replyTurnPayload(chain, membership, turnId, "running"), content: "" },
+        payload: { ...this.replyTurnPayload(chain, membership, turnId, "running", sourceMessageId), content: "" },
         createdAt: now()
       });
       result = await this.invoke(
@@ -1393,7 +1437,7 @@ export class ImOrchestrator {
       });
       const message = this.appendCharacterMessage(chain, currentMembership, result, turnId);
       this.publish(requiredString(chain.conversation_id), "message", { message });
-      this.publishReplyTurn(chain, membership, turnId, "completed");
+      this.publishReplyTurn(chain, membership, turnId, "completed", sourceMessageId);
       this.streamingReplies.delete(turnId);
       return this.messageRow(requiredString(message.id));
     } catch (error) {
@@ -1415,7 +1459,7 @@ export class ImOrchestrator {
         }
       ) : effectiveError;
       this.failTurn(turnId, failureForTurn, cancelled ? "cancelled" : "failed");
-      this.publishReplyTurn(chain, membership, turnId, cancelled ? "cancelled" : "failed", failure);
+      this.publishReplyTurn(chain, membership, turnId, cancelled ? "cancelled" : "failed", sourceMessageId, failure);
       this.streamingReplies.delete(turnId);
       throw effectiveError;
     }
@@ -1503,7 +1547,8 @@ export class ImOrchestrator {
           const available = scores.flatMap((item) => item.result ? [{
             membershipId: item.membershipId,
             score: item.result.score,
-            turnId: item.result.turnId
+            turnId: item.result.turnId,
+            sourceMessageId: item.result.sourceMessageId
           }] : [])
             .sort((left, right) => right.score - left.score || left.membershipId.localeCompare(right.membershipId));
           if (available.length === 0) throw new AppError(502, "IM_JUDGE_ALL_FAILED", "所有 AI 角色的发言判断都失败了");
@@ -1517,21 +1562,7 @@ export class ImOrchestrator {
             forcedQueue.push(selectedReply);
             const selectedMembership = this.characterMembership(selectedReply.membershipId);
             this.db.run("UPDATE im_chain_turns SET selected = 1 WHERE id = ?", item.turnId);
-            this.publishToUser(requiredString(chain.authorization_user_id), {
-              id: id("imEvent"),
-              type: "turn",
-              conversationId,
-              payload: {
-                chainId,
-                turnId: item.turnId,
-                kind: "judge",
-                characterId: selectedMembership.character_id,
-                score: item.score,
-                selected: true,
-                status: "completed"
-              },
-              createdAt: now()
-            });
+            this.publishJudgeTurn(chain, selectedMembership, item.turnId, "completed", true, item.sourceMessageId);
           }
           plannedReply = forcedQueue.shift() ?? null;
           if (!plannedReply) throw new AppError(500, "IM_REPLY_QUEUE_EMPTY", "主动交流没有生成可执行的角色回复队列");

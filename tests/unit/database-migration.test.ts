@@ -168,6 +168,9 @@ describe("数据库版本化迁移", () => {
     current.run("DROP INDEX idx_im_messages_character_avatar");
     current.run("DROP INDEX idx_im_messages_character_snapshot_avatar");
     current.run("DELETE FROM schema_migrations WHERE version = 133");
+    current.run("DROP INDEX idx_im_chain_turns_source_message");
+    current.run("ALTER TABLE im_chain_turns DROP COLUMN source_message_id");
+    current.run("DELETE FROM schema_migrations WHERE version = 136");
     current.close();
 
     const migrated = new Database(filename);
@@ -178,6 +181,12 @@ describe("数据库版本化迁移", () => {
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 131")).toEqual({ count: 1 });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 132")).toEqual({ count: 1 });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 133")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 136")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA table_info(im_chain_turns)").map((column) => column.name)).toContain("source_message_id");
+    expect(migrated.get("SELECT source_message_id FROM im_chain_turns WHERE id = 'im-turn'"))
+      .toEqual({ source_message_id: "im-message" });
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_chain_turns_source_message'"))
+      .toEqual({ name: "idx_im_chain_turns_source_message" });
     expect(migrated.all("PRAGMA table_info(im_human_memberships)").map((column) => column.name)).toContain("conversation_snapshot_json");
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'im_avatar_versions'")).toEqual({ name: "im_avatar_versions" });
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_human_memberships_conversation'"))

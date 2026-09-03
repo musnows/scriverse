@@ -134,10 +134,14 @@ export function mergeImMessagePages(previousMessages, ...nextPages) {
 }
 
 export function mergeImFailedReplyPages(...pages) {
+  return mergeImTriggeredTurnPages(...pages);
+}
+
+export function mergeImTriggeredTurnPages(...pages) {
   const byId = new Map();
   for (const reply of pages.flatMap(array)) byId.set(String(reply?.id || ""), reply);
   byId.delete("");
-  return [...byId.values()].sort((left, right) => Number(left.triggerSequence) - Number(right.triggerSequence)
+  return [...byId.values()].sort((left, right) => Number(left.triggerSequence ?? left.sourceSequence) - Number(right.triggerSequence ?? right.sourceSequence)
     || String(left.createdAt || "").localeCompare(String(right.createdAt || ""))
     || String(left.id || "").localeCompare(String(right.id || "")));
 }
@@ -220,6 +224,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
   let settings = null;
   let eventSource = null;
   const provisionalReplies = new Map();
+  const provisionalJudges = new Map();
   const conversationDrafts = new Map();
   const groupSettingsDrafts = new Map();
   let mentionOptions = [];
@@ -561,6 +566,52 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     }
   }
 
+  function upsertProvisionalJudge(payload) {
+    const turnId = String(payload?.turnId || payload?.id || "");
+    if (!turnId) return null;
+    const previous = provisionalJudges.get(turnId) || {};
+    const eventCharacter = value(payload, "character", {});
+    const characterId = String(payload?.characterId || eventCharacter.characterId || previous.characterId || "");
+    const character = activeCharacters().find((item) => item.characterId === characterId);
+    const eventError = value(payload, "error", {});
+    const next = {
+      ...previous,
+      turnId,
+      chainId: String(payload?.chainId || previous.chainId || ""),
+      sourceMessageId: String(payload?.sourceMessageId || previous.sourceMessageId || ""),
+      characterId,
+      name: eventCharacter.name || character?.name || previous.name || "角色",
+      avatarUrl: eventCharacter.avatarUrl || character?.avatarUrl || previous.avatarUrl || null,
+      status: String(payload?.status || previous.status || "pending"),
+      selected: payload?.selected === true,
+      error: eventError.message || payload?.failure || previous.error || ""
+    };
+    provisionalJudges.set(turnId, next);
+    return next;
+  }
+
+  function syncProvisionalJudges() {
+    const previous = new Map(provisionalJudges);
+    provisionalJudges.clear();
+    for (const turn of array(current?.judgeOutcomes)) {
+      const retained = previous.get(String(turn.id));
+      const next = upsertProvisionalJudge({ ...retained, ...turn, turnId: turn.id });
+      if (next && retained?.error && !next.error) next.error = retained.error;
+    }
+    for (const turn of array(current?.activeChain?.judges)) {
+      if (turn.selected === true) continue;
+      const retained = previous.get(String(turn.id));
+      const next = upsertProvisionalJudge({ ...retained, ...turn, turnId: turn.id });
+      if (next && retained?.error && !next.error) next.error = retained.error;
+    }
+  }
+
+  function clearPendingProvisionalJudges() {
+    for (const [turnId, judge] of provisionalJudges) {
+      if (["pending", "running"].includes(String(judge.status))) provisionalJudges.delete(turnId);
+    }
+  }
+
   function provisionalReplyBodyHtml(reply) {
     const failed = ["failed", "skipped"].includes(reply.status);
     const pendingCopy = reply.status === "pending" ? "等待角色开始回答…" : "正在组织回答…";
@@ -569,10 +620,27 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     return `${content}${failure}`;
   }
 
+  function provisionalJudgeStatusLabel(judge) {
+    if (judge.status === "pending") return "等待判断";
+    if (judge.status === "running") return "模型判断中";
+    if (judge.status === "completed") return "无需回答";
+    if (judge.status === "cancelled") return "判断已取消";
+    return "判断失败";
+  }
+
+  function provisionalJudgeBodyHtml(judge) {
+    if (["failed", "cancelled"].includes(judge.status)) {
+      return `<p class="im-provisional-error">${esc(judge.error || "模型判断失败")}</p>`;
+    }
+    if (judge.status === "completed") return '<p class="im-provisional-placeholder">模型判断当前无需回答</p>';
+    return '<p class="im-provisional-placeholder">模型正在判断是否回答…</p>';
+  }
+
   function syncGeneratingSummary() {
     const count = [...provisionalReplies.values()].filter((reply) => ["pending", "running"].includes(reply.status)).length;
     const summary = feed.querySelector(".im-generating-summary");
-    if (summary && count > 0) summary.textContent = `${count} 个角色正在生成回答`;
+    const label = count ? `${count} 个角色正在生成回答` : "";
+    if (summary && label) summary.textContent = label;
     else if (summary) summary.remove();
     return count;
   }
@@ -595,6 +663,11 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     if (follow) feed.scrollTop = feed.scrollHeight;
   }
 
+  function updateProvisionalJudgeElement(judge) {
+    const follow = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+    renderMessages({ scrollToBottom: follow });
+  }
+
   function commitRealtimeMessage(message) {
     if (!message?.id) return;
     current.messages = mergeImMessagePages(current.messages, [message]);
@@ -609,7 +682,9 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const previousTop = feed.scrollTop;
     const messages = array(current?.messages);
     const provisional = [...provisionalReplies.values()];
+    const provisionalJudgeList = [...provisionalJudges.values()];
     const failedRepliesByMessage = new Map();
+    const judgesByMessage = new Map();
     for (const reply of array(current?.failedReplies)) {
       const triggerMessageId = String(reply.triggerMessageId || "");
       if (!triggerMessageId) continue;
@@ -617,7 +692,14 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       replies.push(reply);
       failedRepliesByMessage.set(triggerMessageId, replies);
     }
-    if (!messages.length && !provisional.length && failedRepliesByMessage.size === 0) {
+    for (const judge of provisionalJudgeList) {
+      const sourceMessageId = String(judge.sourceMessageId || "");
+      if (!sourceMessageId) continue;
+      const judges = judgesByMessage.get(sourceMessageId) ?? [];
+      judges.push(judge);
+      judgesByMessage.set(sourceMessageId, judges);
+    }
+    if (!messages.length && !provisional.length && !provisionalJudgeList.length && failedRepliesByMessage.size === 0) {
       feed.innerHTML = '<p class="im-feed-empty">从一条消息开始。角色单聊会直接回复；群聊按当前回复模式调度 AI。</p>';
       return;
     }
@@ -628,6 +710,14 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const generatingSummary = generatingCount
       ? `<div class="im-generating-summary" role="status">${generatingCount} 个角色正在生成回答</div>`
       : "";
+    const provisionalJudgeHtml = (judge) => {
+      const failed = ['failed', 'cancelled'].includes(judge.status);
+      const quiet = judge.status === "completed";
+      return `<article class="im-message is-character is-provisional is-judge${failed ? " is-failed" : ""}${quiet ? " is-quiet" : ""}" data-im-provisional-judge="${esc(judge.turnId)}" data-im-provisional-judge-status="${esc(judge.status)}">
+        <header>${imAvatarHtml(judge, "character", "im-message-avatar")}<strong>${esc(judge.name || "角色")}</strong><span class="im-provisional-status">${provisionalJudgeStatusLabel(judge)}</span></header>
+        <div class="im-message-body message-body">${provisionalJudgeBodyHtml(judge)}</div>
+      </article>`;
+    };
     const provisionalHtml = provisional.map((reply) => {
       const failed = ['failed', 'skipped'].includes(reply.status);
       const statusLabel = reply.status === "pending" ? "等待生成" : reply.status === "running" ? "正在生成" : reply.status === "skipped" ? "未生成" : "生成失败";
@@ -645,6 +735,12 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const avatar = announcement || message.senderKind === "system"
         ? ""
         : imAvatarHtml(sender, message.senderKind === "character" ? "character" : "user", "im-message-avatar");
+      const judges = array(judgesByMessage.get(String(message.id)));
+      const judgingCount = judges.filter((judge) => ['pending', 'running'].includes(judge.status)).length;
+      const judgeSummary = judgingCount
+        ? `<div class="im-generating-summary" role="status">${judgingCount} 个角色正在判断是否回答</div>`
+        : "";
+      const judgeResults = judges.map(provisionalJudgeHtml).join("");
       const failedReplies = array(failedRepliesByMessage.get(String(message.id))).map((reply) => {
         const character = value(reply, "character", {});
         return `<article class="im-message is-character is-provisional is-failed" data-im-failed-turn="${esc(reply.id)}">
@@ -656,7 +752,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
         <header>${avatar}<strong>${esc(label)}</strong><time>${esc(new Date(message.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }))}</time></header>
         <div class="im-message-body message-body">${messageHtml(message)}</div>
         ${message.senderKind === "character" ? `<details class="im-model-details"><summary>调用详情</summary><span>${esc(model.modelDisplayName || model.modelId || "未知模型")} · ${model.modelStage === "fallback" ? "fallback" : "主模型"} · ${Number(model.attemptCount || 1)} 次请求 · ${Number(model.durationMs || 0)} ms</span></details>` : ""}
-      </article>${failedReplies}`;
+      </article>${judgeSummary}${judgeResults}${failedReplies}`;
     }).join("") + generatingSummary + provisionalHtml;
     bindImAvatarFallbacks(feed);
     feed.scrollTop = follow ? feed.scrollHeight : previousTop;
@@ -679,6 +775,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       ].map((message) => [message.id, message]));
       current.messages = [...messagesById.values()].sort((left, right) => Number(left.sequence) - Number(right.sequence));
       current.failedReplies = mergeImFailedReplyPages(page.failedReplies, current.failedReplies);
+      current.judgeOutcomes = mergeImTriggeredTurnPages(page.judgeOutcomes, current.judgeOutcomes);
       current.hasMoreMessages = page.hasMoreMessages === true;
       renderMessages();
       feed.scrollTop = previousTop + Math.max(0, feed.scrollHeight - previousHeight);
@@ -989,17 +1086,20 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     const conversationChanged = !previousConversation;
     if (previousConversation) {
       const gapFailedReplies = [];
+      const gapJudgeOutcomes = [];
       const gapMessages = await collectImMessageGap(previousConversation.messages, nextConversation.messages, async (cursor) => {
         const page = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}?afterSequence=${encodeURIComponent(cursor)}`);
         if (request !== conversationRequest || (requestedConversationId && requestedConversationId !== conversationId)) {
           throw new Error("IM 会话请求已失效");
         }
         gapFailedReplies.push(...array(page.failedReplies));
+        gapJudgeOutcomes.push(...array(page.judgeOutcomes));
         return page;
       });
       if (request !== conversationRequest || (requestedConversationId && requestedConversationId !== conversationId)) return;
       nextConversation.messages = mergeImMessagePages(previousConversation.messages, gapMessages, nextConversation.messages);
       nextConversation.failedReplies = mergeImFailedReplyPages(previousConversation.failedReplies, gapFailedReplies, nextConversation.failedReplies);
+      nextConversation.judgeOutcomes = mergeImTriggeredTurnPages(previousConversation.judgeOutcomes, gapJudgeOutcomes, nextConversation.judgeOutcomes);
       nextConversation.hasMoreMessages = previousConversation.hasMoreMessages === true;
     }
     if (current?.id && current.id !== conversationId) {
@@ -1015,6 +1115,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     if (requestedConversationId === conversationId) requestedConversationId = null;
     workspace.classList.add("has-conversation");
     syncProvisionalReplies();
+    syncProvisionalJudges();
     const shouldRestoreDetailsFocus = detailsFocus && document.activeElement?.id === detailsFocus.id;
     renderConversationList();
     renderConversation(conversationChanged);
@@ -1427,6 +1528,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     conversationDrafts.delete(conversationId);
     closeMentionMenu();
     provisionalReplies.clear();
+    clearPendingProvisionalJudges();
     let committed = false;
     try {
       const result = await api(`/api/im/conversations/${encodeURIComponent(conversationId)}/messages`, {
@@ -1473,7 +1575,11 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       return;
     }
     if (envelope.type === "message" && current?.id === eventConversationId && envelope.payload.message) {
-      if (Object.prototype.hasOwnProperty.call(envelope.payload, "chain")) current.activeChain = envelope.payload.chain ?? null;
+      if (Object.prototype.hasOwnProperty.call(envelope.payload, "chain")) {
+        const nextChain = envelope.payload.chain ?? null;
+        if (String(current.activeChain?.id || "") !== String(nextChain?.id || "")) clearPendingProvisionalJudges();
+        current.activeChain = nextChain;
+      }
       commitRealtimeMessage(envelope.payload.message);
     }
     if (envelope.type === "turn" && current?.id === eventConversationId && envelope.payload.kind === "reply") {
@@ -1487,6 +1593,18 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       } else {
         const provisional = upsertProvisionalReply(envelope.payload);
         if (provisional) updateProvisionalReplyElement(provisional);
+      }
+      return;
+    }
+    if (envelope.type === "turn" && current?.id === eventConversationId && envelope.payload.kind === "judge") {
+      if (!isImRealtimeChainCurrent(current.activeChain, envelope.payload)) return;
+      const turnId = String(envelope.payload.turnId || "");
+      if (envelope.payload.selected === true) {
+        provisionalJudges.delete(turnId);
+        renderMessages();
+      } else {
+        const provisional = upsertProvisionalJudge(envelope.payload);
+        if (provisional) updateProvisionalJudgeElement(provisional);
       }
       return;
     }
@@ -1570,6 +1688,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     resetDetailsDrawer();
     document.querySelector("#app").classList.remove("im-mode");
     provisionalReplies.clear();
+    provisionalJudges.clear();
     closeMentionMenu();
   }
 
@@ -1715,6 +1834,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       const result = await performMutation(event.currentTarget, () => api(`/api/im/conversations/${encodeURIComponent(conversationId)}/stop`, { method: "POST", body: {} }));
       if (!result.ok) return;
       provisionalReplies.clear();
+      provisionalJudges.clear();
       if (current?.id === conversationId) await refreshAfterMutation("停止 AI", () => openConversation(conversationId));
     });
     document.querySelector("#im-retry").addEventListener("click", async (event) => {
@@ -1744,6 +1864,7 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
       workspace.classList.remove("has-conversation");
       resetDetailsDrawer();
       provisionalReplies.clear();
+      provisionalJudges.clear();
       renderConversationList();
       renderConversation();
       const previousConversationButton = [...listHost.querySelectorAll("[data-im-conversation]")]

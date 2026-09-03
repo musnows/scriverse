@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, imConversationAccessibleLabel, imDiagnosticStatusLabel, isImRealtimeChainCurrent, matchImProvisionalReplyTurn, mergeImFailedReplyPages, mergeImMessagePages, normalizeImComposerHeight, normalizeImConversationWidth, normalizeImDetailsWidth, resolveImConversationWidth, sameImGroupSettings, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
+import { collectImMessageGap, findImMentionQuery, hasImMessageSequenceGap, imConversationAccessibleLabel, imDiagnosticStatusLabel, isImRealtimeChainCurrent, matchImProvisionalReplyTurn, mergeImFailedReplyPages, mergeImMessagePages, mergeImTriggeredTurnPages, normalizeImComposerHeight, normalizeImConversationWidth, normalizeImDetailsWidth, resolveImConversationWidth, sameImGroupSettings, shouldFollowImFeed, shouldMarkImConversationRead, shouldRefreshImConversationListForEvent } from "../../src/public/im.js";
 
 describe("IM 编辑区域尺寸", () => {
   it("把拖动高度限制在当前视口允许范围内", () => {
@@ -110,6 +110,17 @@ describe("IM 编辑区域尺寸", () => {
     )).toEqual([
       expect.objectContaining({ id: "failure-1" }),
       expect.objectContaining({ id: "failure-2", failure: "latest" })
+    ]);
+  });
+
+  it("按来源消息顺序合并并去重历史判断结果", () => {
+    expect(mergeImTriggeredTurnPages(
+      [{ id: "judge-2", sourceSequence: 4, createdAt: "2026-09-03T00:00:02.000Z" }],
+      [{ id: "judge-1", sourceSequence: 2, createdAt: "2026-09-03T00:00:01.000Z" }],
+      [{ id: "judge-2", sourceSequence: 4, createdAt: "2026-09-03T00:00:02.000Z", status: "completed" }]
+    )).toEqual([
+      expect.objectContaining({ id: "judge-1" }),
+      expect.objectContaining({ id: "judge-2", status: "completed" })
     ]);
   });
 
