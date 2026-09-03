@@ -1009,6 +1009,36 @@ export class ImOrchestrator {
     );
   }
 
+  private judgeTurnPayload(
+    chain: Record<string, unknown>,
+    membership: Record<string, unknown>,
+    turnId: string,
+    status: "pending" | "running" | "completed" | "failed" | "cancelled" | "skipped",
+    selected = false,
+    error?: { code: string; message: string }
+  ): Record<string, unknown> {
+    return {
+      ...this.replyTurnPayload(chain, membership, turnId, status, error),
+      kind: "judge",
+      selected
+    };
+  }
+
+  private publishJudgeTurn(
+    chain: Record<string, unknown>,
+    membership: Record<string, unknown>,
+    turnId: string,
+    status: "pending" | "running" | "completed" | "failed" | "cancelled" | "skipped",
+    selected = false,
+    error?: { code: string; message: string }
+  ): void {
+    this.publish(
+      requiredString(chain.conversation_id),
+      "turn",
+      this.judgeTurnPayload(chain, membership, turnId, status, selected, error)
+    );
+  }
+
   private planReplyTurn(
     chain: Record<string, unknown>,
     membershipId: string,
@@ -1111,9 +1141,10 @@ export class ImOrchestrator {
     sourceMessage: Record<string, unknown>,
     signal: AbortSignal
   ): Promise<{ score: number; turnId: string } | null> {
-    await this.maybeCompact(chain, membership, sourceMessage, signal);
     const turnId = this.createTurn(requiredString(chain.id), requiredString(membership.id), "judge");
+    this.publishJudgeTurn(chain, membership, turnId, "running");
     try {
+      await this.maybeCompact(chain, membership, sourceMessage, signal);
       const result = await this.invoke(
         chain,
         membership,
@@ -1133,23 +1164,13 @@ export class ImOrchestrator {
       const currentAuthorization = this.assertCharacterAuthorization(chain, currentMembership);
       this.assertInvocationInitiatorPermissions(currentAuthorization.initiatorPermissions, result);
       this.finishTurn(turnId, result, score, false);
-      this.publishToUser(requiredString(chain.authorization_user_id), {
-        id: id("imEvent"),
-        type: "turn",
-        conversationId: requiredString(chain.conversation_id),
-        payload: {
-          chainId: requiredString(chain.id),
-          turnId,
-          kind: "judge",
-          characterId: membership.character_id,
-          score
-        },
-        createdAt: now()
-      });
+      this.publishJudgeTurn(chain, currentMembership, turnId, "completed");
       return { score, turnId };
     } catch (error) {
       const effectiveError = effectiveAbortError(signal, error);
-      this.failTurn(turnId, effectiveError, signal.aborted ? "cancelled" : "failed");
+      const status = signal.aborted ? "cancelled" : "failed";
+      this.failTurn(turnId, effectiveError, status);
+      this.publishJudgeTurn(chain, membership, turnId, status, false, publicError(effectiveError));
       if (signal.aborted) throw effectiveError;
       if (effectiveError instanceof AppError && [
         "IM_CHARACTER_ACCESS_DENIED",
@@ -1517,21 +1538,7 @@ export class ImOrchestrator {
             forcedQueue.push(selectedReply);
             const selectedMembership = this.characterMembership(selectedReply.membershipId);
             this.db.run("UPDATE im_chain_turns SET selected = 1 WHERE id = ?", item.turnId);
-            this.publishToUser(requiredString(chain.authorization_user_id), {
-              id: id("imEvent"),
-              type: "turn",
-              conversationId,
-              payload: {
-                chainId,
-                turnId: item.turnId,
-                kind: "judge",
-                characterId: selectedMembership.character_id,
-                score: item.score,
-                selected: true,
-                status: "completed"
-              },
-              createdAt: now()
-            });
+            this.publishJudgeTurn(chain, selectedMembership, item.turnId, "completed", true);
           }
           plannedReply = forcedQueue.shift() ?? null;
           if (!plannedReply) throw new AppError(500, "IM_REPLY_QUEUE_EMPTY", "主动交流没有生成可执行的角色回复队列");

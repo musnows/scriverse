@@ -1168,23 +1168,25 @@ export class ImService {
       optionalString(viewerMembership.left_at)
     );
     const activeChainId = requiredString(activeChain?.id);
-    const replyTurnRows = activeChain ? this.db.all(
+    const visibleTurnRows = activeChain ? this.db.all(
       `SELECT turn.*, membership.character_id, membership.snapshot_json
        FROM im_chain_turns turn JOIN im_character_memberships membership ON membership.id = turn.character_membership_id
-       WHERE turn.chain_id = ? AND turn.kind = 'reply' AND membership.joined_sequence <= ?
+       WHERE turn.chain_id = ? AND turn.kind IN ('reply', 'judge') AND membership.joined_sequence <= ?
          AND (membership.left_sequence IS NULL OR membership.left_sequence >= ?)
        ORDER BY turn.created_at, turn.id`,
       requiredString(activeChain.id),
       Number(activeChain.trigger_sequence),
       Number(activeChain.trigger_sequence)
     ) : [];
-    const replyCharacterIds = [...new Set(replyTurnRows.flatMap((turn) => optionalString(turn.character_id) ? [requiredString(turn.character_id)] : []))];
+    const replyTurnRows = visibleTurnRows.filter((turn) => requiredString(turn.kind) === "reply");
+    const judgeTurnRows = visibleTurnRows.filter((turn) => requiredString(turn.kind) === "judge");
+    const visibleTurnCharacterIds = [...new Set([...replyTurnRows, ...judgeTurnRows].flatMap((turn) => optionalString(turn.character_id) ? [requiredString(turn.character_id)] : []))];
     const replyAvatarShaByCharacterId = new Map<string, string>();
-    if (viewerLeftSequence === null && replyCharacterIds.length > 0) {
-      const placeholders = replyCharacterIds.map(() => "?").join(", ");
+    if (viewerLeftSequence === null && visibleTurnCharacterIds.length > 0) {
+      const placeholders = visibleTurnCharacterIds.map(() => "?").join(", ");
       for (const avatar of this.db.all(
         `SELECT character_id, sha256 FROM character_avatars WHERE character_id IN (${placeholders})`,
-        ...replyCharacterIds
+        ...visibleTurnCharacterIds
       )) {
         replyAvatarShaByCharacterId.set(requiredString(avatar.character_id), requiredString(avatar.sha256));
       }
@@ -1217,6 +1219,37 @@ export class ImService {
         },
         kind: "reply",
         status: requiredString(turn.status),
+        failure: optionalString(turn.failure),
+        createdAt: requiredString(turn.created_at),
+        completedAt: optionalString(turn.completed_at)
+      };
+    });
+    const judgeTurns = judgeTurnRows.map((turn) => {
+      const snapshot = json<Record<string, unknown>>(requiredString(turn.snapshot_json), {});
+      const characterId = optionalString(turn.character_id) ?? requiredString(snapshot.id);
+      const currentAvatarSha256 = characterId ? replyAvatarShaByCharacterId.get(characterId) ?? null : null;
+      const frozenCharacter = Array.isArray(frozenParticipants.characters)
+        ? frozenParticipants.characters.find((item) => item && typeof item === "object" && !Array.isArray(item)
+          && optionalString((item as Record<string, unknown>).characterId) === characterId) as Record<string, unknown> | undefined
+        : undefined;
+      const avatarUrl = viewerLeftSequence === null
+        ? characterId && currentAvatarSha256
+          ? `/api/im/conversations/${encodeURIComponent(conversationId)}/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(currentAvatarSha256)}`
+          : null
+        : optionalString(frozenCharacter?.avatarUrl);
+      return {
+        id: requiredString(turn.id),
+        chainId: activeChainId,
+        characterId,
+        character: {
+          characterId,
+          name: snapshot.name ?? "角色",
+          avatarUrl
+        },
+        kind: "judge",
+        status: requiredString(turn.status),
+        score: turn.score === null || turn.score === undefined ? null : Number(turn.score),
+        selected: booleanValue(turn.selected),
         failure: optionalString(turn.failure),
         createdAt: requiredString(turn.created_at),
         completedAt: optionalString(turn.completed_at)
@@ -1273,7 +1306,8 @@ export class ImService {
         error_message: activeChain.error_message,
         created_at: activeChain.created_at,
         updated_at: activeChain.updated_at,
-        turns: replyTurns
+        turns: replyTurns,
+        judges: judgeTurns
       } : null
     };
   }

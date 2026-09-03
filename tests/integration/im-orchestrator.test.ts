@@ -3650,6 +3650,61 @@ describe("IM AI 调度", () => {
     });
   });
 
+  it("主动判断期间推送角色气泡状态，并保留未选择角色的判断结果", async () => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-judge-quiet-feedback-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async () => completion('{"score":0}', false),
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "judge_quiet_feedback_owner", password: "secure-password-123" }).session.user;
+    const models = seedModels(runtime);
+    const characters = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "判断气泡作品" });
+      return [
+        runtime.store.createCharacter(String(work.id), { name: "林舟" }),
+        runtime.store.createCharacter(String(work.id), { name: "顾遥" })
+      ];
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "判断气泡群",
+      characterIds: characters.map((character) => String(character.id)),
+      replyMode: "proactive",
+      responseThreshold: 60,
+      maxAiMessages: 2
+    });
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = runtime.imOrchestrator.subscribe(owner.userId, (event) => events.push({ type: event.type, payload: event.payload }));
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: "现在需要谁来回应？",
+      requestId: "im-judge-quiet-feedback-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chainId = String((sent.chain as Record<string, unknown>).id);
+    const chain = await waitForChain(runtime, chainId);
+    unsubscribe();
+
+    expect(chain).toMatchObject({ status: "quiet", generated_count: 0 });
+    const judgeEvents = events.filter((event) => event.type === "turn" && event.payload.kind === "judge");
+    expect(judgeEvents.filter((event) => event.payload.status === "running")).toHaveLength(2);
+    expect(judgeEvents.filter((event) => event.payload.status === "completed" && event.payload.selected === false)).toHaveLength(2);
+    expect(judgeEvents.every((event) => event.payload.score === undefined)).toBe(true);
+    const activeChain = runtime.im.getConversation(String(group.id), owner.userId).activeChain as Record<string, unknown>;
+    expect(activeChain.turns).toEqual([]);
+    expect(activeChain.judges).toEqual(expect.arrayContaining(characters.map((character) => expect.objectContaining({
+      characterId: character.id,
+      status: "completed",
+      score: 0,
+      selected: false
+    }))));
+  });
+
   it("已排队角色被 AI mention 时只保留一个高优先级回复 turn", async () => {
     let secondCharacterReplies = 0;
     runtime = createRuntime({
