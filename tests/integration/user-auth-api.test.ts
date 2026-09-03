@@ -3252,7 +3252,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       () => internalAi.executeAgentTool(workId, {
         id: "structure-only",
         type: "function",
-        function: { name: "story_index", arguments: JSON.stringify({ offset: 0, limit: 20, cursor: 0 }) }
+        function: { name: "story_index", arguments: JSON.stringify({ chapterOffset: 0, limit: 20, cursor: 0 }) }
       })
     );
     expect(structureOnly).toMatchObject({ status: "completed", result: { ok: true } });

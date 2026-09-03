@@ -107,6 +107,31 @@ describe("S3 数据库与图片备份执行", () => {
     const avatarUser = runtime.auth.register({ username: "backup_avatar", password: "backup-avatar-password" }).session.user;
     const avatar = Buffer.from("avatar-image-content");
     runtime.auth.setAvatar(avatarUser.userId, { mimeType: "image/png", content: avatar, width: 1, height: 1 });
+    const historicalCharacterAvatar = Buffer.from("historical-character-avatar-content");
+    const historicalCharacterAvatarHash = createHash("sha256").update(historicalCharacterAvatar).digest("hex");
+    const historicalCharacterAvatarStorageKey = `${historicalCharacterAvatarHash.slice(0, 2)}/${historicalCharacterAvatarHash}.png`;
+    runtime.database.run(
+      `INSERT INTO im_conversations (
+         id, kind, owner_user_id, title, reply_mode, response_threshold, max_ai_messages, created_at, updated_at
+       ) VALUES ('im-backup-avatar-history', 'group', ?, '历史头像备份群', 'mention', 60, 20, ?, ?)`,
+      avatarUser.userId,
+      "2026-08-04T00:00:00.000Z",
+      "2026-08-04T00:00:00.000Z"
+    );
+    runtime.database.run(
+      `INSERT INTO im_avatar_versions (
+         conversation_id, participant_kind, participant_id, sha256, mime_type, byte_length,
+         storage_key, content, width, height, created_at
+       ) VALUES ('im-backup-avatar-history', 'character', 'historical-character', ?, 'image/png', ?, ?, NULL, 1, 1, ?)`,
+      historicalCharacterAvatarHash,
+      historicalCharacterAvatar.byteLength,
+      historicalCharacterAvatarStorageKey,
+      "2026-08-04T00:00:00.000Z"
+    );
+    runtime.characterAvatarStorage.read = async (key) => {
+      expect(key).toBe(historicalCharacterAvatarStorageKey);
+      return historicalCharacterAvatar;
+    };
 
     const attachment = Buffer.from("attachment-image-content");
     const attachmentHash = createHash("sha256").update(attachment).digest("hex");
@@ -173,7 +198,7 @@ describe("S3 数据库与图片备份执行", () => {
 
     expect(run).toMatchObject({
       status: "succeeded",
-      imagesUploaded: 1,
+      imagesUploaded: 2,
       imagesSkipped: 2,
       databasesDeleted: 1,
       errorMessage: null
@@ -186,6 +211,8 @@ describe("S3 数据库与图片备份执行", () => {
     expect(client.objects.get(`${rootPrefix}/master.key`)?.body.toString()).toBe("s3-execution-test-master-secret-with-enough-length");
     const coverHash = createHash("sha256").update(cover).digest("hex");
     expect(client.objects.get(`${rootPrefix}/img/${coverHash.slice(0, 2)}/${coverHash}.png`)?.body).toEqual(cover);
+    expect(client.objects.get(`${rootPrefix}/img/character-avatars/${historicalCharacterAvatarStorageKey}`)?.body)
+      .toEqual(historicalCharacterAvatar);
     const databaseImageMetadataQueries = allSpy.mock.calls
       .map(([sql]) => String(sql))
       .filter((sql) => sql.includes("work_covers") || sql.includes("user_avatars"));

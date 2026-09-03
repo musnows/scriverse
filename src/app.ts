@@ -68,6 +68,8 @@ import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
+import { ImService } from "./im.js";
+import { ImOrchestrator, type ImRealtimeEvent } from "./im-orchestrator.js";
 import { OfflineSyncService } from "./offline-sync.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -1060,6 +1062,8 @@ export type Runtime = {
   liteLlmPriceCache: LiteLlmPriceCache;
   backups: S3BackupManager;
   auth: UserAuthService;
+  im: ImService;
+  imOrchestrator: ImOrchestrator;
   offlineSync: OfflineSyncService;
   attachmentStorage: AttachmentStorage;
   characterAvatarStorage: AttachmentStorage;
@@ -1517,6 +1521,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
   const store = new Store(database);
+  const im = new ImService(store, auth);
   const offlineSync = new OfflineSyncService(database, store);
   const platformAiSettings = store.getPlatformAiSettings();
   const platformAiStreamIdleTimeoutMs = normalizeAiStreamIdleTimeoutSeconds(
@@ -1627,6 +1632,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       allowPrivateAiEndpoints: options.security?.allowPrivateAiEndpoints === true
     }
   );
+  const imOrchestrator = new ImOrchestrator(store, auth, im, ai);
   // AI 可写工具与审批工作流：计划创建只能由侧边栏 AI 发起，确认入口只接收审批 ID。
   const aiWritePlanManager = new AiWritePlanManager({
     database,
@@ -1759,6 +1765,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       profileId: input.profileId,
       clientVersion: input.clientVersion
     });
+    imOrchestrator.disconnectUser(result.session.user.userId);
     response.setHeader("Cache-Control", "no-store");
     runWithRequestActor(result.session.user, () => store.audit(null, "user.logged-in", "user", result.session.user.userId, { source: "desktop" }));
     logger.info("auth.desktop_login.succeeded", { actorRef: accountReference(result.session.user.userId) });
@@ -1777,11 +1784,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, { authenticated: true, user: request.authUser, apiKeyPrefix: request.authApiKey?.prefix ?? null });
   });
   app.delete("/api/auth/session", (request, response) => {
+    const userId = request.authUser?.userId;
     if (request.authDesktopSession) auth.revokeDesktop(request.authDesktopSession.id);
     if (request.authSession) {
       auth.revoke(request.authSession.id);
       clearSessionCookie(response, request.secure);
     }
+    if (userId) imOrchestrator.disconnectUser(userId);
     noContent(response);
   });
   app.post("/api/auth/onboarding/complete", (request, response) => {
@@ -1837,6 +1846,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (!request.authUser || !activeSession) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     const input = parse(passwordChangeSchema, request.body);
     auth.changePassword(request.authUser.userId, activeSession.id, input.currentPassword, input.newPassword, activeSession.kind);
+    imOrchestrator.disconnectUser(request.authUser.userId);
     store.audit(null, "user.password-changed", "user", request.authUser.userId);
     noContent(response);
   });
@@ -1888,8 +1898,336 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
     const updated = auth.updateUser(request.authUser, request.params.userId, parse(userUpdateSchema, request.body));
+    if (updated.status !== "active") imOrchestrator.disconnectUser(updated.userId);
     store.audit(null, "user.updated", "user", updated.userId, { role: updated.role, status: updated.status });
     data(response, updated);
+  });
+
+  const requireImUser = (request: Request): AuthUser => {
+    if (!request.authUser || !hasInteractiveSession(request)) {
+      throw new AppError(401, "SESSION_REQUIRED", "请使用交互式会话访问 IM");
+    }
+    return request.authUser;
+  };
+  const imSettingsSchema = z.object({
+    preferredName: z.string().trim().max(80).optional(),
+    pronouns: z.string().trim().max(80).optional(),
+    identitySummary: z.string().trim().max(2000).optional(),
+    additionalNotes: z.string().trim().max(4000).optional(),
+    primaryModelId: identifier.nullable().optional(),
+    fallbackModelId: identifier.nullable().optional(),
+    retryCount: z.number().int().min(1).max(20).optional()
+  }).strict();
+  const imGroupSchema = z.object({
+    title: nonEmpty.max(80),
+    characterIds: z.array(identifier).min(1).max(10),
+    humanUserIds: z.array(identifier).max(49).optional(),
+    replyMode: z.enum(["mention", "proactive"]).optional(),
+    responseThreshold: z.number().int().min(0).max(100).optional(),
+    maxAiMessages: z.number().int().min(1).max(100).optional()
+  }).strict();
+  const imGroupUpdateSchema = imGroupSchema.pick({
+    title: true,
+    replyMode: true,
+    responseThreshold: true,
+    maxAiMessages: true
+  }).partial().strict().refine((value) => Object.keys(value).length > 0, "至少提供一项要修改的群设置");
+
+  app.get("/api/im/settings", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.getSettings(user.userId));
+  });
+  app.patch("/api/im/settings", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.updateSettings(user.userId, parse(imSettingsSchema, request.body)));
+  });
+  app.get("/api/im/models", (request, response) => {
+    requireImUser(request);
+    data(response, im.listModels());
+  });
+  app.get("/api/im/works", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.listAvailableWorks(user));
+  });
+  app.get("/api/im/characters", (request, response) => {
+    const user = requireImUser(request);
+    const query = parse(z.object({
+      q: z.string().trim().max(100).default(""),
+      workId: identifier.optional(),
+      cursor: z.coerce.number().int().nonnegative().default(0),
+      limit: z.coerce.number().int().min(1).max(100).default(50)
+    }).strict(), request.query);
+    const characters = im.listAvailableCharacters(user, query.q, query.workId, query.limit + 1, query.cursor);
+    const hasMore = characters.length > query.limit;
+    data(response, {
+      items: characters.slice(0, query.limit),
+      nextCursor: hasMore ? query.cursor + query.limit : null
+    });
+  });
+  app.get("/api/im/conversations", (request, response) => {
+    const user = requireImUser(request);
+    const query = parse(z.object({
+      cursor: z.string().max(500).optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(50)
+    }).strict(), request.query);
+    let cursor: { updatedAt: string; createdAt: string; id: string } | undefined;
+    if (query.cursor) {
+      try {
+        cursor = parse(z.object({
+          updatedAt: z.string().datetime({ offset: true }),
+          createdAt: z.string().datetime({ offset: true }),
+          id: identifier
+        }).strict(), JSON.parse(Buffer.from(query.cursor, "base64url").toString("utf8")));
+      } catch {
+        throw new AppError(400, "IM_CONVERSATION_CURSOR_INVALID", "IM 会话分页游标无效");
+      }
+    }
+    const page = im.listConversations(user.userId, query.limit + 1, cursor);
+    const items = page.slice(0, query.limit);
+    const last = items.at(-1);
+    const totals = im.conversationUnreadTotals(user.userId);
+    data(response, {
+      items,
+      nextCursor: page.length > query.limit && last ? Buffer.from(JSON.stringify({
+        updatedAt: last.updatedAt,
+        createdAt: last.createdAt,
+        id: last.id
+      })).toString("base64url") : null,
+      ...totals
+    });
+  });
+  app.get("/api/im/unread", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.conversationUnreadTotals(user.userId));
+  });
+  app.get("/api/im/conversations/:conversationId/summary", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.getConversationSummary(request.params.conversationId, user.userId));
+  });
+  app.get("/api/im/events", (request, response) => {
+    const user = requireImUser(request);
+    let started = false;
+    let closed = false;
+    let heartbeat: NodeJS.Timeout | null = null;
+    let unsubscribe = (): void => undefined;
+    const pendingEvents: ImRealtimeEvent[] = [];
+    const close = (): void => {
+      if (closed) return;
+      closed = true;
+      if (heartbeat) clearInterval(heartbeat);
+      unsubscribe();
+      if (!response.writableEnded) response.end();
+    };
+    const write = (chunk: string): boolean => {
+      if (closed || response.destroyed || response.writableEnded) {
+        close();
+        return false;
+      }
+      try {
+        if (response.write(chunk)) return true;
+      } catch {
+        close();
+        return false;
+      }
+      close();
+      return false;
+    };
+    const writeEvent = (event: ImRealtimeEvent): void => {
+      write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    };
+    unsubscribe = imOrchestrator.subscribe(user.userId, (event) => {
+      if (!started) pendingEvents.push(event);
+      else writeEvent(event);
+    }, close, request.authDesktopSession?.expiresAt ?? request.authSession?.expiresAt);
+    response.status(200);
+    response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    response.setHeader("Cache-Control", "no-cache, no-transform");
+    response.setHeader("Connection", "keep-alive");
+    response.flushHeaders();
+    started = true;
+    if (!write(`event: ready\ndata: ${JSON.stringify({ connected: true })}\n\n`)) return;
+    for (const event of pendingEvents) {
+      if (closed) return;
+      writeEvent(event);
+    }
+    pendingEvents.length = 0;
+    heartbeat = setInterval(() => write(": heartbeat\n\n"), 15_000);
+    heartbeat.unref();
+    request.on("close", close);
+  });
+  app.post("/api/im/conversations/direct", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({ characterId: identifier }).strict(), request.body);
+    const result = im.createDirectResult(user, input.characterId);
+    if (result.created || result.changed) imOrchestrator.publishConversation(String(result.conversation.id));
+    data(response, result.conversation, result.created ? 201 : 200);
+  });
+  app.post("/api/im/conversations/group", (request, response) => {
+    const user = requireImUser(request);
+    const conversation = im.createGroup(user, parse(imGroupSchema, request.body));
+    imOrchestrator.publishConversation(String(conversation.id));
+    data(response, conversation, 201);
+  });
+  app.get("/api/im/conversations/:conversationId", (request, response) => {
+    const user = requireImUser(request);
+    const query = parse(z.object({
+      beforeSequence: z.coerce.number().int().positive().optional(),
+      afterSequence: z.coerce.number().int().nonnegative().optional()
+    }).strict().refine((value) => value.beforeSequence === undefined || value.afterSequence === undefined, {
+      message: "beforeSequence 和 afterSequence 不能同时使用"
+    }), request.query);
+    const conversation = im.getConversation(request.params.conversationId, user.userId, query.beforeSequence, query.afterSequence);
+    const activeChain = conversation.activeChain as Record<string, unknown> | null;
+    data(response, {
+      ...conversation,
+      streamingReplies: conversation.active === true && activeChain
+        ? imOrchestrator.streamingReplySnapshots(request.params.conversationId)
+            .filter((snapshot) => snapshot.chainId === activeChain.id)
+        : []
+    });
+  });
+  app.patch("/api/im/conversations/:conversationId", (request, response) => {
+    const user = requireImUser(request);
+    const result = im.updateGroup(user, request.params.conversationId, parse(imGroupUpdateSchema, request.body));
+    if (result.changed) {
+      imOrchestrator.cancelConversation(request.params.conversationId, "group_settings_changed");
+      imOrchestrator.publishConversation(request.params.conversationId);
+    }
+    data(response, result.conversation);
+  });
+  app.post("/api/im/conversations/:conversationId/humans", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({ userId: identifier }).strict(), request.body);
+    const updated = im.addHuman(user, request.params.conversationId, input.userId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "human_member_joined");
+    imOrchestrator.publishConversation(request.params.conversationId);
+    data(response, updated, 201);
+  });
+  app.delete("/api/im/conversations/:conversationId/humans/:userId", (request, response) => {
+    const user = requireImUser(request);
+    im.removeHuman(user, request.params.conversationId, request.params.userId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "human_member_removed");
+    imOrchestrator.publishConversation(request.params.conversationId);
+    imOrchestrator.publishConversationToUser(request.params.userId, request.params.conversationId);
+    noContent(response);
+  });
+  app.post("/api/im/conversations/:conversationId/leave", (request, response) => {
+    const user = requireImUser(request);
+    parse(z.object({}).strict(), request.body ?? {});
+    im.leaveGroup(user, request.params.conversationId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "human_member_left");
+    imOrchestrator.publishConversation(request.params.conversationId);
+    imOrchestrator.publishConversationToUser(user.userId, request.params.conversationId);
+    noContent(response);
+  });
+  app.post("/api/im/conversations/:conversationId/characters", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({ characterId: identifier }).strict(), request.body);
+    const updated = im.addCharacter(user, request.params.conversationId, input.characterId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "character_member_joined");
+    imOrchestrator.publishConversation(request.params.conversationId);
+    data(response, updated, 201);
+  });
+  app.delete("/api/im/conversations/:conversationId/characters/:characterId", (request, response) => {
+    const user = requireImUser(request);
+    im.removeCharacter(user, request.params.conversationId, request.params.characterId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "character_member_removed");
+    imOrchestrator.publishConversation(request.params.conversationId);
+    noContent(response);
+  });
+  app.get("/api/im/conversations/:conversationId/characters/:characterId/avatar", async (request, response) => {
+    const user = requireImUser(request);
+    const query = parse(z.object({ v: z.string().regex(/^[a-f0-9]{64}$/u).optional() }).strict(), request.query);
+    const avatar = im.getCharacterAvatarVersionAccess(user.userId, request.params.conversationId, request.params.characterId, query.v);
+    const content = await characterAvatarStorage.read(String(avatar.storageKey));
+    response.setHeader("Content-Type", String(avatar.mimeType));
+    response.setHeader("Content-Length", String(content.byteLength));
+    response.setHeader("ETag", `\"${String(avatar.sha256)}\"`);
+    response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.send(content);
+  });
+  app.get("/api/im/conversations/:conversationId/users/:userId/avatar", (request, response) => {
+    const user = requireImUser(request);
+    const query = parse(z.object({ v: z.string().regex(/^[a-f0-9]{64}$/u) }).strict(), request.query);
+    const avatar = im.getHumanAvatarVersionAccess(user.userId, request.params.conversationId, request.params.userId, query.v);
+    response.setHeader("Content-Type", String(avatar.mimeType));
+    response.setHeader("Content-Length", String(avatar.byteLength));
+    response.setHeader("ETag", `\"${String(avatar.sha256)}\"`);
+    response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.send(avatar.content);
+  });
+  app.post("/api/im/conversations/:conversationId/transfer", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({ userId: identifier }).strict(), request.body);
+    const updated = im.transferGroup(user, request.params.conversationId, input.userId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "group_owner_transferred");
+    imOrchestrator.publishConversation(request.params.conversationId);
+    data(response, updated);
+  });
+  app.post("/api/im/conversations/:conversationId/disband", (request, response) => {
+    const user = requireImUser(request);
+    parse(z.object({}).strict(), request.body ?? {});
+    const memberUserIds = im.disbandGroup(user, request.params.conversationId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "group_disbanded");
+    for (const userId of memberUserIds) imOrchestrator.publishConversationToUser(userId, request.params.conversationId);
+    imOrchestrator.forgetConversation(request.params.conversationId);
+    noContent(response);
+  });
+  app.post("/api/im/conversations/:conversationId/messages", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({
+      content: z.string().trim().min(1).max(20_000),
+      requestId: idempotencyKeySchema
+    }).strict(), request.body);
+    const current = im.getConversation(request.params.conversationId, user.userId);
+    if (current.active !== true) throw new AppError(403, "IM_MEMBERSHIP_INACTIVE", "你已经退出这个 IM 会话");
+    const result = im.sendMessage(user, request.params.conversationId, input, (chainId) => {
+      imOrchestrator.abortConversationRuns(request.params.conversationId, "human_message_received", chainId);
+    });
+    imOrchestrator.publishMessageResult(result);
+    data(response, result, 201);
+  });
+  app.post("/api/im/conversations/:conversationId/announcements", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({
+      content: z.string().trim().min(1).max(20_000),
+      requestId: idempotencyKeySchema
+    }).strict(), request.body);
+    const result = im.publishAnnouncement(user, request.params.conversationId, input);
+    imOrchestrator.publishMessageResult(result);
+    data(response, result, 201);
+  });
+  app.post("/api/im/conversations/:conversationId/read", (request, response) => {
+    const user = requireImUser(request);
+    const input = parse(z.object({ sequence: z.number().int().min(0) }).strict(), request.body);
+    const result = im.markRead(user.userId, request.params.conversationId, input.sequence);
+    if (result.changed) imOrchestrator.publishConversationToUser(user.userId, request.params.conversationId);
+    data(response, result.summary);
+  });
+  app.post("/api/im/conversations/:conversationId/stop", (request, response) => {
+    const user = requireImUser(request);
+    parse(z.object({}).strict(), request.body ?? {});
+    const current = im.getConversation(request.params.conversationId, user.userId);
+    if (current.active !== true) throw new AppError(403, "IM_MEMBERSHIP_INACTIVE", "你已经退出这个 IM 会话");
+    im.stopChain(user.userId, request.params.conversationId);
+    imOrchestrator.cancelConversation(request.params.conversationId, "stopped_by_user");
+    noContent(response);
+  });
+  app.post("/api/im/conversations/:conversationId/chains/:chainId/retry", (request, response) => {
+    const user = requireImUser(request);
+    parse(z.object({}).strict(), request.body ?? {});
+    const chain = im.retryChain(user, request.params.conversationId, request.params.chainId, (chainId) => {
+      imOrchestrator.abortConversationRuns(request.params.conversationId, "manual_retry", chainId);
+    });
+    if (String(chain.status) === "queued") imOrchestrator.enqueue(String(chain.id));
+    imOrchestrator.publishConversation(request.params.conversationId);
+    data(response, chain, 201);
+  });
+  app.get("/api/im/conversations/:conversationId/diagnostics", (request, response) => {
+    const user = requireImUser(request);
+    data(response, im.getDiagnostics(user, request.params.conversationId));
   });
 
   app.get("/api/works", (request, response) => {
@@ -3525,6 +3863,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         answerText: String(continuation.answerText ?? ""),
         selectedOptionLabel: typeof continuation.selectedOptionLabel === "string" ? continuation.selectedOptionLabel : null,
         supplementalAnswer: typeof continuation.customAnswer === "string" ? continuation.customAnswer : "",
+        ...(Array.isArray(continuation.answers)
+          ? { answers: continuation.answers.filter((answer): answer is Record<string, unknown> => Boolean(answer) && typeof answer === "object" && !Array.isArray(answer)) }
+          : {}),
         ...(typeof continuation.modelId === "string" && continuation.modelId ? { modelId: continuation.modelId } : {}),
         ...(typeof continuation.toolCallId === "string" && continuation.toolCallId ? { toolCallId: continuation.toolCallId } : {}),
         ...(typeof continuation.assistantMessageRequestId === "string" && continuation.assistantMessageRequestId
@@ -3549,7 +3890,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       request.params.questionId,
       request.params.workId,
       viewer,
-      { ...(input.selectedOption !== undefined ? { selectedOption: input.selectedOption } : {}), ...(input.customAnswer !== undefined ? { customAnswer: input.customAnswer } : {}) }
+      input
     );
     await resumeQuestionWorkflow(request.params.questionId, request.params.workId, viewer);
     data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, viewer));
@@ -4259,6 +4600,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   backups.startScheduler();
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
   let closePromise: Promise<void> | null = null;
+  let imOrchestratorClosePromise: Promise<void> | null = null;
   let stopping = false;
   let closed = false;
   const close = (): Promise<void> => {
@@ -4269,6 +4611,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       logger.info("runtime.closing");
       backups.dispose();
       liteLlmPriceCache.dispose();
+      imOrchestratorClosePromise = imOrchestrator.dispose();
       ai.dispose();
       offlineSync.dispose();
       const cancelledStreamRequests = store.cancelActiveAiConversationStreamRequests();
@@ -4277,6 +4620,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     closePromise = (async () => {
       try {
         await backups.waitForIdle(RUNTIME_BACKUP_IDLE_TIMEOUT_MS);
+        await imOrchestratorClosePromise;
         collaborationPresence.close();
         database.close();
         if (temporaryStorageRoot) rmSync(temporaryStorageRoot, { recursive: true, force: true });
@@ -4291,5 +4635,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     })();
     return closePromise;
   };
-  return { app, database, store, ai, liteLlmPriceCache, backups, auth, offlineSync, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
+  return { app, database, store, ai, liteLlmPriceCache, backups, auth, im, imOrchestrator, offlineSync, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
 }

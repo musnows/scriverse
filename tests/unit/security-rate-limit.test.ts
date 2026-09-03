@@ -89,6 +89,21 @@ describe("安全限速器", () => {
     }
     const blockedExport = await expensiveAgent.get("/api/works/work_1/export").expect(429);
     expect(blockedExport.body.error.code).toBe("EXPENSIVE_API_RATE_LIMITED");
+
+    const imApp = express();
+    imApp.use((request, _response, next) => {
+      request.authUser = { userId: "user_im_expensive" } as typeof request.authUser;
+      next();
+    });
+    imApp.use(createExpensiveApiRateLimitMiddleware(60_000));
+    imApp.all("/{*path}", (_request, response) => response.json({ ok: true }));
+    const imAgent = request.agent(imApp);
+    for (let index = 0; index < 15; index += 1) {
+      await imAgent.post("/api/im/conversations/group_1/messages/").expect(200);
+      await imAgent.post(`/api/im/conversations/group_1/chains/chain_${index}/retry/`).expect(200);
+    }
+    const blockedIm = await imAgent.post("/api/im/conversations/group_1/messages/").expect(429);
+    expect(blockedIm.body.error.code).toBe("EXPENSIVE_API_RATE_LIMITED");
   });
 
   it("API 路径匹配忽略大小写，避免大小写变体绕过限速", async () => {
