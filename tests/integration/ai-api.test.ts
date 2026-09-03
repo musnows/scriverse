@@ -1576,7 +1576,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completionCount).toBe(2);
   });
 
-  it("story_index 首页独立返回第二十一章作为结构最新章节并明确 nextOffset", async () => {
+  it("story_index 首页独立返回第二十一章作为结构最新章节并明确 nextChapterOffset", async () => {
     const volumeId = String(runtime.store.getChapter(chapterId).volumeId);
     const addedChapters = Array.from({ length: 20 }, (_, index) => runtime.store.createChapter(workId, {
       volumeId,
@@ -1591,10 +1591,22 @@ describe("AI 供应商、模型与建议 API", () => {
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
-      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
+      const body = JSON.parse(String(init?.body)) as {
+        messages: Array<{ role: string; content?: string }>;
+        tools?: Array<{
+          function?: {
+            name?: string;
+            parameters?: { properties?: Record<string, unknown> };
+          };
+        }>;
+      };
       if (completionCount === 1) {
         expect(body.messages[0]?.content).toContain("latestChaptersByStructure 是不受当前分页影响的结构最新章节");
-        expect(body.messages[0]?.content).toContain("nextOffset 非空时用该值作为 offset");
+        expect(body.messages[0]?.content).toContain("用 nextChapterOffset 换页并将 cursor 置 0");
+        const storyIndexProperties = body.tools?.find((tool) => tool.function?.name === "story_index")?.function?.parameters?.properties;
+        expect(storyIndexProperties).toHaveProperty("chapterOffset");
+        expect(storyIndexProperties).toHaveProperty("cursor");
+        expect(storyIndexProperties).not.toHaveProperty("offset");
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
           id: "long-story-index",
           type: "function",
@@ -1617,8 +1629,8 @@ describe("AI 供应商、模型与建议 API", () => {
       ok: true,
       data: {
         totalChapters: 21,
-        offset: 0,
-        nextOffset: 20,
+        chapterOffset: 0,
+        nextChapterOffset: 20,
         latestChaptersByStructure: [{
           id: latestChapterId,
           title: "第21章",
@@ -1815,7 +1827,7 @@ describe("AI 供应商、模型与建议 API", () => {
 
     expect(response.body.data.content).toBe("已根据章节目录回答。");
     expect(response.body.data.toolCalls).toEqual([
-      expect.objectContaining({ id: "tool-call-1", name: "story_index", calledAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u), status: "completed", arguments: { offset: 0, limit: 1 } })
+      expect.objectContaining({ id: "tool-call-1", name: "story_index", calledAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u), status: "completed", arguments: { chapterOffset: 0, limit: 1 } })
     ]);
     expect(completionCount).toBe(2);
   });
@@ -2032,7 +2044,7 @@ describe("AI 供应商、模型与建议 API", () => {
     });
     const calls = [
       { id: "index-default", name: "story_index", arguments: {} },
-      { id: "index-page", name: "story_index", arguments: { offset: 0, limit: 1 } },
+      { id: "index-page", name: "story_index", arguments: { chapterOffset: 0, limit: 1 } },
       { id: "chapter-summary", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "summary" } },
       { id: "chapter-content", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } },
       { id: "chapter-both", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "both" } },
@@ -2057,7 +2069,7 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(results.get("index-default")).toMatchObject({
         ok: true,
         data: {
-          offset: 0,
+          chapterOffset: 0,
           totalChapters: 1,
           storyOrdering: expect.any(Object),
           latestChaptersByStructure: [{ id: chapterId, storyOrder: { chapter: { isLatestByStructure: true } } }]
@@ -4462,9 +4474,9 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(deltas).toEqual(["我先读取目录。", "已读取", "目录。"]);
     expect(generated.content).toBe("已读取目录。");
     expect(generated.toolCalls).toEqual([
-      expect.objectContaining({ id: "stream-tool", name: "story_index", arguments: { offset: 0, limit: 1 }, status: "completed" })
+      expect.objectContaining({ id: "stream-tool", name: "story_index", arguments: { chapterOffset: 0, limit: 1 }, status: "completed" })
     ]);
-    expect(toolEvents).toEqual([{ arguments: { offset: 0, limit: 1 } }]);
+    expect(toolEvents).toEqual([{ arguments: { chapterOffset: 0, limit: 1 } }]);
     expect(completionCount).toBe(2);
   });
 
@@ -4522,7 +4534,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text.indexOf('"delta":"我先读取作品目录。"')).toBeLessThan(streamed.text.indexOf('"type":"intermediate","round":1,"content":"我先读取作品目录。"'));
     expect(streamed.text.indexOf('"type":"intermediate","round":1,"content":"我先读取作品目录。"')).toBeLessThan(streamed.text.indexOf("event: tool_call"));
     expect(streamed.text).toContain('"name":"story_index"');
-    expect(streamed.text).toContain('"arguments":{"offset":0,"limit":1}');
+    expect(streamed.text).toContain('"arguments":{"chapterOffset":0,"limit":1}');
     expect(streamed.text).toMatch(/"calledAt":"\d{4}-\d{2}-\d{2}T/u);
     expect(streamed.text).toContain('"result":{"ok":true');
     expect(streamed.text).toContain('event: delta\ndata: {"delta":"已读取"}');
@@ -4540,7 +4552,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(generatedSuggestions.body.data[0].content).toBe("已读取目录。");
 
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
-    const toolCalls = [{ id: "stream-tool", name: "story_index", calledAt: "2026-07-17T12:34:56.000Z", arguments: { offset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];
+    const toolCalls = [{ id: "stream-tool", name: "story_index", calledAt: "2026-07-17T12:34:56.000Z", arguments: { chapterOffset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];
     const processSteps = [
       { id: "process-thinking", type: "thinking", round: 1, content: "需要读取目录。", createdAt: "2026-07-17T12:34:55.000Z" },
       { id: "process-compaction", type: "context_compaction", round: 1, sourceMessageCount: 2, sourceChars: 12000, summaryChars: 180, createdAt: "2026-07-17T12:34:55.500Z" },

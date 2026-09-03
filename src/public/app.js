@@ -1,6 +1,7 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1";
 import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260830-adjacent-blockquotes-v1";
+import { createImWorkspace } from "/im.js?v=20260903-global-im-v103";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { applyAiSkillCommand, findAiSkillCommand, listAiSkillOptions } from "/ai-skill-menu.js?v=20260830-ai-skill-slash-menu-v1";
 import {
@@ -79,7 +80,7 @@ import {
   characterGenderLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260816-character-gender-v1&feature=global-replace-volume-v1&feature=ai-provider-responses-v1";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1&feature=global-im-return-v1";
 import {
   READING_PREFERENCES_STORAGE_KEY,
   READING_PREFERENCES_VERSION,
@@ -1031,7 +1032,7 @@ function replacePageRoute(route) {
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
-  if (!state.work || route.view === "shelf" || route.view === "platform-ai" || route.view === "platform-usage") return null;
+  if (!state.work || route.view === "shelf" || route.view === "im" || route.view === "platform-ai" || route.view === "platform-usage") return null;
   if (route.view === "reader") return { kind: "welcome" };
   if (relationshipPresenceId) return { kind: "entity-editor", module: "relationship", resourceId: relationshipPresenceId };
   if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
@@ -1226,6 +1227,7 @@ async function confirmConcurrentSave() {
 
 function currentPageRoute() {
   const workId = state.work?.id ?? null;
+  if (!$("#im-view").classList.contains("hidden")) return { view: "im" };
   if (!$("#reader-view").classList.contains("hidden") && workId) {
     return { view: "reader", workId, chapterId: readingTargetChapter?.id ?? null };
   }
@@ -6794,6 +6796,7 @@ async function loadWorks(preferredId) {
 }
 
 function restoredSettingsReturnContext(route) {
+  if (route.returnView === "im") return { view: "im" };
   if (route.returnView === "module" && route.returnModule) return { view: "module", module: route.returnModule };
   if (route.returnView === "editor" && route.returnChapterId) return { view: "editor", chapterId: route.returnChapterId };
   if (route.returnView === "welcome") return { view: "welcome" };
@@ -6836,6 +6839,10 @@ async function initializePage() {
   try {
     if (route.view === "shelf") {
       showShelf();
+      return;
+    }
+    if (route.view === "im") {
+      await imWorkspace.open();
       return;
     }
 
@@ -6919,6 +6926,7 @@ async function initializePage() {
 }
 
 function showShelf() {
+  imWorkspace.close();
   stopBackgroundTaskCenter();
   dismissChapterInsightToast();
   dismissDeleteToasts();
@@ -6943,6 +6951,7 @@ function showShelf() {
 }
 
 function captureSettingsReturnContext() {
+  if (imWorkspace.opened) return { view: "im" };
   if (!$("#shelf-view").classList.contains("hidden")) return { view: "shelf" };
   if (!$("#editor-view").classList.contains("hidden")) return { view: "editor", chapterId: state.chapter?.id ?? null };
   if (!$("#module-view").classList.contains("hidden")) return { view: "module", module: state.module };
@@ -6970,7 +6979,9 @@ function renderSettingsHub() {
   $("#top-search-button").disabled = !canReadAggregate;
   $("#export-button").disabled = !canExportManuscript;
   $("#export-button").setAttribute("aria-expanded", "false");
-  $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
+  $("#settings-return").textContent = settingsReturnContext?.view === "im"
+    ? "返回 IM"
+    : settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
     ? `当前作品：《${state.work.title}》。导出正文时可选择 Markdown ZIP 或 DOCX；DOCX 在有封面时会嵌入为首页。`
     : "当前未选择作品；打开作品后可使用导出。";
@@ -8252,6 +8263,7 @@ async function showSettingsHub() {
     settingsReturnContext = captureSettingsReturnContext();
     state.dirty = false;
   }
+  imWorkspace.close();
   dismissChapterInsightToast();
   dismissTokenUsageDetails({ restoreFocus: false });
   dismissDeleteToasts();
@@ -8288,6 +8300,7 @@ async function returnFromSettings() {
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
+  if (context.view === "im") return imWorkspace.open();
   if (context.view === "shelf" || !state.work) return showShelf();
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -8437,6 +8450,7 @@ function resetWorkScopedUiCaches() {
 }
 
 async function selectWork(workId, preferredChapterId = null) {
+  imWorkspace.close();
   chapterSelectionRequestGeneration += 1;
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !(await confirmDiscardChanges())) return false;
@@ -9130,6 +9144,7 @@ async function resolveCurrentChapterForeshadowReminder() {
 }
 
 async function selectChapter(chapterId, { editMode = false } = {}) {
+  imWorkspace.close();
   const workId = state.work?.id;
   if (!workId) return false;
   const selectionGeneration = ++chapterSelectionRequestGeneration;
@@ -9690,6 +9705,7 @@ function tidyChapterBlankLines() {
 }
 
 function showWelcome(hasWork = false) {
+  imWorkspace.close();
   chapterSelectionRequestId += 1;
   clearChapterForeshadowReminders({ invalidateRequest: true });
   dismissChapterInsightToast();
@@ -9723,6 +9739,7 @@ const moduleMeta = {
 };
 
 async function showModule(module) {
+  imWorkspace.close();
   if (!state.work) return showWelcome();
   if (!canReadModule(module)) {
     const fallback = firstReadableUiModule(state.work);
@@ -21278,7 +21295,25 @@ window.addEventListener("resize", () => {
   });
 });
 
+const imWorkspace = createImWorkspace({
+  api,
+  esc,
+  renderMarkdown,
+  toast,
+  confirmToast,
+  state,
+  showShelf,
+  onRouteChange: schedulePresenceHeartbeat,
+  beforeOpen: async () => {
+    if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入 IM 将放弃本地修改。是否继续？"))) return false;
+    cancelChapterAutoSave();
+    state.dirty = false;
+    return true;
+  }
+});
+
 initializeAiChatTabs();
+imWorkspace.start();
 initializePage().catch((error) => {
   restoringPageRoute = false;
   if (state.user) {
@@ -21287,4 +21322,6 @@ initializePage().catch((error) => {
   }
   showShelf();
   toast(`系统初始化失败：${error.message}`, "error");
+}).finally(() => {
+  if (state.user) void imWorkspace.activate().catch((error) => toast(`IM 初始化失败：${error.message}`, "error"));
 });
