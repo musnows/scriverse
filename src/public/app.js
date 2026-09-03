@@ -306,6 +306,7 @@ let relationshipSearchIndexRefreshTimer = null;
 let semanticSearchIndexRefreshTimer = null;
 let aiSemanticSearchResults = [];
 let aiSemanticSearchQuery = "";
+let aiCitationPopoverTrigger = null;
 let backgroundTaskCenterTimer = null;
 let backgroundTaskCenterRequest = 0;
 let backgroundTaskCenterWorkId = null;
@@ -2073,6 +2074,66 @@ function selectChapterLines(start, end) {
   return selection;
 }
 
+function aiCitationLineLabel(citation) {
+  return citation.startLine === citation.endLine ? `第 ${citation.startLine} 行` : `第 ${citation.startLine}-${citation.endLine} 行`;
+}
+
+function aiCitationTagLabel(citation) {
+  return `${citation.chapterTitle} · L${citation.startLine}${citation.endLine === citation.startLine ? "" : `-L${citation.endLine}`}`;
+}
+
+function positionAiCitationPopover(trigger) {
+  const panel = $("#ai-panel");
+  const popover = $("#ai-citation-popover");
+  if (!panel || !popover || !trigger?.isConnected || popover.classList.contains("hidden")) return;
+  const panelRect = panel.getBoundingClientRect();
+  const triggerRect = trigger.getBoundingClientRect();
+  const gutter = 16;
+  const maxLeft = Math.max(gutter, panelRect.width - popover.offsetWidth - gutter);
+  const anchorCenter = triggerRect.left + triggerRect.width / 2 - panelRect.left;
+  const left = Math.min(maxLeft, Math.max(gutter, anchorCenter - popover.offsetWidth / 2));
+  const below = triggerRect.bottom - panelRect.top + 8;
+  const above = triggerRect.top - panelRect.top - popover.offsetHeight - 8;
+  const maxTop = Math.max(gutter, panelRect.height - popover.offsetHeight - gutter);
+  const fitsBelow = below <= maxTop;
+  const top = fitsBelow ? below : Math.max(gutter, Math.min(above, maxTop));
+  const arrowOffset = Math.max(12, Math.min(popover.offsetWidth - 12, anchorCenter - left));
+  popover.dataset.placement = fitsBelow ? "bottom" : "top";
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+  popover.style.setProperty("--ai-citation-arrow-offset", `${arrowOffset}px`);
+}
+
+function closeAiCitationPopover({ restoreFocus = false } = {}) {
+  const popover = $("#ai-citation-popover");
+  if (!popover) return;
+  const trigger = aiCitationPopoverTrigger;
+  aiCitationPopoverTrigger = null;
+  popover.classList.add("hidden");
+  popover.setAttribute("aria-hidden", "true");
+  popover.removeAttribute("data-placement");
+  popover.style.removeProperty("left");
+  popover.style.removeProperty("top");
+  popover.style.removeProperty("--ai-citation-arrow-offset");
+  trigger?.setAttribute("aria-expanded", "false");
+  if (restoreFocus && trigger?.isConnected) trigger.focus({ preventScroll: true });
+}
+
+function openAiCitationPopover(citation, trigger) {
+  const popover = $("#ai-citation-popover");
+  if (!popover || !trigger) return;
+  closeAiCitationPopover();
+  $("#ai-citation-popover-title").textContent = String(citation.chapterTitle ?? "正文引用");
+  $("#ai-citation-popover-description").textContent = aiCitationLineLabel(citation);
+  $("#ai-citation-popover-quote").textContent = citation.text || "（空白行）";
+  aiCitationPopoverTrigger = trigger;
+  trigger.setAttribute("aria-expanded", "true");
+  popover.classList.remove("hidden");
+  popover.setAttribute("aria-hidden", "false");
+  positionAiCitationPopover(trigger);
+  $("#ai-citation-popover-close").focus({ preventScroll: true });
+}
+
 function renderAiCitations() {
   const host = $("#ai-citations");
   host.replaceChildren();
@@ -2086,7 +2147,7 @@ function renderAiCitations() {
     const source = document.createElement("strong");
     source.textContent = citation.chapterTitle;
     const range = document.createElement("small");
-    range.textContent = citation.startLine === citation.endLine ? `第 ${citation.startLine} 行` : `第 ${citation.startLine}-${citation.endLine} 行`;
+    range.textContent = aiCitationLineLabel(citation);
     const excerpt = document.createElement("span");
     excerpt.textContent = citation.text.replace(/\s+/gu, " ").trim() || "空白行";
     main.append(source, range, excerpt);
@@ -2094,7 +2155,7 @@ function renderAiCitations() {
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "ai-citation-remove";
-    remove.setAttribute("aria-label", `移除 ${citation.chapterTitle} 第 ${citation.startLine}-${citation.endLine} 行引用`);
+    remove.setAttribute("aria-label", `移除 ${citation.chapterTitle} ${aiCitationLineLabel(citation)}引用`);
     remove.textContent = "×";
     remove.addEventListener("click", () => {
       state.aiCitations = state.aiCitations.filter((item) => item.id !== citation.id);
@@ -2612,6 +2673,7 @@ function renderAiChatTabs() {
 function activateAiChatTab(tabId, { persistCurrent = true, force = false } = {}) {
   const current = activeAiChatTab();
   if (!force && current?.id === tabId) return current;
+  closeAiCitationPopover();
   if (persistCurrent) persistActiveAiChatTab();
   const tab = aiChatTabManager.activate(tabId);
   if (!tab) return null;
@@ -2702,6 +2764,7 @@ function resetAiFeed(
   roleplayCharacter = state.aiRoleplayCharacter,
   roleplayUserCharacter = state.aiRoleplayUserCharacter
 ) {
+  closeAiCitationPopover();
   const tab = aiChatTabManager.get(feed?.dataset.aiTabId);
   if (tab) tab.lastMessageAt = null;
   if (isActiveAiChatTab(tab)) state.aiLastMessageAt = null;
@@ -18555,8 +18618,21 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     const references = document.createElement("div");
     references.className = "message-citations";
     for (const citation of citations) {
-      const reference = document.createElement("span");
-      reference.textContent = `${citation.chapterTitle} · L${citation.startLine}${citation.endLine === citation.startLine ? "" : `-L${citation.endLine}`}`;
+      const reference = document.createElement("button");
+      reference.type = "button";
+      reference.className = "message-citation";
+      reference.setAttribute("aria-haspopup", "dialog");
+      reference.setAttribute("aria-expanded", "false");
+      reference.setAttribute("aria-controls", "ai-citation-popover");
+      reference.setAttribute("aria-label", `${aiCitationTagLabel(citation)}，点击查看引用正文`);
+      const referenceLabel = document.createElement("span");
+      referenceLabel.textContent = aiCitationTagLabel(citation);
+      reference.append(referenceLabel);
+      reference.addEventListener("click", () => {
+        const popover = $("#ai-citation-popover");
+        if (aiCitationPopoverTrigger === reference && popover && !popover.classList.contains("hidden")) closeAiCitationPopover();
+        else openAiCitationPopover(citation, reference);
+      });
       references.append(reference);
     }
     message.append(references);
@@ -20775,6 +20851,7 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
   if (!event.target.closest("#ai-context-meter") && !event.target.closest("#ai-context-popover")) setAiContextDistributionVisible(false);
   if (!event.target.closest("#ai-model-picker") && !event.target.closest("#ai-model-popover")) setAiModelPickerVisible(false);
+  if (!event.target.closest("#ai-citation-popover") && !event.target.closest(".message-citation")) closeAiCitationPopover();
   if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
     $("#account-menu").classList.add("hidden");
     $("#account-button").setAttribute("aria-expanded", "false");
@@ -20799,6 +20876,10 @@ document.addEventListener("keydown", (event) => {
     }
     if (!$("#ai-model-popover").classList.contains("hidden")) {
       setAiModelPickerVisible(false);
+      return;
+    }
+    if (!$("#ai-citation-popover").classList.contains("hidden")) {
+      closeAiCitationPopover({ restoreFocus: true });
       return;
     }
     if (!$("#chapter-search-panel").classList.contains("hidden")) {
@@ -20847,6 +20928,7 @@ $("#ai-context-meter").addEventListener("click", () => {
   setAiContextDistributionVisible($("#ai-context-popover").classList.contains("hidden"));
 });
 $("#ai-context-popover-close").addEventListener("click", () => setAiContextDistributionVisible(false));
+$("#ai-citation-popover-close").addEventListener("click", () => closeAiCitationPopover({ restoreFocus: true }));
 $("#ai-send").addEventListener("click", activateAiSendControl);
 $("#ai-conversation-switcher").addEventListener("click", () => {
   setAiConversationSwitcherVisible($("#ai-conversation-switcher-menu").classList.contains("hidden"));
@@ -21290,6 +21372,7 @@ window.addEventListener("online", () => {
 });
 window.addEventListener("offline", () => updateSystemHealth({ status: "offline" }));
 window.addEventListener("resize", () => {
+  if (aiCitationPopoverTrigger && !$("#ai-citation-popover").classList.contains("hidden")) positionAiCitationPopover(aiCitationPopoverTrigger);
   if ($("#reader-view").classList.contains("hidden") || readingPreferences.mode !== "paged") return;
   if (readingResizeFrame !== null) window.cancelAnimationFrame(readingResizeFrame);
   readingResizeFrame = window.requestAnimationFrame(() => {

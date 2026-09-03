@@ -3286,7 +3286,22 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-citation-remove { width: 30px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--muted); }
 .ai-citation-card pre { display: none; grid-column: 1 / -1; max-height: 160px; overflow: auto; margin: 0; padding: 9px; border-top: 1px solid var(--line); background: var(--surface); font: 10px/1.55 var(--font-cjk), sans-serif; white-space: pre-wrap; }
 .ai-citation-card.is-expanded pre { display: block; }
-.message-citations { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }.message-citations span { padding: 3px 6px; border: 1px solid currentColor; border-radius: 10px; font-size: 8px; opacity: .75; }
+.message-citations { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.message-citations .message-citation { display: inline-flex; align-items: center; min-height: 0; padding: 3px 6px; border: 1px solid currentColor; border-radius: 10px; background: transparent; color: inherit; font: inherit; font-size: 8px; line-height: 1.35; opacity: .75; cursor: pointer; }
+.message-citations .message-citation:hover, .message-citations .message-citation:focus-visible { background: color-mix(in srgb, currentColor 12%, transparent); opacity: 1; outline: 0; }
+.message-citations .message-citation:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 28%, transparent); }
+.ai-citation-popover { position: absolute; z-index: 43; display: grid; width: min(360px, calc(100% - 32px)); max-height: min(360px, calc(100% - 32px)); gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--ink); box-shadow: 0 14px 38px rgba(36, 30, 24, .22); }
+.ai-citation-popover.hidden { display: none; }
+.ai-citation-popover::after { position: absolute; left: calc(var(--ai-citation-arrow-offset, 50%) - 5px); width: 10px; height: 10px; background: var(--paper); content: ""; transform: rotate(45deg); }
+.ai-citation-popover[data-placement="bottom"]::after { top: -6px; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.ai-citation-popover[data-placement="top"]::after { bottom: -6px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.ai-citation-popover-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.ai-citation-popover-header > div { display: grid; gap: 3px; min-width: 0; }
+.ai-citation-popover-header strong { color: var(--ink); font-size: 12px; }
+.ai-citation-popover-header small { color: var(--muted); font: 9px/1.4 var(--font-latin), var(--font-cjk), sans-serif; }
+.ai-citation-popover-close { flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); font: 17px/1 var(--font-latin), sans-serif; }
+.ai-citation-popover-close:hover, .ai-citation-popover-close:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: 0; }
+.ai-citation-popover-quote { max-height: min(300px, 38vh); overflow: auto; margin: 0; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--surface); color: var(--ink); font: 11px/1.65 var(--font-cjk), sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; }
 .user-message-mentions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; margin-top: 8px; padding-top: 7px; border-top: 1px solid color-mix(in srgb, currentColor 28%, transparent); font-size: 8px; line-height: 1.4; }
 .user-message-scene { margin: 0 0 8px; padding: 0 0 7px; border-bottom: 1px solid color-mix(in srgb, currentColor 28%, transparent); font-size: 10px; line-height: 1.5; }
 .user-message-scene-label { display: block; margin-bottom: 3px; opacity: .72; letter-spacing: .08em; font-size: 8px; }
@@ -4619,7 +4634,10 @@ body { font-size: var(--ui-font-size); }
 .ai-context-popover-header small, .ai-context-distribution-label { font-size: calc(10px * var(--ai-font-scale)); }
 .ai-context-distribution-label small, .ai-context-distribution-label strong { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-citation-main strong { font-size: calc(10px * var(--ai-font-scale)); }
-.ai-citation-main small, .ai-citation-main span, .message-citations span, .user-message-mentions { font-size: calc(9px * var(--ai-font-scale)); }
+.ai-citation-main small, .ai-citation-main span, .message-citations .message-citation, .user-message-mentions { font-size: calc(9px * var(--ai-font-scale)); }
+.ai-citation-popover-header strong { font-size: calc(12px * var(--ai-font-scale)); }
+.ai-citation-popover-header small { font-size: calc(9px * var(--ai-font-scale)); }
+.ai-citation-popover-quote { font-size: calc(11px * var(--ai-font-scale)); }
 .ai-history-item strong { font-size: calc(14px * var(--ai-font-scale)); }
 .ai-history-item small { font-size: calc(10px * var(--ai-font-scale)); }
 .ai-tool-call-info dt, .ai-tool-call-detail h3 { font-size: calc(9px * var(--ai-font-scale)); }
