@@ -48,7 +48,7 @@ import {
   renderWritePlanDetailMarkup,
   isInteractiveToolPending,
   aiFormatDateTime
-} from "/ai-interactive.js?v=20260829-question-tool-result-v5";
+} from "/ai-interactive.js?v=20260903-question-batch-v7";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
@@ -2942,7 +2942,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   recall_story: "回忆故事",
   recall_roleplay_memory: "回忆当前扮演线",
   remember_roleplay: "整理扮演记忆",
-  calculate_time: "计算日期"
+  calculate_time: "计算日期",
+  ask_user_question: "向作者提问"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -2960,7 +2961,8 @@ const AI_TOOL_DESCRIPTIONS = {
   recall_story: "查询自己姓名或别名出现过的正文段落，避免全知回忆。",
   recall_roleplay_memory: "查询当前所扮演角色在作品内唯一共享的非正史记忆库，不读取其他角色或作品正史。",
   remember_roleplay: "暂存本轮值得保持的扮演经历；最终角色回复成功保存后才提交。",
-  calculate_time: "计算两个 YYYY-MM-DD 日期之间的天数差。"
+  calculate_time: "计算两个 YYYY-MM-DD 日期之间的天数差。",
+  ask_user_question: "向作者批量提出单选问题；作者一次提交的全部选择会作为工具结果返回给 Agent。"
 };
 
 const aiFeedScrollFrames = new WeakMap();
@@ -3124,7 +3126,7 @@ function openAiToolCallDetail(toolCall) {
 
 function createAiToolCallButton(toolCall) {
   const name = String(toolCall?.name ?? "unknown");
-  if (name === "propose_write_plan" || name === "ask_user_question") {
+  if (name === "propose_write_plan") {
     const card = createInteractiveToolCard(toolCall, AI_TOOL_CARD_ACTIONS);
     if (card) return card;
   }
@@ -3149,6 +3151,8 @@ let currentPlanDialogFocusConfirm = false;
 let aiQuestionDialogQuestionId = null;
 let currentAiQuestionDialogView = null;
 let aiQuestionDialogBusy = false;
+let aiQuestionDialogIndex = 0;
+let aiQuestionDrafts = [];
 const aiQuestionContinuationTabIds = new Set();
 let autoOpenedQuestionIds = new Set();
 const aiApprovalCenterState = { status: "" };
@@ -3320,6 +3324,47 @@ async function fetchAiUserQuestion(questionId) {
   return question;
 }
 
+function aiQuestionItems(question) {
+  const items = Array.isArray(question?.questions) && question.questions.length > 0
+    ? question.questions
+    : [{
+        question: question?.question ?? "",
+        options: question?.options ?? [],
+        selectedOption: question?.selectedOption ?? null,
+        customAnswer: question?.customAnswer ?? "",
+        answerText: question?.answerText ?? "",
+        isCustomAnswer: question?.isCustomAnswer === true
+      }];
+  return items.map((item, index) => ({
+    ...item,
+    index,
+    question: String(item?.question ?? ""),
+    options: Array.isArray(item?.options) ? item.options : []
+  }));
+}
+
+function resetAiQuestionDialogState(question) {
+  const items = aiQuestionItems(question);
+  aiQuestionDialogIndex = 0;
+  aiQuestionDrafts = items.map((item) => ({
+    selectedOption: Number.isInteger(item.selectedOption) ? Number(item.selectedOption) : null,
+    customAnswer: String(item.customAnswer ?? "")
+  }));
+}
+
+function updateCurrentAiQuestionDraft() {
+  if (currentAiQuestionDialogView?.status !== "pending") return;
+  const draft = aiQuestionDrafts[aiQuestionDialogIndex];
+  if (!draft) return;
+  const checked = document.querySelector('input[name="ai-question-choice"]:checked');
+  draft.selectedOption = checked && checked.value !== "custom" ? Number(checked.value) : null;
+  draft.customAnswer = String($("#ai-question-custom-answer").value ?? "");
+}
+
+function aiQuestionDraftIsAnswered(draft) {
+  return Boolean(draft && (Number.isInteger(draft.selectedOption) || String(draft.customAnswer ?? "").trim()));
+}
+
 function syncAiQuestionOptionPresentation() {
   const checked = document.querySelector('input[name="ai-question-choice"]:checked');
   for (const label of document.querySelectorAll(".ai-question-option-item")) {
@@ -3340,8 +3385,23 @@ function renderAiUserQuestionOptions(question) {
   const host = $("#ai-question-options");
   const customInput = $("#ai-question-custom-answer");
   const isPending = question.status === "pending";
+  const items = aiQuestionItems(question);
+  aiQuestionDialogIndex = Math.min(Math.max(aiQuestionDialogIndex, 0), Math.max(0, items.length - 1));
+  const item = items[aiQuestionDialogIndex] ?? items[0];
+  const draft = isPending
+    ? (aiQuestionDrafts[aiQuestionDialogIndex] ?? { selectedOption: null, customAnswer: "" })
+    : { selectedOption: item?.selectedOption ?? null, customAnswer: item?.customAnswer ?? "" };
+  const answeredCount = isPending
+    ? aiQuestionDrafts.filter(aiQuestionDraftIsAnswered).length
+    : items.filter((entry) => entry.answerText).length;
+  const navigation = $("#ai-question-navigation");
+  navigation.classList.toggle("hidden", items.length <= 1);
+  $("#ai-question-progress").textContent = `问题 ${aiQuestionDialogIndex + 1} / ${items.length} · 已回答 ${answeredCount} / ${items.length}`;
+  $("#ai-question-previous").disabled = aiQuestionDialogIndex <= 0;
+  $("#ai-question-next").disabled = aiQuestionDialogIndex >= items.length - 1;
+  $("#ai-question-text").textContent = item?.question ?? "";
   host.replaceChildren();
-  for (const option of question.options ?? []) {
+  for (const option of item?.options ?? []) {
     const label = document.createElement("label");
     label.className = "ai-question-option-item";
     label.dataset.recommended = String(option.recommended === true);
@@ -3349,7 +3409,7 @@ function renderAiUserQuestionOptions(question) {
     input.type = "radio";
     input.name = "ai-question-choice";
     input.value = String(option.index);
-    input.checked = question.selectedOption === option.index;
+    input.checked = draft.selectedOption === option.index;
     input.disabled = !isPending;
     const span = document.createElement("span");
     span.textContent = `${option.recommended ? "（最推荐）" : ""}${option.label}`;
@@ -3362,29 +3422,30 @@ function renderAiUserQuestionOptions(question) {
   customRadio.type = "radio";
   customRadio.name = "ai-question-choice";
   customRadio.value = "custom";
-  customRadio.checked = question.selectedOption == null && question.isCustomAnswer === true;
+  customRadio.checked = draft.selectedOption == null && Boolean(String(draft.customAnswer ?? "").trim());
   customRadio.disabled = !isPending;
   const customText = document.createElement("span");
   customText.textContent = "自定义回答";
   customLabel.append(customRadio, customText);
   host.append(customLabel);
-  customInput.value = question.customAnswer ?? (question.selectedOption == null && question.isCustomAnswer ? (question.answerText ?? "") : "");
+  customInput.value = draft.customAnswer ?? "";
   customInput.disabled = !isPending;
   syncAiQuestionAnswerCount();
   syncAiQuestionOptionPresentation();
   // 提交按钮由选择状态驱动：待回答且已选择（或输入）时才可提交。
   if (isPending) syncAiQuestionSubmitState();
   else $("#ai-question-submit").disabled = true;
+  $("#ai-question-submit").textContent = items.length > 1 ? "提交全部回答" : "提交回答";
   $("#ai-question-skip").disabled = !isPending;
   $("#ai-question-expiry").textContent = isPending
-    ? `请选择一个预设选项，或填写自定义回答后提交。有效期至 ${aiFormatDateTime(question.expiresAt)}；过期未回答将自动失效，AI 不允许在未获得回答时自行假定答案。`
-    : `该问题当前状态：${question.statusLabel}${question.answerText ? ` · 回答：${question.answerText}` : ""}`;
+    ? `请回答全部 ${items.length} 个问题后一次提交。有效期至 ${aiFormatDateTime(question.expiresAt)}；过期未回答将自动失效，AI 不允许在未获得回答时自行假定答案。`
+    : `该提问批次当前状态：${question.statusLabel}${item?.answerText ? ` · 当前回答：${item.answerText}` : ""}`;
 }
 
 async function refreshAiQuestionDialog() {
   const question = await fetchAiUserQuestion(aiQuestionDialogQuestionId);
   currentAiQuestionDialogView = question;
-  $("#ai-question-text").textContent = question.question;
+  resetAiQuestionDialogState(question);
   renderAiUserQuestionOptions(question);
   return question;
 }
@@ -3396,6 +3457,8 @@ async function openAiUserQuestionDialog(questionId) {
   $("#ai-question-text").textContent = "";
   $("#ai-question-options").replaceChildren();
   $("#ai-question-custom-answer").value = "";
+  $("#ai-question-navigation").classList.add("hidden");
+  $("#ai-question-progress").textContent = "正在加载问题";
   syncAiQuestionAnswerCount();
   $("#ai-question-expiry").textContent = "正在加载问题……";
   try {
@@ -3406,51 +3469,19 @@ async function openAiUserQuestionDialog(questionId) {
   }
 }
 
-function beginAiQuestionContinuationUi(conversationId, questionId) {
+function beginAiQuestionContinuationUi(conversationId) {
   const tab = conversationId ? aiChatTabManager.findByConversation(conversationId) : null;
   if (!tab) return null;
-  const card = questionId
-    ? tab.feed.querySelector(`.ai-question-card[data-question-id="${CSS.escape(String(questionId))}"]`)
-    : null;
-  const note = card?.querySelector(".ai-interactive-note") ?? null;
-  const status = card?.querySelector(".ai-status-chip") ?? null;
-  const previousNote = note?.textContent ?? "";
-  const previousStatus = status?.textContent ?? "";
-  const controlStates = card
-    ? [...card.querySelectorAll("button")].map((button) => ({ button, disabled: button.disabled }))
-    : [];
-  if (card) {
-    card.classList.add("is-resuming");
-    card.setAttribute("aria-busy", "true");
-    controlStates.forEach(({ button }) => { button.disabled = true; });
-    if (status) status.textContent = "处理中";
-    if (note) note.textContent = "回答已作为工具结果提交，正在根据你的回答继续处理…";
-  }
   aiQuestionContinuationTabIds.add(tab.id);
   setAiChatTabStatus(tab, "streaming");
   if (isActiveAiChatTab(tab)) syncAiRequestControls();
   scrollAiFeedToBottom(tab.feed);
-  return {
-    tab,
-    card,
-    note,
-    status,
-    previousNote,
-    previousStatus,
-    controlStates
-  };
+  return { tab };
 }
 
 function finishAiQuestionContinuationUi(continuationUi, failed = false) {
   if (!continuationUi) return;
   aiQuestionContinuationTabIds.delete(continuationUi.tab.id);
-  if (continuationUi.card?.isConnected) {
-    continuationUi.card.classList.remove("is-resuming");
-    continuationUi.card.removeAttribute("aria-busy");
-    continuationUi.controlStates.forEach(({ button, disabled }) => { button.disabled = disabled; });
-    if (continuationUi.note) continuationUi.note.textContent = continuationUi.previousNote;
-    if (continuationUi.status) continuationUi.status.textContent = continuationUi.previousStatus;
-  }
   if (aiChatTabManager.get(continuationUi.tab.id)) setAiChatTabStatus(continuationUi.tab, failed ? "error" : "ready");
   if (isActiveAiChatTab(continuationUi.tab)) syncAiRequestControls();
 }
@@ -3483,26 +3514,21 @@ async function respondAiUserQuestion(questionId, payload) {
     const conversationId = typeof knownQuestion?.conversationId === "string" ? knownQuestion.conversationId : null;
     if (questionDialog.open) questionDialog.close();
     if (approvalCenterDialog.open) approvalCenterDialog.close();
-    continuationUi = beginAiQuestionContinuationUi(conversationId, questionId);
+    continuationUi = beginAiQuestionContinuationUi(conversationId);
     let question;
     if (payload.action === "reject") {
       question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/reject`), { method: "POST" });
-    } else if (payload.action === "custom") {
-      question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/answer`), { method: "POST", body: { customAnswer: payload.customAnswer } });
     } else {
       question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/answer`), {
         method: "POST",
-        body: {
-          selectedOption: payload.selectedOption,
-          ...(payload.customAnswer ? { customAnswer: payload.customAnswer } : {})
-        }
+        body: { answers: payload.answers }
       });
     }
     cacheAiQuestionView(question);
     currentAiQuestionDialogView = question;
     aiQuestionDialogQuestionId = String(question.id);
     await reloadAiQuestionConversation(question.conversationId ?? conversationId);
-    toast(payload.action === "reject" ? "已跳过该问题，AI 已继续处理" : "回答已提交，AI 已继续处理");
+    toast(payload.action === "reject" ? "已跳过该提问批次，AI 已继续处理" : "全部回答已提交，AI 已继续处理");
     return question;
   } catch (error) {
     continuationFailed = true;
@@ -21059,14 +21085,17 @@ $("#ai-write-plan-undo").addEventListener("click", () => {
 $("#ai-question-close").addEventListener("click", () => $("#ai-question-dialog").close());
 
 function syncAiQuestionSubmitState() {
-  const checked = document.querySelector('input[name="ai-question-choice"]:checked');
-  const customInput = $("#ai-question-custom-answer");
   const submit = $("#ai-question-submit");
-  const disabled = !checked
-    || checked.disabled
-    || (checked.value === "custom" && !String(customInput.value).trim());
+  const questionCount = aiQuestionItems(currentAiQuestionDialogView).length;
+  const answeredCount = aiQuestionDrafts.filter(aiQuestionDraftIsAnswered).length;
+  const unansweredCount = Math.max(0, questionCount - answeredCount);
+  $("#ai-question-progress").textContent = `问题 ${aiQuestionDialogIndex + 1} / ${questionCount} · 已回答 ${answeredCount} / ${questionCount}`;
+  const disabled = aiQuestionDialogBusy
+    || currentAiQuestionDialogView?.status !== "pending"
+    || aiQuestionDrafts.length !== questionCount
+    || unansweredCount > 0;
   submit.disabled = disabled;
-  submit.title = disabled ? "请选择一个预设选项，或填写自定义回答后提交" : "";
+  submit.title = unansweredCount > 0 ? `还有 ${unansweredCount} 个问题未回答` : "";
 }
 $("#ai-question-form").addEventListener("change", (event) => {
   const control = event.target;
@@ -21074,6 +21103,7 @@ $("#ai-question-form").addEventListener("change", (event) => {
   const isCustom = control.value === "custom";
   const customInput = $("#ai-question-custom-answer");
   if (isCustom && !control.disabled) customInput.focus();
+  updateCurrentAiQuestionDraft();
   syncAiQuestionOptionPresentation();
   syncAiQuestionSubmitState();
 });
@@ -21085,23 +21115,30 @@ $("#ai-question-custom-answer").addEventListener("input", () => {
     const customRadio = document.querySelector('input[name="ai-question-choice"][value="custom"]');
     if (customRadio && !customRadio.disabled) customRadio.checked = true;
   }
+  updateCurrentAiQuestionDraft();
   syncAiQuestionOptionPresentation();
   syncAiQuestionSubmitState();
 });
+function moveAiQuestionDialog(direction) {
+  if (!currentAiQuestionDialogView) return;
+  updateCurrentAiQuestionDraft();
+  const maximumIndex = Math.max(0, aiQuestionItems(currentAiQuestionDialogView).length - 1);
+  aiQuestionDialogIndex = Math.min(maximumIndex, Math.max(0, aiQuestionDialogIndex + direction));
+  renderAiUserQuestionOptions(currentAiQuestionDialogView);
+  $("#ai-question-text").focus();
+}
+$("#ai-question-previous").addEventListener("click", () => moveAiQuestionDialog(-1));
+$("#ai-question-next").addEventListener("click", () => moveAiQuestionDialog(1));
 $("#ai-question-submit").addEventListener("click", () => {
-  const checked = document.querySelector('input[name="ai-question-choice"]:checked');
-  if (!checked || aiQuestionDialogQuestionId == null) return;
-  if (checked.value === "custom") {
-    const text = String($("#ai-question-custom-answer").value).trim();
-    if (!text) return;
-    respondAiUserQuestion(aiQuestionDialogQuestionId, { action: "custom", customAnswer: text }).catch((error) => toast(error.message, "error"));
-    return;
-  }
-  const supplementalAnswer = String($("#ai-question-custom-answer").value).trim();
+  if (aiQuestionDialogQuestionId == null) return;
+  updateCurrentAiQuestionDraft();
+  if (!aiQuestionDrafts.every(aiQuestionDraftIsAnswered)) return syncAiQuestionSubmitState();
   respondAiUserQuestion(aiQuestionDialogQuestionId, {
-    action: "option",
-    selectedOption: Number(checked.value),
-    ...(supplementalAnswer ? { customAnswer: supplementalAnswer } : {})
+    action: "answer",
+    answers: aiQuestionDrafts.map((draft) => ({
+      ...(Number.isInteger(draft.selectedOption) ? { selectedOption: draft.selectedOption } : {}),
+      ...(String(draft.customAnswer ?? "").trim() ? { customAnswer: String(draft.customAnswer).trim() } : {})
+    }))
   }).catch((error) => toast(error.message, "error"));
 });
 $("#ai-question-skip").addEventListener("click", () => {

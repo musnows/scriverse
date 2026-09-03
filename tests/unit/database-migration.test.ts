@@ -338,6 +338,38 @@ describe("数据库版本化迁移", () => {
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 134")).toEqual({ count: 1 });
     migrated.close();
   });
+  it("迁移 135 为 AI 提问增加批量问题与回答字段", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-question-batch-"));
+    roots.push(root);
+    const filename = join(root, "question-batch.db");
+    const current = new Database(filename);
+    const store = new Store(current);
+    const work = store.createWork({ title: "旧提问迁移作品" });
+    current.run(
+      `INSERT INTO ai_user_questions (
+         id, work_id, question, options_json, status, selected_option, answer_text,
+         is_custom_answer, created_at, expires_at
+       ) VALUES ('legacy-question', ?, '旧问题？', '["甲","乙"]', 'answered', 1, '乙', 0, ?, ?)`,
+      String(work.id),
+      "2026-09-01T00:00:00.000Z",
+      "2026-09-01T00:10:00.000Z"
+    );
+    current.run("ALTER TABLE ai_user_questions DROP COLUMN questions_json");
+    current.run("ALTER TABLE ai_user_questions DROP COLUMN answers_json");
+    current.run("DELETE FROM schema_migrations WHERE version = 135");
+    current.close();
+
+    const migrated = new Database(filename);
+    const columns = migrated.all<{ name: string }>("PRAGMA table_info(ai_user_questions)").map((column) => column.name);
+    expect(columns).toContain("questions_json");
+    expect(columns).toContain("answers_json");
+    expect(migrated.get("SELECT question, options_json, questions_json, answers_json FROM ai_user_questions WHERE id = 'legacy-question'"))
+      .toEqual({ question: "旧问题？", options_json: '["甲","乙"]', questions_json: "[]", answers_json: "[]" });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 135")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
 
   it("迁移 126 创建按作品级联清理的加密远程 MCP 配置表", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-remote-mcp-"));

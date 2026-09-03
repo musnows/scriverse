@@ -3857,6 +3857,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         answerText: String(continuation.answerText ?? ""),
         selectedOptionLabel: typeof continuation.selectedOptionLabel === "string" ? continuation.selectedOptionLabel : null,
         supplementalAnswer: typeof continuation.customAnswer === "string" ? continuation.customAnswer : "",
+        ...(Array.isArray(continuation.answers)
+          ? { answers: continuation.answers.filter((answer): answer is Record<string, unknown> => Boolean(answer) && typeof answer === "object" && !Array.isArray(answer)) }
+          : {}),
         ...(typeof continuation.modelId === "string" && continuation.modelId ? { modelId: continuation.modelId } : {}),
         ...(typeof continuation.toolCallId === "string" && continuation.toolCallId ? { toolCallId: continuation.toolCallId } : {}),
         ...(typeof continuation.assistantMessageRequestId === "string" && continuation.assistantMessageRequestId
@@ -3881,7 +3884,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       request.params.questionId,
       request.params.workId,
       viewer,
-      { ...(input.selectedOption !== undefined ? { selectedOption: input.selectedOption } : {}), ...(input.customAnswer !== undefined ? { customAnswer: input.customAnswer } : {}) }
+      input
     );
     await resumeQuestionWorkflow(request.params.questionId, request.params.workId, viewer);
     data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, viewer));
