@@ -1480,8 +1480,9 @@ describe("IM AI 调度", () => {
     const secondChainId = String((second.chain as Record<string, unknown>).id);
     runtime.database.run(
       "UPDATE im_chains SET created_at = ?, updated_at = ? WHERE id IN (?, ?)",
-      "2026-09-03T00:00:00.000Z",
-      "2026-09-03T00:00:00.000Z",
+      // 使用远未来时间戳，避免真实时钟越过固定日期后链落在成员加入时间窗口之外
+      "2099-01-01T00:00:00.000Z",
+      "2099-01-01T00:00:00.000Z",
       firstChainId,
       secondChainId
     );
