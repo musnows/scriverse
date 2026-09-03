@@ -379,7 +379,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('后端部署时区（${esc(quotaTimezone)}）');
     expect(application.text).toContain('body: { dailyTokenQuota: enabled ? quota : null }');
     expect(application.text).toContain('body: { monthlyTokenQuota: enabled ? quota : null }');
-    expect(application.text).toContain('/page-route.js?v=20260812-reader-preview-v1');
+    expect(application.text).toContain('/page-route.js?v=20260812-reader-preview-v1&feature=global-im-return-v1');
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain("formatEstimatedCost");
     expect(application.text).toContain("估价");
@@ -1002,7 +1002,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small>');
     expect(application.text).toContain('Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")');
     expect(application.text).toContain('Number(work.wordCount ?? 0).toLocaleString("zh-CN")');
-    expect(application.text).toContain('<span>${Number(volume.chapterCount ?? chapters.length)} 章</span>');
+    expect(application.text).toContain('<span class="volume-chapter-count"><span class="volume-chapter-count-number">${Number(volume.chapterCount ?? chapters.length)}</span><span class="volume-chapter-count-unit"> 章</span></span>');
     expect(application.text).toContain("function renderKnowledgeMarkdownSections()");
     expect(application.text).toContain("data-knowledge-section-create");
     expect(application.text).toContain("function openKnowledgeSectionEditor");

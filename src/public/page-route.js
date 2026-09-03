@@ -14,7 +14,7 @@ export const RESTORABLE_MODULES = Object.freeze([
 ]);
 
 const moduleSet = new Set(RESTORABLE_MODULES);
-const returnViewSet = new Set(["shelf", "editor", "module", "welcome"]);
+const returnViewSet = new Set(["shelf", "im", "editor", "module", "welcome"]);
 const entityEditorSet = new Set(["setting", "character", "race", "organization"]);
 
 function value(params, key) {
@@ -36,6 +36,8 @@ export function serializePageRoute(route = {}) {
 
   if (view === "login") {
     params.set("view", "login");
+  } else if (view === "im") {
+    params.set("view", "im");
   } else if (view === "editor" && workId) {
     params.set("view", "editor");
     params.set("work", workId);
@@ -74,6 +76,7 @@ export function parsePageRoute(hash = "") {
   const workId = value(params, "work");
 
   if (view === "login") return { view: "login" };
+  if (view === "im") return { view: "im" };
 
   if (view === "editor" && workId) {
     const chapterId = value(params, "chapter");

@@ -59,6 +59,13 @@ describe("页面刷新路由", () => {
     expect(parsePageRoute("#view=login")).toEqual({ view: "login" });
   });
 
+  it("往返保存全局 IM 工作区路由", () => {
+    expect(serializePageRoute({ view: "im" })).toBe("#view=im");
+    expect(parsePageRoute("#view=im")).toEqual({ view: "im" });
+    const settingsHash = serializePageRoute({ view: "settings", workId: "work-1", returnView: "im" });
+    expect(parsePageRoute(settingsHash)).toEqual({ view: "settings", workId: "work-1", returnView: "im" });
+  });
+
   it("往返保存设定、角色、种族和组织全屏编辑页", () => {
     const settingHash = serializePageRoute({ view: "entity-editor", workId: "work-1", entity: "setting", entityId: "setting-2", entityMode: "read" });
     expect(parsePageRoute(settingHash)).toEqual({ view: "entity-editor", workId: "work-1", entity: "setting", entityId: "setting-2", entityMode: "read" });

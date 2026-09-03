@@ -143,10 +143,17 @@ describe("AI 可写交互工具（propose_write_plan / ask_user_question）", ()
     // 计划已经持久化，等待审批中心确认。
     expect(manager.getPlanDetail(planRef.id, workId, null).status).toBe("pending");
 
-    const question = await callTool("ask_user_question", { question: "分析用哪个视角？", options: ["全局", "单章"] }, conversationId);
+    const question = await callTool("ask_user_question", { questions: [
+      { question: "分析用哪个视角？", options: ["全局", "单章"] },
+      { question: "结果按什么顺序？", options: ["剧情顺序", "目录顺序"] }
+    ] }, conversationId);
     expect(question.status).toBe("completed");
-    expect((question.result.question as { status: string }).status).toBe("pending");
-    expect(manager.latestPendingQuestion(conversationId)?.question).toBe("分析用哪个视角？");
+    expect(question.result.question).toMatchObject({ status: "pending", questionCount: 2 });
+    expect(manager.latestPendingQuestion(conversationId)).toMatchObject({
+      question: "分析用哪个视角？",
+      questionCount: 2,
+      questions: [{ question: "分析用哪个视角？" }, { question: "结果按什么顺序？" }]
+    });
   });
 
   it("一次计划可以提交多个由系统生成 ID 的新建设定", async () => {

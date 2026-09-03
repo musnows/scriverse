@@ -1,0 +1,71 @@
+export function serializeImComposer(root: HTMLElement): string;
+
+export function normalizeImComposerHeight(value: number, maximumHeight: number, minimumHeight?: number): number;
+
+export function normalizeImConversationWidth(value: number, maximumWidth: number, minimumWidth?: number, defaultWidth?: number): number;
+
+export function resolveImConversationWidth(preferredWidth: number, viewportWidth: number, maximumWidth: number): number;
+
+export function normalizeImDetailsWidth(value: number, maximumWidth: number, minimumWidth?: number, defaultWidth?: number): number;
+
+export function shouldMarkImConversationRead(opened: boolean, visibilityState: string): boolean;
+
+export function shouldRefreshImConversationListForEvent(type: string): boolean;
+
+export function matchImProvisionalReplyTurn(
+  replies: Array<Record<string, unknown>>,
+  message: Record<string, unknown>
+): string | null;
+
+export function sameImGroupSettings(left: Record<string, unknown>, right: Record<string, unknown>): boolean;
+
+export function imDiagnosticStatusLabel(turn: Record<string, unknown>): string;
+
+export function isImRealtimeChainCurrent(activeChain: Record<string, unknown> | null, payload: Record<string, unknown>): boolean;
+
+export function imConversationAccessibleLabel(title: string, subtitle: string, unreadCount?: number, mentionUnreadCount?: number): string;
+
+export function findImMentionQuery(text: string, caretOffset?: number): {
+  query: string;
+  startOffset: number;
+  endOffset: number;
+} | null;
+
+export function shouldFollowImFeed(scrollHeight: number, scrollTop: number, clientHeight: number, force?: boolean): boolean;
+
+export function mergeImMessagePages(
+  previousMessages: Array<Record<string, unknown>>,
+  ...nextPages: Array<Array<Record<string, unknown>>>
+): Array<Record<string, unknown>>;
+
+export function mergeImFailedReplyPages(
+  ...pages: Array<Array<Record<string, unknown>>>
+): Array<Record<string, unknown>>;
+
+export function imMessageSequenceBounds(messages: Array<Record<string, unknown>>): {
+  minimum: number;
+  maximum: number;
+} | null;
+
+export function hasImMessageSequenceGap(
+  previousMessages: Array<Record<string, unknown>>,
+  nextMessages: Array<Record<string, unknown>>
+): boolean;
+
+export function collectImMessageGap(
+  previousMessages: Array<Record<string, unknown>>,
+  nextMessages: Array<Record<string, unknown>>,
+  loadPage: (afterSequence: number) => Promise<{
+    messages: Array<Record<string, unknown>>;
+    hasMoreMessagesAfter?: boolean;
+  }>
+): Promise<Array<Record<string, unknown>>>;
+
+export function createImWorkspace(options: Record<string, unknown>): {
+  start(): void;
+  activate(): Promise<void>;
+  open(): Promise<boolean>;
+  close(): void;
+  refreshUnread(): Promise<void>;
+  readonly opened: boolean;
+};

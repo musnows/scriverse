@@ -1,6 +1,7 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1";
 import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260830-adjacent-blockquotes-v1";
+import { createImWorkspace } from "/im.js?v=20260903-global-im-v103";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { applyAiSkillCommand, findAiSkillCommand, listAiSkillOptions } from "/ai-skill-menu.js?v=20260830-ai-skill-slash-menu-v1";
 import {
@@ -47,7 +48,7 @@ import {
   renderWritePlanDetailMarkup,
   isInteractiveToolPending,
   aiFormatDateTime
-} from "/ai-interactive.js?v=20260829-question-tool-result-v5";
+} from "/ai-interactive.js?v=20260903-question-batch-v7";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
@@ -79,7 +80,7 @@ import {
   characterGenderLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260816-character-gender-v1&feature=global-replace-volume-v1&feature=ai-provider-responses-v1";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1&feature=global-im-return-v1";
 import {
   READING_PREFERENCES_STORAGE_KEY,
   READING_PREFERENCES_VERSION,
@@ -305,6 +306,7 @@ let relationshipSearchIndexRefreshTimer = null;
 let semanticSearchIndexRefreshTimer = null;
 let aiSemanticSearchResults = [];
 let aiSemanticSearchQuery = "";
+let aiCitationPopoverTrigger = null;
 let backgroundTaskCenterTimer = null;
 let backgroundTaskCenterRequest = 0;
 let backgroundTaskCenterWorkId = null;
@@ -1031,7 +1033,7 @@ function replacePageRoute(route) {
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
-  if (!state.work || route.view === "shelf" || route.view === "platform-ai" || route.view === "platform-usage") return null;
+  if (!state.work || route.view === "shelf" || route.view === "im" || route.view === "platform-ai" || route.view === "platform-usage") return null;
   if (route.view === "reader") return { kind: "welcome" };
   if (relationshipPresenceId) return { kind: "entity-editor", module: "relationship", resourceId: relationshipPresenceId };
   if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
@@ -1226,6 +1228,7 @@ async function confirmConcurrentSave() {
 
 function currentPageRoute() {
   const workId = state.work?.id ?? null;
+  if (!$("#im-view").classList.contains("hidden")) return { view: "im" };
   if (!$("#reader-view").classList.contains("hidden") && workId) {
     return { view: "reader", workId, chapterId: readingTargetChapter?.id ?? null };
   }
@@ -2071,6 +2074,66 @@ function selectChapterLines(start, end) {
   return selection;
 }
 
+function aiCitationLineLabel(citation) {
+  return citation.startLine === citation.endLine ? `第 ${citation.startLine} 行` : `第 ${citation.startLine}-${citation.endLine} 行`;
+}
+
+function aiCitationTagLabel(citation) {
+  return `${citation.chapterTitle} · L${citation.startLine}${citation.endLine === citation.startLine ? "" : `-L${citation.endLine}`}`;
+}
+
+function positionAiCitationPopover(trigger) {
+  const panel = $("#ai-panel");
+  const popover = $("#ai-citation-popover");
+  if (!panel || !popover || !trigger?.isConnected || popover.classList.contains("hidden")) return;
+  const panelRect = panel.getBoundingClientRect();
+  const triggerRect = trigger.getBoundingClientRect();
+  const gutter = 16;
+  const maxLeft = Math.max(gutter, panelRect.width - popover.offsetWidth - gutter);
+  const anchorCenter = triggerRect.left + triggerRect.width / 2 - panelRect.left;
+  const left = Math.min(maxLeft, Math.max(gutter, anchorCenter - popover.offsetWidth / 2));
+  const below = triggerRect.bottom - panelRect.top + 8;
+  const above = triggerRect.top - panelRect.top - popover.offsetHeight - 8;
+  const maxTop = Math.max(gutter, panelRect.height - popover.offsetHeight - gutter);
+  const fitsBelow = below <= maxTop;
+  const top = fitsBelow ? below : Math.max(gutter, Math.min(above, maxTop));
+  const arrowOffset = Math.max(12, Math.min(popover.offsetWidth - 12, anchorCenter - left));
+  popover.dataset.placement = fitsBelow ? "bottom" : "top";
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+  popover.style.setProperty("--ai-citation-arrow-offset", `${arrowOffset}px`);
+}
+
+function closeAiCitationPopover({ restoreFocus = false } = {}) {
+  const popover = $("#ai-citation-popover");
+  if (!popover) return;
+  const trigger = aiCitationPopoverTrigger;
+  aiCitationPopoverTrigger = null;
+  popover.classList.add("hidden");
+  popover.setAttribute("aria-hidden", "true");
+  popover.removeAttribute("data-placement");
+  popover.style.removeProperty("left");
+  popover.style.removeProperty("top");
+  popover.style.removeProperty("--ai-citation-arrow-offset");
+  trigger?.setAttribute("aria-expanded", "false");
+  if (restoreFocus && trigger?.isConnected) trigger.focus({ preventScroll: true });
+}
+
+function openAiCitationPopover(citation, trigger) {
+  const popover = $("#ai-citation-popover");
+  if (!popover || !trigger) return;
+  closeAiCitationPopover();
+  $("#ai-citation-popover-title").textContent = String(citation.chapterTitle ?? "正文引用");
+  $("#ai-citation-popover-description").textContent = aiCitationLineLabel(citation);
+  $("#ai-citation-popover-quote").textContent = citation.text || "（空白行）";
+  aiCitationPopoverTrigger = trigger;
+  trigger.setAttribute("aria-expanded", "true");
+  popover.classList.remove("hidden");
+  popover.setAttribute("aria-hidden", "false");
+  positionAiCitationPopover(trigger);
+  $("#ai-citation-popover-close").focus({ preventScroll: true });
+}
+
 function renderAiCitations() {
   const host = $("#ai-citations");
   host.replaceChildren();
@@ -2084,7 +2147,7 @@ function renderAiCitations() {
     const source = document.createElement("strong");
     source.textContent = citation.chapterTitle;
     const range = document.createElement("small");
-    range.textContent = citation.startLine === citation.endLine ? `第 ${citation.startLine} 行` : `第 ${citation.startLine}-${citation.endLine} 行`;
+    range.textContent = aiCitationLineLabel(citation);
     const excerpt = document.createElement("span");
     excerpt.textContent = citation.text.replace(/\s+/gu, " ").trim() || "空白行";
     main.append(source, range, excerpt);
@@ -2092,7 +2155,7 @@ function renderAiCitations() {
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "ai-citation-remove";
-    remove.setAttribute("aria-label", `移除 ${citation.chapterTitle} 第 ${citation.startLine}-${citation.endLine} 行引用`);
+    remove.setAttribute("aria-label", `移除 ${citation.chapterTitle} ${aiCitationLineLabel(citation)}引用`);
     remove.textContent = "×";
     remove.addEventListener("click", () => {
       state.aiCitations = state.aiCitations.filter((item) => item.id !== citation.id);
@@ -2610,6 +2673,7 @@ function renderAiChatTabs() {
 function activateAiChatTab(tabId, { persistCurrent = true, force = false } = {}) {
   const current = activeAiChatTab();
   if (!force && current?.id === tabId) return current;
+  closeAiCitationPopover();
   if (persistCurrent) persistActiveAiChatTab();
   const tab = aiChatTabManager.activate(tabId);
   if (!tab) return null;
@@ -2700,6 +2764,7 @@ function resetAiFeed(
   roleplayCharacter = state.aiRoleplayCharacter,
   roleplayUserCharacter = state.aiRoleplayUserCharacter
 ) {
+  closeAiCitationPopover();
   const tab = aiChatTabManager.get(feed?.dataset.aiTabId);
   if (tab) tab.lastMessageAt = null;
   if (isActiveAiChatTab(tab)) state.aiLastMessageAt = null;
@@ -2940,7 +3005,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   recall_story: "回忆故事",
   recall_roleplay_memory: "回忆当前扮演线",
   remember_roleplay: "整理扮演记忆",
-  calculate_time: "计算日期"
+  calculate_time: "计算日期",
+  ask_user_question: "向作者提问"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -2958,7 +3024,8 @@ const AI_TOOL_DESCRIPTIONS = {
   recall_story: "查询自己姓名或别名出现过的正文段落，避免全知回忆。",
   recall_roleplay_memory: "查询当前所扮演角色在作品内唯一共享的非正史记忆库，不读取其他角色或作品正史。",
   remember_roleplay: "暂存本轮值得保持的扮演经历；最终角色回复成功保存后才提交。",
-  calculate_time: "计算两个 YYYY-MM-DD 日期之间的天数差。"
+  calculate_time: "计算两个 YYYY-MM-DD 日期之间的天数差。",
+  ask_user_question: "向作者批量提出单选问题；作者一次提交的全部选择会作为工具结果返回给 Agent。"
 };
 
 const aiFeedScrollFrames = new WeakMap();
@@ -3122,7 +3189,7 @@ function openAiToolCallDetail(toolCall) {
 
 function createAiToolCallButton(toolCall) {
   const name = String(toolCall?.name ?? "unknown");
-  if (name === "propose_write_plan" || name === "ask_user_question") {
+  if (name === "propose_write_plan") {
     const card = createInteractiveToolCard(toolCall, AI_TOOL_CARD_ACTIONS);
     if (card) return card;
   }
@@ -3147,6 +3214,8 @@ let currentPlanDialogFocusConfirm = false;
 let aiQuestionDialogQuestionId = null;
 let currentAiQuestionDialogView = null;
 let aiQuestionDialogBusy = false;
+let aiQuestionDialogIndex = 0;
+let aiQuestionDrafts = [];
 const aiQuestionContinuationTabIds = new Set();
 let autoOpenedQuestionIds = new Set();
 const aiApprovalCenterState = { status: "" };
@@ -3318,6 +3387,47 @@ async function fetchAiUserQuestion(questionId) {
   return question;
 }
 
+function aiQuestionItems(question) {
+  const items = Array.isArray(question?.questions) && question.questions.length > 0
+    ? question.questions
+    : [{
+        question: question?.question ?? "",
+        options: question?.options ?? [],
+        selectedOption: question?.selectedOption ?? null,
+        customAnswer: question?.customAnswer ?? "",
+        answerText: question?.answerText ?? "",
+        isCustomAnswer: question?.isCustomAnswer === true
+      }];
+  return items.map((item, index) => ({
+    ...item,
+    index,
+    question: String(item?.question ?? ""),
+    options: Array.isArray(item?.options) ? item.options : []
+  }));
+}
+
+function resetAiQuestionDialogState(question) {
+  const items = aiQuestionItems(question);
+  aiQuestionDialogIndex = 0;
+  aiQuestionDrafts = items.map((item) => ({
+    selectedOption: Number.isInteger(item.selectedOption) ? Number(item.selectedOption) : null,
+    customAnswer: String(item.customAnswer ?? "")
+  }));
+}
+
+function updateCurrentAiQuestionDraft() {
+  if (currentAiQuestionDialogView?.status !== "pending") return;
+  const draft = aiQuestionDrafts[aiQuestionDialogIndex];
+  if (!draft) return;
+  const checked = document.querySelector('input[name="ai-question-choice"]:checked');
+  draft.selectedOption = checked && checked.value !== "custom" ? Number(checked.value) : null;
+  draft.customAnswer = String($("#ai-question-custom-answer").value ?? "");
+}
+
+function aiQuestionDraftIsAnswered(draft) {
+  return Boolean(draft && (Number.isInteger(draft.selectedOption) || String(draft.customAnswer ?? "").trim()));
+}
+
 function syncAiQuestionOptionPresentation() {
   const checked = document.querySelector('input[name="ai-question-choice"]:checked');
   for (const label of document.querySelectorAll(".ai-question-option-item")) {
@@ -3338,8 +3448,23 @@ function renderAiUserQuestionOptions(question) {
   const host = $("#ai-question-options");
   const customInput = $("#ai-question-custom-answer");
   const isPending = question.status === "pending";
+  const items = aiQuestionItems(question);
+  aiQuestionDialogIndex = Math.min(Math.max(aiQuestionDialogIndex, 0), Math.max(0, items.length - 1));
+  const item = items[aiQuestionDialogIndex] ?? items[0];
+  const draft = isPending
+    ? (aiQuestionDrafts[aiQuestionDialogIndex] ?? { selectedOption: null, customAnswer: "" })
+    : { selectedOption: item?.selectedOption ?? null, customAnswer: item?.customAnswer ?? "" };
+  const answeredCount = isPending
+    ? aiQuestionDrafts.filter(aiQuestionDraftIsAnswered).length
+    : items.filter((entry) => entry.answerText).length;
+  const navigation = $("#ai-question-navigation");
+  navigation.classList.toggle("hidden", items.length <= 1);
+  $("#ai-question-progress").textContent = `问题 ${aiQuestionDialogIndex + 1} / ${items.length} · 已回答 ${answeredCount} / ${items.length}`;
+  $("#ai-question-previous").disabled = aiQuestionDialogIndex <= 0;
+  $("#ai-question-next").disabled = aiQuestionDialogIndex >= items.length - 1;
+  $("#ai-question-text").textContent = item?.question ?? "";
   host.replaceChildren();
-  for (const option of question.options ?? []) {
+  for (const option of item?.options ?? []) {
     const label = document.createElement("label");
     label.className = "ai-question-option-item";
     label.dataset.recommended = String(option.recommended === true);
@@ -3347,7 +3472,7 @@ function renderAiUserQuestionOptions(question) {
     input.type = "radio";
     input.name = "ai-question-choice";
     input.value = String(option.index);
-    input.checked = question.selectedOption === option.index;
+    input.checked = draft.selectedOption === option.index;
     input.disabled = !isPending;
     const span = document.createElement("span");
     span.textContent = `${option.recommended ? "（最推荐）" : ""}${option.label}`;
@@ -3360,29 +3485,30 @@ function renderAiUserQuestionOptions(question) {
   customRadio.type = "radio";
   customRadio.name = "ai-question-choice";
   customRadio.value = "custom";
-  customRadio.checked = question.selectedOption == null && question.isCustomAnswer === true;
+  customRadio.checked = draft.selectedOption == null && Boolean(String(draft.customAnswer ?? "").trim());
   customRadio.disabled = !isPending;
   const customText = document.createElement("span");
   customText.textContent = "自定义回答";
   customLabel.append(customRadio, customText);
   host.append(customLabel);
-  customInput.value = question.customAnswer ?? (question.selectedOption == null && question.isCustomAnswer ? (question.answerText ?? "") : "");
+  customInput.value = draft.customAnswer ?? "";
   customInput.disabled = !isPending;
   syncAiQuestionAnswerCount();
   syncAiQuestionOptionPresentation();
   // 提交按钮由选择状态驱动：待回答且已选择（或输入）时才可提交。
   if (isPending) syncAiQuestionSubmitState();
   else $("#ai-question-submit").disabled = true;
+  $("#ai-question-submit").textContent = items.length > 1 ? "提交全部回答" : "提交回答";
   $("#ai-question-skip").disabled = !isPending;
   $("#ai-question-expiry").textContent = isPending
-    ? `请选择一个预设选项，或填写自定义回答后提交。有效期至 ${aiFormatDateTime(question.expiresAt)}；过期未回答将自动失效，AI 不允许在未获得回答时自行假定答案。`
-    : `该问题当前状态：${question.statusLabel}${question.answerText ? ` · 回答：${question.answerText}` : ""}`;
+    ? `请回答全部 ${items.length} 个问题后一次提交。有效期至 ${aiFormatDateTime(question.expiresAt)}；过期未回答将自动失效，AI 不允许在未获得回答时自行假定答案。`
+    : `该提问批次当前状态：${question.statusLabel}${item?.answerText ? ` · 当前回答：${item.answerText}` : ""}`;
 }
 
 async function refreshAiQuestionDialog() {
   const question = await fetchAiUserQuestion(aiQuestionDialogQuestionId);
   currentAiQuestionDialogView = question;
-  $("#ai-question-text").textContent = question.question;
+  resetAiQuestionDialogState(question);
   renderAiUserQuestionOptions(question);
   return question;
 }
@@ -3394,6 +3520,8 @@ async function openAiUserQuestionDialog(questionId) {
   $("#ai-question-text").textContent = "";
   $("#ai-question-options").replaceChildren();
   $("#ai-question-custom-answer").value = "";
+  $("#ai-question-navigation").classList.add("hidden");
+  $("#ai-question-progress").textContent = "正在加载问题";
   syncAiQuestionAnswerCount();
   $("#ai-question-expiry").textContent = "正在加载问题……";
   try {
@@ -3404,51 +3532,19 @@ async function openAiUserQuestionDialog(questionId) {
   }
 }
 
-function beginAiQuestionContinuationUi(conversationId, questionId) {
+function beginAiQuestionContinuationUi(conversationId) {
   const tab = conversationId ? aiChatTabManager.findByConversation(conversationId) : null;
   if (!tab) return null;
-  const card = questionId
-    ? tab.feed.querySelector(`.ai-question-card[data-question-id="${CSS.escape(String(questionId))}"]`)
-    : null;
-  const note = card?.querySelector(".ai-interactive-note") ?? null;
-  const status = card?.querySelector(".ai-status-chip") ?? null;
-  const previousNote = note?.textContent ?? "";
-  const previousStatus = status?.textContent ?? "";
-  const controlStates = card
-    ? [...card.querySelectorAll("button")].map((button) => ({ button, disabled: button.disabled }))
-    : [];
-  if (card) {
-    card.classList.add("is-resuming");
-    card.setAttribute("aria-busy", "true");
-    controlStates.forEach(({ button }) => { button.disabled = true; });
-    if (status) status.textContent = "处理中";
-    if (note) note.textContent = "回答已作为工具结果提交，正在根据你的回答继续处理…";
-  }
   aiQuestionContinuationTabIds.add(tab.id);
   setAiChatTabStatus(tab, "streaming");
   if (isActiveAiChatTab(tab)) syncAiRequestControls();
   scrollAiFeedToBottom(tab.feed);
-  return {
-    tab,
-    card,
-    note,
-    status,
-    previousNote,
-    previousStatus,
-    controlStates
-  };
+  return { tab };
 }
 
 function finishAiQuestionContinuationUi(continuationUi, failed = false) {
   if (!continuationUi) return;
   aiQuestionContinuationTabIds.delete(continuationUi.tab.id);
-  if (continuationUi.card?.isConnected) {
-    continuationUi.card.classList.remove("is-resuming");
-    continuationUi.card.removeAttribute("aria-busy");
-    continuationUi.controlStates.forEach(({ button, disabled }) => { button.disabled = disabled; });
-    if (continuationUi.note) continuationUi.note.textContent = continuationUi.previousNote;
-    if (continuationUi.status) continuationUi.status.textContent = continuationUi.previousStatus;
-  }
   if (aiChatTabManager.get(continuationUi.tab.id)) setAiChatTabStatus(continuationUi.tab, failed ? "error" : "ready");
   if (isActiveAiChatTab(continuationUi.tab)) syncAiRequestControls();
 }
@@ -3481,26 +3577,21 @@ async function respondAiUserQuestion(questionId, payload) {
     const conversationId = typeof knownQuestion?.conversationId === "string" ? knownQuestion.conversationId : null;
     if (questionDialog.open) questionDialog.close();
     if (approvalCenterDialog.open) approvalCenterDialog.close();
-    continuationUi = beginAiQuestionContinuationUi(conversationId, questionId);
+    continuationUi = beginAiQuestionContinuationUi(conversationId);
     let question;
     if (payload.action === "reject") {
       question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/reject`), { method: "POST" });
-    } else if (payload.action === "custom") {
-      question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/answer`), { method: "POST", body: { customAnswer: payload.customAnswer } });
     } else {
       question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/answer`), {
         method: "POST",
-        body: {
-          selectedOption: payload.selectedOption,
-          ...(payload.customAnswer ? { customAnswer: payload.customAnswer } : {})
-        }
+        body: { answers: payload.answers }
       });
     }
     cacheAiQuestionView(question);
     currentAiQuestionDialogView = question;
     aiQuestionDialogQuestionId = String(question.id);
     await reloadAiQuestionConversation(question.conversationId ?? conversationId);
-    toast(payload.action === "reject" ? "已跳过该问题，AI 已继续处理" : "回答已提交，AI 已继续处理");
+    toast(payload.action === "reject" ? "已跳过该提问批次，AI 已继续处理" : "全部回答已提交，AI 已继续处理");
     return question;
   } catch (error) {
     continuationFailed = true;
@@ -3734,6 +3825,30 @@ async function favoriteAiConversation(conversation) {
   });
   upsertAiConversationSummary(updated);
   toast(updated.isFavorite ? "对话已收藏" : "已取消收藏");
+}
+
+async function renameAiConversation(conversation) {
+  if (!conversation?.id) return;
+  const title = await inputToast("输入新的对话名称", {
+    title: "重命名对话",
+    inputLabel: "对话名称",
+    value: conversation.title || "新对话",
+    placeholder: "对话名称",
+    confirmLabel: "保存",
+    maxLength: 200
+  });
+  if (title === null) return;
+  if (!title) {
+    toast("对话名称不能为空", "error");
+    return;
+  }
+  const updated = await api(`/api/ai-conversations/${encodeURIComponent(conversation.id)}/title`, {
+    method: "PATCH",
+    body: { title }
+  });
+  upsertAiConversationSummary(updated);
+  applyAiConversationTitle(updated.title, updated.id);
+  toast("对话已重命名");
 }
 
 async function deleteAiConversation(conversation) {
@@ -5390,8 +5505,11 @@ function showLineCitationMenu(event, lineIndex) {
     selectChapterLines(lineIndex, lineIndex);
   }
   const menu = $("#line-citation-menu");
-  $("#add-line-annotation").classList.toggle("hidden", !canWritePermissionModule(state.work, "comments"));
-  $("#add-line-todo").classList.toggle("hidden", !canWritePermissionModule(state.work, "todos"));
+  const canAddComment = canWritePermissionModule(state.work, "comments");
+  const canAddTodo = canWritePermissionModule(state.work, "todos");
+  $("#add-line-annotation").classList.toggle("hidden", !canAddComment);
+  $("#add-line-todo").classList.toggle("hidden", !canAddTodo);
+  $("#line-citation-annotation-separator").classList.toggle("hidden", !(canAddComment || canAddTodo));
   const { start, end } = chapterLineSelection;
   $("#line-citation-label").textContent = start === end ? `第 ${start + 1} 行` : `第 ${start + 1}-${end + 1} 行`;
   menu.classList.remove("hidden");
@@ -6768,6 +6886,7 @@ async function loadWorks(preferredId) {
 }
 
 function restoredSettingsReturnContext(route) {
+  if (route.returnView === "im") return { view: "im" };
   if (route.returnView === "module" && route.returnModule) return { view: "module", module: route.returnModule };
   if (route.returnView === "editor" && route.returnChapterId) return { view: "editor", chapterId: route.returnChapterId };
   if (route.returnView === "welcome") return { view: "welcome" };
@@ -6810,6 +6929,10 @@ async function initializePage() {
   try {
     if (route.view === "shelf") {
       showShelf();
+      return;
+    }
+    if (route.view === "im") {
+      await imWorkspace.open();
       return;
     }
 
@@ -6893,6 +7016,7 @@ async function initializePage() {
 }
 
 function showShelf() {
+  imWorkspace.close();
   stopBackgroundTaskCenter();
   dismissChapterInsightToast();
   dismissDeleteToasts();
@@ -6917,6 +7041,7 @@ function showShelf() {
 }
 
 function captureSettingsReturnContext() {
+  if (imWorkspace.opened) return { view: "im" };
   if (!$("#shelf-view").classList.contains("hidden")) return { view: "shelf" };
   if (!$("#editor-view").classList.contains("hidden")) return { view: "editor", chapterId: state.chapter?.id ?? null };
   if (!$("#module-view").classList.contains("hidden")) return { view: "module", module: state.module };
@@ -6944,7 +7069,9 @@ function renderSettingsHub() {
   $("#top-search-button").disabled = !canReadAggregate;
   $("#export-button").disabled = !canExportManuscript;
   $("#export-button").setAttribute("aria-expanded", "false");
-  $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
+  $("#settings-return").textContent = settingsReturnContext?.view === "im"
+    ? "返回 IM"
+    : settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
     ? `当前作品：《${state.work.title}》。导出正文时可选择 Markdown ZIP 或 DOCX；DOCX 在有封面时会嵌入为首页。`
     : "当前未选择作品；打开作品后可使用导出。";
@@ -8226,6 +8353,7 @@ async function showSettingsHub() {
     settingsReturnContext = captureSettingsReturnContext();
     state.dirty = false;
   }
+  imWorkspace.close();
   dismissChapterInsightToast();
   dismissTokenUsageDetails({ restoreFocus: false });
   dismissDeleteToasts();
@@ -8262,6 +8390,7 @@ async function returnFromSettings() {
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
+  if (context.view === "im") return imWorkspace.open();
   if (context.view === "shelf" || !state.work) return showShelf();
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -8411,6 +8540,7 @@ function resetWorkScopedUiCaches() {
 }
 
 async function selectWork(workId, preferredChapterId = null) {
+  imWorkspace.close();
   chapterSelectionRequestGeneration += 1;
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !(await confirmDiscardChanges())) return false;
@@ -8534,7 +8664,7 @@ function renderTree() {
   if (!state.work) return;
   const count = state.work.volumes.reduce((total, volume) => total + Number(volume.chapterCount ?? volume.chapters?.length ?? 0), 0);
   const proseEditable = canEditProse();
-  $("#chapter-count").textContent = `${count} 章`;
+  $("#chapter-count").querySelector(".chapter-count-number").textContent = String(count);
   $("#reader-open-button").disabled = !canReadModule("editor") || count === 0;
   $("#novel-tree").classList.remove("empty-copy");
   $("#novel-tree").innerHTML = state.work.volumes.map((volume) => {
@@ -8555,7 +8685,7 @@ function renderTree() {
     return `
     <div class="volume-node ${collapsed ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
-        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键打开分卷详情；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${Number(volume.chapterCount ?? chapters.length)} 章</span></button>
+        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键打开分卷详情；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span class="volume-chapter-count"><span class="volume-chapter-count-number">${Number(volume.chapterCount ?? chapters.length)}</span><span class="volume-chapter-count-unit"> 章</span></span></button>
         ${proseEditable ? `<button class="ghost-button volume-detail-button" type="button" data-volume-detail="${esc(volume.id)}" aria-label="打开“${esc(volume.title)}”分卷详情" title="打开“${esc(volume.title)}”分卷详情"><svg class="volume-detail-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 10.5v5.5M12 7.5h.01"></path></svg></button>` : ""}
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
@@ -9104,6 +9234,7 @@ async function resolveCurrentChapterForeshadowReminder() {
 }
 
 async function selectChapter(chapterId, { editMode = false } = {}) {
+  imWorkspace.close();
   const workId = state.work?.id;
   if (!workId) return false;
   const selectionGeneration = ++chapterSelectionRequestGeneration;
@@ -9664,6 +9795,7 @@ function tidyChapterBlankLines() {
 }
 
 function showWelcome(hasWork = false) {
+  imWorkspace.close();
   chapterSelectionRequestId += 1;
   clearChapterForeshadowReminders({ invalidateRequest: true });
   dismissChapterInsightToast();
@@ -9697,6 +9829,7 @@ const moduleMeta = {
 };
 
 async function showModule(module) {
+  imWorkspace.close();
   if (!state.work) return showWelcome();
   if (!canReadModule(module)) {
     const fallback = firstReadableUiModule(state.work);
@@ -18509,8 +18642,21 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     const references = document.createElement("div");
     references.className = "message-citations";
     for (const citation of citations) {
-      const reference = document.createElement("span");
-      reference.textContent = `${citation.chapterTitle} · L${citation.startLine}${citation.endLine === citation.startLine ? "" : `-L${citation.endLine}`}`;
+      const reference = document.createElement("button");
+      reference.type = "button";
+      reference.className = "message-citation";
+      reference.setAttribute("aria-haspopup", "dialog");
+      reference.setAttribute("aria-expanded", "false");
+      reference.setAttribute("aria-controls", "ai-citation-popover");
+      reference.setAttribute("aria-label", `${aiCitationTagLabel(citation)}，点击查看引用正文`);
+      const referenceLabel = document.createElement("span");
+      referenceLabel.textContent = aiCitationTagLabel(citation);
+      reference.append(referenceLabel);
+      reference.addEventListener("click", () => {
+        const popover = $("#ai-citation-popover");
+        if (aiCitationPopoverTrigger === reference && popover && !popover.classList.contains("hidden")) closeAiCitationPopover();
+        else openAiCitationPopover(citation, reference);
+      });
       references.append(reference);
     }
     message.append(references);
@@ -20729,6 +20875,7 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
   if (!event.target.closest("#ai-context-meter") && !event.target.closest("#ai-context-popover")) setAiContextDistributionVisible(false);
   if (!event.target.closest("#ai-model-picker") && !event.target.closest("#ai-model-popover")) setAiModelPickerVisible(false);
+  if (!event.target.closest("#ai-citation-popover") && !event.target.closest(".message-citation")) closeAiCitationPopover();
   if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
     $("#account-menu").classList.add("hidden");
     $("#account-button").setAttribute("aria-expanded", "false");
@@ -20753,6 +20900,10 @@ document.addEventListener("keydown", (event) => {
     }
     if (!$("#ai-model-popover").classList.contains("hidden")) {
       setAiModelPickerVisible(false);
+      return;
+    }
+    if (!$("#ai-citation-popover").classList.contains("hidden")) {
+      closeAiCitationPopover({ restoreFocus: true });
       return;
     }
     if (!$("#chapter-search-panel").classList.contains("hidden")) {
@@ -20801,6 +20952,7 @@ $("#ai-context-meter").addEventListener("click", () => {
   setAiContextDistributionVisible($("#ai-context-popover").classList.contains("hidden"));
 });
 $("#ai-context-popover-close").addEventListener("click", () => setAiContextDistributionVisible(false));
+$("#ai-citation-popover-close").addEventListener("click", () => closeAiCitationPopover({ restoreFocus: true }));
 $("#ai-send").addEventListener("click", activateAiSendControl);
 $("#ai-conversation-switcher").addEventListener("click", () => {
   setAiConversationSwitcherVisible($("#ai-conversation-switcher-menu").classList.contains("hidden"));
@@ -20945,6 +21097,19 @@ $("#ai-history-action-menu").addEventListener("click", async (event) => {
     }
     return;
   }
+  if (action === "rename") {
+    option.disabled = true;
+    try {
+      await renameAiConversation(conversation);
+      closeAiHistoryActionMenu(true);
+    } catch (error) {
+      toast(`对话重命名失败：${error.message}`, "error");
+      option.focus();
+    } finally {
+      option.disabled = false;
+    }
+    return;
+  }
   if (action === "copy-session-id") {
     option.disabled = true;
     try {
@@ -21042,14 +21207,17 @@ $("#ai-write-plan-undo").addEventListener("click", () => {
 $("#ai-question-close").addEventListener("click", () => $("#ai-question-dialog").close());
 
 function syncAiQuestionSubmitState() {
-  const checked = document.querySelector('input[name="ai-question-choice"]:checked');
-  const customInput = $("#ai-question-custom-answer");
   const submit = $("#ai-question-submit");
-  const disabled = !checked
-    || checked.disabled
-    || (checked.value === "custom" && !String(customInput.value).trim());
+  const questionCount = aiQuestionItems(currentAiQuestionDialogView).length;
+  const answeredCount = aiQuestionDrafts.filter(aiQuestionDraftIsAnswered).length;
+  const unansweredCount = Math.max(0, questionCount - answeredCount);
+  $("#ai-question-progress").textContent = `问题 ${aiQuestionDialogIndex + 1} / ${questionCount} · 已回答 ${answeredCount} / ${questionCount}`;
+  const disabled = aiQuestionDialogBusy
+    || currentAiQuestionDialogView?.status !== "pending"
+    || aiQuestionDrafts.length !== questionCount
+    || unansweredCount > 0;
   submit.disabled = disabled;
-  submit.title = disabled ? "请选择一个预设选项，或填写自定义回答后提交" : "";
+  submit.title = unansweredCount > 0 ? `还有 ${unansweredCount} 个问题未回答` : "";
 }
 $("#ai-question-form").addEventListener("change", (event) => {
   const control = event.target;
@@ -21057,6 +21225,7 @@ $("#ai-question-form").addEventListener("change", (event) => {
   const isCustom = control.value === "custom";
   const customInput = $("#ai-question-custom-answer");
   if (isCustom && !control.disabled) customInput.focus();
+  updateCurrentAiQuestionDraft();
   syncAiQuestionOptionPresentation();
   syncAiQuestionSubmitState();
 });
@@ -21068,23 +21237,30 @@ $("#ai-question-custom-answer").addEventListener("input", () => {
     const customRadio = document.querySelector('input[name="ai-question-choice"][value="custom"]');
     if (customRadio && !customRadio.disabled) customRadio.checked = true;
   }
+  updateCurrentAiQuestionDraft();
   syncAiQuestionOptionPresentation();
   syncAiQuestionSubmitState();
 });
+function moveAiQuestionDialog(direction) {
+  if (!currentAiQuestionDialogView) return;
+  updateCurrentAiQuestionDraft();
+  const maximumIndex = Math.max(0, aiQuestionItems(currentAiQuestionDialogView).length - 1);
+  aiQuestionDialogIndex = Math.min(maximumIndex, Math.max(0, aiQuestionDialogIndex + direction));
+  renderAiUserQuestionOptions(currentAiQuestionDialogView);
+  $("#ai-question-text").focus();
+}
+$("#ai-question-previous").addEventListener("click", () => moveAiQuestionDialog(-1));
+$("#ai-question-next").addEventListener("click", () => moveAiQuestionDialog(1));
 $("#ai-question-submit").addEventListener("click", () => {
-  const checked = document.querySelector('input[name="ai-question-choice"]:checked');
-  if (!checked || aiQuestionDialogQuestionId == null) return;
-  if (checked.value === "custom") {
-    const text = String($("#ai-question-custom-answer").value).trim();
-    if (!text) return;
-    respondAiUserQuestion(aiQuestionDialogQuestionId, { action: "custom", customAnswer: text }).catch((error) => toast(error.message, "error"));
-    return;
-  }
-  const supplementalAnswer = String($("#ai-question-custom-answer").value).trim();
+  if (aiQuestionDialogQuestionId == null) return;
+  updateCurrentAiQuestionDraft();
+  if (!aiQuestionDrafts.every(aiQuestionDraftIsAnswered)) return syncAiQuestionSubmitState();
   respondAiUserQuestion(aiQuestionDialogQuestionId, {
-    action: "option",
-    selectedOption: Number(checked.value),
-    ...(supplementalAnswer ? { customAnswer: supplementalAnswer } : {})
+    action: "answer",
+    answers: aiQuestionDrafts.map((draft) => ({
+      ...(Number.isInteger(draft.selectedOption) ? { selectedOption: draft.selectedOption } : {}),
+      ...(String(draft.customAnswer ?? "").trim() ? { customAnswer: String(draft.customAnswer).trim() } : {})
+    }))
   }).catch((error) => toast(error.message, "error"));
 });
 $("#ai-question-skip").addEventListener("click", () => {
@@ -21233,6 +21409,7 @@ window.addEventListener("online", () => {
 });
 window.addEventListener("offline", () => updateSystemHealth({ status: "offline" }));
 window.addEventListener("resize", () => {
+  if (aiCitationPopoverTrigger && !$("#ai-citation-popover").classList.contains("hidden")) positionAiCitationPopover(aiCitationPopoverTrigger);
   if ($("#reader-view").classList.contains("hidden") || readingPreferences.mode !== "paged") return;
   if (readingResizeFrame !== null) window.cancelAnimationFrame(readingResizeFrame);
   readingResizeFrame = window.requestAnimationFrame(() => {
@@ -21241,7 +21418,25 @@ window.addEventListener("resize", () => {
   });
 });
 
+const imWorkspace = createImWorkspace({
+  api,
+  esc,
+  renderMarkdown,
+  toast,
+  confirmToast,
+  state,
+  showShelf,
+  onRouteChange: schedulePresenceHeartbeat,
+  beforeOpen: async () => {
+    if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入 IM 将放弃本地修改。是否继续？"))) return false;
+    cancelChapterAutoSave();
+    state.dirty = false;
+    return true;
+  }
+});
+
 initializeAiChatTabs();
+imWorkspace.start();
 initializePage().catch((error) => {
   restoringPageRoute = false;
   if (state.user) {
@@ -21250,4 +21445,6 @@ initializePage().catch((error) => {
   }
   showShelf();
   toast(`系统初始化失败：${error.message}`, "error");
+}).finally(() => {
+  if (state.user) void imWorkspace.activate().catch((error) => toast(`IM 初始化失败：${error.message}`, "error"));
 });

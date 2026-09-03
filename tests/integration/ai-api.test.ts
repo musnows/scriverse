@@ -832,6 +832,21 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(secondPage.body.data.items).toHaveLength(1);
   });
 
+  it("支持通过标题接口人工重命名对话并规范输入", async () => {
+    const created = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "旧对话名称" }).expect(201);
+    const conversationId = String(created.body.data.id);
+
+    const renamed = await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/title`).send({
+      title: "  新  对话\n名称  "
+    }).expect(200);
+    expect(renamed.body.data).toMatchObject({ id: conversationId, title: "新 对话 名称" });
+
+    const listed = await request(runtime.app).get(`/api/works/${workId}/ai-conversations`).expect(200);
+    expect(listed.body.data.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: conversationId, title: "新 对话 名称" })]));
+    await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/title`).send({ title: "   " }).expect(400);
+    await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/title`).send({ title: "合法标题", unexpected: true }).expect(400);
+  });
+
   it("收藏对话后置顶历史并禁止清理", async () => {
     const first = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "待收藏对话" }).expect(201);
     const second = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "普通对话" }).expect(201);
@@ -1576,7 +1591,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completionCount).toBe(2);
   });
 
-  it("story_index 首页独立返回第二十一章作为结构最新章节并明确 nextOffset", async () => {
+  it("story_index 首页独立返回第二十一章作为结构最新章节并明确 nextChapterOffset", async () => {
     const volumeId = String(runtime.store.getChapter(chapterId).volumeId);
     const addedChapters = Array.from({ length: 20 }, (_, index) => runtime.store.createChapter(workId, {
       volumeId,
@@ -1591,10 +1606,22 @@ describe("AI 供应商、模型与建议 API", () => {
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
-      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
+      const body = JSON.parse(String(init?.body)) as {
+        messages: Array<{ role: string; content?: string }>;
+        tools?: Array<{
+          function?: {
+            name?: string;
+            parameters?: { properties?: Record<string, unknown> };
+          };
+        }>;
+      };
       if (completionCount === 1) {
         expect(body.messages[0]?.content).toContain("latestChaptersByStructure 是不受当前分页影响的结构最新章节");
-        expect(body.messages[0]?.content).toContain("nextOffset 非空时用该值作为 offset");
+        expect(body.messages[0]?.content).toContain("用 nextChapterOffset 换页并将 cursor 置 0");
+        const storyIndexProperties = body.tools?.find((tool) => tool.function?.name === "story_index")?.function?.parameters?.properties;
+        expect(storyIndexProperties).toHaveProperty("chapterOffset");
+        expect(storyIndexProperties).toHaveProperty("cursor");
+        expect(storyIndexProperties).not.toHaveProperty("offset");
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
           id: "long-story-index",
           type: "function",
@@ -1617,8 +1644,8 @@ describe("AI 供应商、模型与建议 API", () => {
       ok: true,
       data: {
         totalChapters: 21,
-        offset: 0,
-        nextOffset: 20,
+        chapterOffset: 0,
+        nextChapterOffset: 20,
         latestChaptersByStructure: [{
           id: latestChapterId,
           title: "第21章",
@@ -1736,7 +1763,7 @@ describe("AI 供应商、模型与建议 API", () => {
         return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       }
       const body = JSON.parse(String(init?.body)) as {
-        tools?: Array<{ function?: { name?: string } }>;
+        tools?: Array<{ function?: { name?: string; parameters?: Record<string, unknown> } }>;
         messages?: Array<{ role?: string; content?: string }>;
       };
       lockedTools = body.tools?.map((tool) => tool.function?.name).filter((name): name is string => Boolean(name));
@@ -1815,7 +1842,7 @@ describe("AI 供应商、模型与建议 API", () => {
 
     expect(response.body.data.content).toBe("已根据章节目录回答。");
     expect(response.body.data.toolCalls).toEqual([
-      expect.objectContaining({ id: "tool-call-1", name: "story_index", calledAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u), status: "completed", arguments: { offset: 0, limit: 1 } })
+      expect.objectContaining({ id: "tool-call-1", name: "story_index", calledAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u), status: "completed", arguments: { chapterOffset: 0, limit: 1 } })
     ]);
     expect(completionCount).toBe(2);
   });
@@ -2032,7 +2059,7 @@ describe("AI 供应商、模型与建议 API", () => {
     });
     const calls = [
       { id: "index-default", name: "story_index", arguments: {} },
-      { id: "index-page", name: "story_index", arguments: { offset: 0, limit: 1 } },
+      { id: "index-page", name: "story_index", arguments: { chapterOffset: 0, limit: 1 } },
       { id: "chapter-summary", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "summary" } },
       { id: "chapter-content", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } },
       { id: "chapter-both", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "both" } },
@@ -2057,7 +2084,7 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(results.get("index-default")).toMatchObject({
         ok: true,
         data: {
-          offset: 0,
+          chapterOffset: 0,
           totalChapters: 1,
           storyOrdering: expect.any(Object),
           latestChaptersByStructure: [{ id: chapterId, storyOrder: { chapter: { isLatestByStructure: true } } }]
@@ -4462,9 +4489,9 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(deltas).toEqual(["我先读取目录。", "已读取", "目录。"]);
     expect(generated.content).toBe("已读取目录。");
     expect(generated.toolCalls).toEqual([
-      expect.objectContaining({ id: "stream-tool", name: "story_index", arguments: { offset: 0, limit: 1 }, status: "completed" })
+      expect.objectContaining({ id: "stream-tool", name: "story_index", arguments: { chapterOffset: 0, limit: 1 }, status: "completed" })
     ]);
-    expect(toolEvents).toEqual([{ arguments: { offset: 0, limit: 1 } }]);
+    expect(toolEvents).toEqual([{ arguments: { chapterOffset: 0, limit: 1 } }]);
     expect(completionCount).toBe(2);
   });
 
@@ -4522,7 +4549,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text.indexOf('"delta":"我先读取作品目录。"')).toBeLessThan(streamed.text.indexOf('"type":"intermediate","round":1,"content":"我先读取作品目录。"'));
     expect(streamed.text.indexOf('"type":"intermediate","round":1,"content":"我先读取作品目录。"')).toBeLessThan(streamed.text.indexOf("event: tool_call"));
     expect(streamed.text).toContain('"name":"story_index"');
-    expect(streamed.text).toContain('"arguments":{"offset":0,"limit":1}');
+    expect(streamed.text).toContain('"arguments":{"chapterOffset":0,"limit":1}');
     expect(streamed.text).toMatch(/"calledAt":"\d{4}-\d{2}-\d{2}T/u);
     expect(streamed.text).toContain('"result":{"ok":true');
     expect(streamed.text).toContain('event: delta\ndata: {"delta":"已读取"}');
@@ -4540,7 +4567,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(generatedSuggestions.body.data[0].content).toBe("已读取目录。");
 
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
-    const toolCalls = [{ id: "stream-tool", name: "story_index", calledAt: "2026-07-17T12:34:56.000Z", arguments: { offset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];
+    const toolCalls = [{ id: "stream-tool", name: "story_index", calledAt: "2026-07-17T12:34:56.000Z", arguments: { chapterOffset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];
     const processSteps = [
       { id: "process-thinking", type: "thinking", round: 1, content: "需要读取目录。", createdAt: "2026-07-17T12:34:55.000Z" },
       { id: "process-compaction", type: "context_compaction", round: 1, sourceMessageCount: 2, sourceChars: 12000, summaryChars: 180, createdAt: "2026-07-17T12:34:55.500Z" },
@@ -4719,7 +4746,7 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({
       tools: { ask_user_questions: true }
     }).expect(200);
-    const captured: Array<{ systemPrompt: string; toolNames: string[] }> = [];
+    const captured: Array<{ systemPrompt: string; toolNames: string[]; tools: Array<{ function?: { name?: string; parameters?: Record<string, unknown> } }> }> = [];
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       const body = JSON.parse(String(init?.body ?? "{}")) as {
@@ -4728,7 +4755,8 @@ describe("AI 供应商、模型与建议 API", () => {
       };
       captured.push({
         systemPrompt: String(body.messages?.find((message) => message.role === "system")?.content ?? ""),
-        toolNames: (body.tools ?? []).flatMap((tool) => typeof tool.function?.name === "string" ? [tool.function.name] : [])
+        toolNames: (body.tools ?? []).flatMap((tool) => typeof tool.function?.name === "string" ? [tool.function.name] : []),
+        tools: body.tools ?? []
       });
       return new Response(JSON.stringify({ choices: [{ message: { content: "无需向作者提问。" } }] }), { status: 200 });
     });
@@ -4756,6 +4784,11 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(captured[0]?.systemPrompt).toContain(mandatoryGuidance);
     expect(captured[0]?.systemPrompt).toContain("禁止在普通回复正文中直接写出问题");
     expect(captured[0]?.toolNames).toContain("ask_user_question");
+    const askDefinition = captured[0]?.tools.find((tool) => tool.function?.name === "ask_user_question");
+    expect(askDefinition?.function?.parameters).toMatchObject({
+      required: ["questions"],
+      properties: { questions: { minItems: 1, maxItems: 5 } }
+    });
     expect(captured[1]?.systemPrompt).toBe(captured[0]?.systemPrompt);
     expect(captured[1]?.toolNames).toContain("ask_user_question");
     expect(captured[2]?.systemPrompt).not.toContain(mandatoryGuidance);
@@ -4784,7 +4817,10 @@ describe("AI 供应商、模型与建议 API", () => {
       };
       if (completionCount === 1) {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
-          { id: "ask-once", type: "function", function: { name: "ask_user_question", arguments: { question: "采用哪个方向？", options: ["甲", "乙"] } } },
+          { id: "ask-once", type: "function", function: { name: "ask_user_question", arguments: { questions: [
+            { question: "采用哪个方向？", options: ["甲", "乙"] },
+            { question: "采用哪个视角？", options: ["第一人称", "第三人称"] }
+          ] } } },
           { id: "must-not-run", type: "function", function: { name: "propose_write_plan", arguments: { aiSummary: "不应提前执行", operations: [{ opType: "create_entry", entityType: "setting", input: { title: "未确认", category: "地点", content: "内容" } }] } } }
         ] } }] }), { status: 200 });
       }
@@ -4795,6 +4831,7 @@ describe("AI 供应商、模型与建议 API", () => {
       const toolResult = body.messages?.find((message) => message.role === "tool" && message.tool_call_id === "ask-once");
       expect(toolResult?.content).toContain('"selectedOption":"甲"');
       expect(toolResult?.content).toContain('"supplementalAnswer":"补充采用冷色调"');
+      expect(toolResult?.content).toContain('"selectedOption":"第三人称"');
       return new Response(JSON.stringify({ choices: [{ message: { content: "已按真实回答继续。" } }] }), { status: 200 });
     });
 
@@ -4821,18 +4858,26 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(suspendedMetadata).not.toHaveProperty("anthropicContent");
     const questions = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}`).expect(200);
     const questionId = String(questions.body.data.questions[0].id);
-    expect(questions.body.data.questions[0]).toMatchObject({ status: "pending", resumeState: "pending" });
+    expect(questions.body.data.questions[0]).toMatchObject({ status: "pending", resumeState: "pending", questionCount: 2 });
 
     const answered = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
-      .send({ selectedOption: 0, customAnswer: "补充采用冷色调" })
+      .send({ answers: [
+        { selectedOption: 0, customAnswer: "补充采用冷色调" },
+        { selectedOption: 1 }
+      ] })
       .expect(200);
     expect(answered.body.data).toMatchObject({
       status: "answered",
       selectedOptionLabel: "甲",
       customAnswer: "补充采用冷色调",
-      answerText: "甲\n补充信息：补充采用冷色调",
+      questionCount: 2,
+      questions: [
+        { question: "采用哪个方向？", answerText: "甲\n补充信息：补充采用冷色调" },
+        { question: "采用哪个视角？", answerText: "第三人称" }
+      ],
       resumeState: "completed"
     });
+    expect(answered.body.data.answerText).toContain("问题 2：采用哪个视角？\n回答：第三人称");
     expect(completionCount).toBe(2);
     const completedMessages = runtime.database.all<{ role: string; content: string; metadata_json: string }>(
       "SELECT role, content, metadata_json FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
@@ -4842,7 +4887,10 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completedMessages[1]).toMatchObject({ role: "assistant", content: "已按真实回答继续。" });
     const completedMetadata = JSON.parse(String(completedMessages[1]?.metadata_json ?? "{}"));
     expect(completedMetadata.toolCalls).toMatchObject([
-      { id: "ask-once", name: "ask_user_question", result: { question: { status: "answered", answerText: "甲\n补充信息：补充采用冷色调" } } }
+      { id: "ask-once", name: "ask_user_question", result: { question: { status: "answered", questionCount: 2, questions: [
+        { answerText: "甲\n补充信息：补充采用冷色调" },
+        { answerText: "第三人称" }
+      ] } } }
     ]);
     await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`).send({ selectedOption: 0 }).expect(409);
     expect(completionCount).toBe(2);

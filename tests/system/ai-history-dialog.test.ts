@@ -31,6 +31,8 @@ describe("AI 对话历史弹窗", () => {
     expect(page.text).toContain('id="ai-history-list" class="ai-history-list"');
     expect(page.text).toContain('id="ai-history-action-menu" class="ai-history-action-menu hidden" role="menu"');
     expect(page.text).toContain('data-ai-history-action="favorite"');
+    expect(page.text).toContain('data-ai-history-action="rename"');
+    expect(page.text.indexOf('data-ai-history-action="rename"')).toBeLessThan(page.text.indexOf('data-ai-history-action="favorite"'));
     expect(page.text).toContain('data-ai-history-action="copy-session-id"');
     expect(page.text).toContain('data-ai-history-action="export"');
     expect(page.text).toContain('data-ai-history-action="delete"');
@@ -64,6 +66,10 @@ describe("AI 对话历史弹窗", () => {
     expect(application.text).toContain('选择章节和模型后即可开始问答；所有引用都基于已保存正文。');
     expect(application.text).not.toContain('/continue-writing 或 /polish-writing 强制加载');
     expect(application.text).toContain("function syncAiHistoryActionMenu(conversation)");
+    expect(application.text).toContain("async function renameAiConversation(conversation)");
+    expect(application.text).toContain('/api/ai-conversations/${encodeURIComponent(conversation.id)}/title');
+    expect(application.text).toContain('if (action === "rename") {');
+    expect(application.text).toContain('toast("对话已重命名")');
     expect(application.text).toContain("async function copyAiConversationSessionId(conversation)");
     expect(application.text).toContain('if (action === "copy-session-id") {');
     expect(application.text).toContain('toast("对话 Session ID 已复制")');

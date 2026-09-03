@@ -366,9 +366,9 @@ describe("Anthropic Messages 供应商", () => {
     expect(deltas).toEqual(["我先读取目录。", "已读取", "目录。"]);
     expect(generated.content).toBe("已读取目录。");
     expect(generated.toolCalls).toEqual([
-      expect.objectContaining({ id: "toolu_stream", name: "story_index", arguments: { offset: 0, limit: 1 }, status: "completed" })
+      expect.objectContaining({ id: "toolu_stream", name: "story_index", arguments: { chapterOffset: 0, limit: 1 }, status: "completed" })
     ]);
-    expect(toolEvents).toEqual([{ arguments: { offset: 0, limit: 1 } }]);
+    expect(toolEvents).toEqual([{ arguments: { chapterOffset: 0, limit: 1 } }]);
     expect(streamedCompletionCount).toBe(2);
   });
 

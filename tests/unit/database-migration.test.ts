@@ -79,6 +79,298 @@ function insertSystemOwnedWork(database: Database, workId: string, title: string
 }
 
 describe("数据库版本化迁移", () => {
+  it("迁移 127 和 128 创建 IM 持久化结构、会话快照并恢复中断链路", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-im-"));
+    roots.push(root);
+    const filename = join(root, "im.db");
+    const current = new Database(filename);
+    insertSystemOwnedWork(current, "work-im", "IM 迁移测试作品", "2026-08-31T00:00:00.000Z");
+    current.run(
+      `INSERT INTO characters (id, work_id, name, created_at, updated_at)
+       VALUES ('character-im', 'work-im', '林舟', '2026-08-31T00:00:00.000Z', '2026-08-31T00:00:00.000Z')`
+    );
+    current.run(
+      `INSERT INTO im_conversations (
+         id, kind, owner_user_id, direct_character_id, title, created_at, updated_at
+       ) VALUES ('im-conversation', 'direct', ?, 'character-im', '林舟', '2026-08-31T00:00:00.000Z', '2026-08-31T00:00:00.000Z')`,
+      SYSTEM_USER_ID
+    );
+    current.run(
+      `INSERT INTO im_human_memberships (
+         id, conversation_id, user_id, role, joined_at
+       ) VALUES ('im-human-membership', 'im-conversation', ?, 'owner', '2026-08-31T00:00:00.000Z')`,
+      SYSTEM_USER_ID
+    );
+    current.run(
+      `INSERT INTO im_character_memberships (
+         id, conversation_id, character_id, source_work_id, snapshot_json, joined_at
+       ) VALUES ('im-character-membership', 'im-conversation', 'character-im', 'work-im', '{}', '2026-08-31T00:00:00.000Z')`
+    );
+    current.run(
+      `INSERT INTO im_messages (
+         id, conversation_id, sequence, sender_kind, sender_user_id, content, created_at
+       ) VALUES ('im-message', 'im-conversation', 1, 'human', ?, '你好', '2026-08-31T00:00:00.000Z')`,
+      SYSTEM_USER_ID
+    );
+    current.run(
+      `INSERT INTO im_chains (
+         id, conversation_id, initiator_user_id, authorization_user_id, trigger_message_id,
+         mode, threshold, max_ai_messages, retry_count, status, created_at, updated_at
+       ) VALUES (
+         'im-chain', 'im-conversation', ?, ?, 'im-message',
+         'direct', 60, 20, 3, 'running', '2026-08-31T00:00:00.000Z', '2026-08-31T00:00:00.000Z'
+       )`,
+      SYSTEM_USER_ID,
+      SYSTEM_USER_ID
+    );
+    current.run(
+      `INSERT INTO im_chain_turns (
+         id, chain_id, character_membership_id, kind, status, created_at
+      ) VALUES ('im-turn', 'im-chain', 'im-character-membership', 'reply', 'running', '2026-08-31T00:00:00.000Z')`
+    );
+    const characterAvatarSha256 = "c".repeat(64);
+    const userAvatarSha256 = "d".repeat(64);
+    current.run(
+      `INSERT INTO character_avatars (
+         character_id, mime_type, byte_length, sha256, storage_key, width, height, updated_at
+       ) VALUES ('character-im', 'image/png', 4, ?, 'avatars/character-im.png', 1, 1, '2026-08-31T00:00:00.000Z')`,
+      characterAvatarSha256
+    );
+    current.run(
+      `INSERT INTO user_avatars (
+         user_id, mime_type, content, byte_length, sha256, width, height, updated_at
+       ) VALUES (?, 'image/png', ?, 4, ?, 1, 1, '2026-08-31T00:00:00.000Z')`,
+      SYSTEM_USER_ID,
+      Buffer.from("user"),
+      userAvatarSha256
+    );
+    current.run("UPDATE users SET avatar_sha256 = ? WHERE id = ?", userAvatarSha256, SYSTEM_USER_ID);
+    current.run(
+      "UPDATE im_character_memberships SET snapshot_json = ? WHERE id = 'im-character-membership'",
+      JSON.stringify({ id: "character-im", avatarSha256: characterAvatarSha256 })
+    );
+    current.run(
+      "UPDATE im_messages SET sender_snapshot_json = ? WHERE id = 'im-message'",
+      JSON.stringify({ userId: SYSTEM_USER_ID, avatarSha256: userAvatarSha256 })
+    );
+    current.run("ALTER TABLE im_human_memberships DROP COLUMN conversation_snapshot_json");
+    current.run("DELETE FROM schema_migrations WHERE version = 128");
+    current.run("DROP TABLE im_avatar_versions");
+    current.run("DELETE FROM schema_migrations WHERE version = 129");
+    current.run("DROP INDEX idx_im_chains_retry_source");
+    current.run("ALTER TABLE im_chains DROP COLUMN retry_source_chain_id");
+    current.run("DELETE FROM schema_migrations WHERE version = 130");
+    current.run("DELETE FROM schema_migrations WHERE version = 131");
+    current.run("DROP INDEX idx_im_human_memberships_conversation");
+    current.run("DROP INDEX idx_im_character_memberships_conversation");
+    current.run("DELETE FROM schema_migrations WHERE version = 132");
+    current.run("DROP INDEX idx_im_messages_human_avatar");
+    current.run("DROP INDEX idx_im_messages_character_avatar");
+    current.run("DROP INDEX idx_im_messages_character_snapshot_avatar");
+    current.run("DELETE FROM schema_migrations WHERE version = 133");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 127")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 128")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 129")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 130")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 131")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 132")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 133")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA table_info(im_human_memberships)").map((column) => column.name)).toContain("conversation_snapshot_json");
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'im_avatar_versions'")).toEqual({ name: "im_avatar_versions" });
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_human_memberships_conversation'"))
+      .toEqual({ name: "idx_im_human_memberships_conversation" });
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_character_memberships_conversation'"))
+      .toEqual({ name: "idx_im_character_memberships_conversation" });
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_messages_human_avatar'"))
+      .toEqual({ name: "idx_im_messages_human_avatar" });
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_messages_character_avatar'"))
+      .toEqual({ name: "idx_im_messages_character_avatar" });
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_messages_character_snapshot_avatar'"))
+      .toEqual({ name: "idx_im_messages_character_snapshot_avatar" });
+    expect(migrated.get(
+      `SELECT storage_key FROM im_avatar_versions
+       WHERE conversation_id = 'im-conversation' AND participant_kind = 'character'
+         AND participant_id = 'character-im' AND sha256 = ?`,
+      characterAvatarSha256
+    )).toEqual({ storage_key: "avatars/character-im.png" });
+    expect(Buffer.from(migrated.get(
+      `SELECT content FROM im_avatar_versions
+       WHERE conversation_id = 'im-conversation' AND participant_kind = 'user'
+         AND participant_id = ? AND sha256 = ?`,
+      SYSTEM_USER_ID,
+      userAvatarSha256
+    )?.content as Uint8Array)).toEqual(Buffer.from("user"));
+    expect(migrated.all("PRAGMA table_info(im_chains)").map((column) => column.name)).toContain("retry_source_chain_id");
+    expect(migrated.all("PRAGMA table_info(im_user_settings)").map((column) => column.name)).toEqual([
+      "user_id",
+      "preferred_name",
+      "pronouns",
+      "identity_summary",
+      "additional_notes",
+      "primary_model_id",
+      "fallback_model_id",
+      "retry_count",
+      "updated_at"
+    ]);
+    expect(migrated.get("SELECT status, error_code FROM im_chains WHERE id = 'im-chain'")).toEqual({
+      status: "interrupted",
+      error_code: "IM_CHAIN_RUNTIME_RESTARTED"
+    });
+    expect(migrated.get("SELECT status FROM im_chain_turns WHERE id = 'im-turn'")).toEqual({ status: "cancelled" });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.run(
+      "UPDATE character_avatars SET sha256 = ?, storage_key = 'avatars/character-im-new.png' WHERE character_id = 'character-im'",
+      "e".repeat(64)
+    );
+    migrated.run(
+      "UPDATE user_avatars SET sha256 = ?, content = ? WHERE user_id = ?",
+      "f".repeat(64),
+      Buffer.from("next"),
+      SYSTEM_USER_ID
+    );
+    migrated.close();
+
+    const restarted = new Database(filename);
+    expect(restarted.get("SELECT COUNT(*) AS count FROM im_avatar_versions WHERE conversation_id = 'im-conversation'")).toEqual({ count: 2 });
+    expect(restarted.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 131")).toEqual({ count: 1 });
+    restarted.close();
+  });
+
+  it("schema 130 自动修复缺失的 IM 重试幂等索引", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-im-retry-index-"));
+    roots.push(root);
+    const filename = join(root, "im-retry-index.db");
+    const current = new Database(filename);
+    current.run("DROP INDEX idx_im_chains_retry_source");
+    expect(current.get(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_chains_retry_source'"
+    )).toBeUndefined();
+    current.close();
+
+    const repaired = new Database(filename);
+    expect(repaired.get(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_im_chains_retry_source'"
+    )).toEqual({ name: "idx_im_chains_retry_source" });
+    expect(repaired.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 130")).toEqual({ count: 1 });
+    expect(repaired.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(repaired.all("PRAGMA foreign_key_check")).toEqual([]);
+    repaired.close();
+  });
+
+  it("schema 131 在头像版本表修复后重新执行可恢复数据回填", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-im-avatar-repair-"));
+    roots.push(root);
+    const filename = join(root, "im-avatar-repair.db");
+    const current = new Database(filename);
+    insertSystemOwnedWork(current, "work-im-avatar-repair", "IM 头像修复作品", "2026-09-02T00:00:00.000Z");
+    current.run(
+      `INSERT INTO characters (id, work_id, name, created_at, updated_at)
+       VALUES ('character-im-avatar-repair', 'work-im-avatar-repair', '头像修复角色', '2026-09-02T00:00:00.000Z', '2026-09-02T00:00:00.000Z')`
+    );
+    current.run(
+      `INSERT INTO character_avatars (
+         character_id, mime_type, byte_length, sha256, storage_key, width, height, updated_at
+       ) VALUES ('character-im-avatar-repair', 'image/png', 4, ?, 'avatars/character-im-avatar-repair.png', 1, 1, '2026-09-02T00:00:00.000Z')`,
+      "a".repeat(64)
+    );
+    current.run(
+      `INSERT INTO im_conversations (
+         id, kind, owner_user_id, direct_character_id, title, created_at, updated_at
+       ) VALUES ('im-avatar-repair-conversation', 'direct', ?, 'character-im-avatar-repair', '头像修复角色', '2026-09-02T00:00:00.000Z', '2026-09-02T00:00:00.000Z')`,
+      SYSTEM_USER_ID
+    );
+    current.run(
+      `INSERT INTO im_character_memberships (
+         id, conversation_id, character_id, source_work_id, snapshot_json, joined_at
+       ) VALUES (
+         'im-avatar-repair-membership', 'im-avatar-repair-conversation', 'character-im-avatar-repair',
+         'work-im-avatar-repair', '{}', '2026-09-02T00:00:00.000Z'
+       )`
+    );
+    current.run("DROP TABLE im_avatar_versions");
+    expect(current.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 131")).toEqual({ count: 1 });
+    current.close();
+
+    const repaired = new Database(filename);
+    expect(repaired.get(
+      `SELECT storage_key FROM im_avatar_versions
+       WHERE conversation_id = 'im-avatar-repair-conversation' AND participant_kind = 'character'
+         AND participant_id = 'character-im-avatar-repair' AND sha256 = ?`,
+      "a".repeat(64)
+    )).toEqual({ storage_key: "avatars/character-im-avatar-repair.png" });
+    expect(repaired.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 131")).toEqual({ count: 1 });
+    repaired.close();
+  });
+
+  it("迁移 134 把旧头像索引升级为哈希表达式索引", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-im-avatar-index-"));
+    roots.push(root);
+    const filename = join(root, "im-avatar-index.db");
+    const current = new Database(filename);
+    current.run("DROP INDEX idx_im_messages_human_avatar");
+    current.run("DROP INDEX idx_im_messages_character_avatar");
+    current.run("DROP INDEX idx_im_messages_character_snapshot_avatar");
+    current.run(`CREATE INDEX idx_im_messages_human_avatar
+      ON im_messages(conversation_id, sender_user_id, sequence) WHERE sender_kind = 'human'`);
+    current.run(`CREATE INDEX idx_im_messages_character_avatar
+      ON im_messages(conversation_id, sender_character_id, sequence) WHERE sender_kind = 'character'`);
+    current.run(`CREATE INDEX idx_im_messages_character_snapshot_avatar
+      ON im_messages(conversation_id, json_extract(sender_snapshot_json, '$.id'), sequence)
+      WHERE sender_kind = 'character' AND sender_character_id IS NULL`);
+    current.run("DELETE FROM schema_migrations WHERE version = 134");
+    current.close();
+
+    const migrated = new Database(filename);
+    for (const index of [
+      "idx_im_messages_human_avatar",
+      "idx_im_messages_character_avatar",
+      "idx_im_messages_character_snapshot_avatar"
+    ]) {
+      expect(String(migrated.get(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+        index
+      )?.sql)).toContain("avatarSha256");
+    }
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 134")).toEqual({ count: 1 });
+    migrated.close();
+  });
+  it("迁移 135 为 AI 提问增加批量问题与回答字段", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-question-batch-"));
+    roots.push(root);
+    const filename = join(root, "question-batch.db");
+    const current = new Database(filename);
+    const store = new Store(current);
+    const work = store.createWork({ title: "旧提问迁移作品" });
+    current.run(
+      `INSERT INTO ai_user_questions (
+         id, work_id, question, options_json, status, selected_option, answer_text,
+         is_custom_answer, created_at, expires_at
+       ) VALUES ('legacy-question', ?, '旧问题？', '["甲","乙"]', 'answered', 1, '乙', 0, ?, ?)`,
+      String(work.id),
+      "2026-09-01T00:00:00.000Z",
+      "2026-09-01T00:10:00.000Z"
+    );
+    current.run("ALTER TABLE ai_user_questions DROP COLUMN questions_json");
+    current.run("ALTER TABLE ai_user_questions DROP COLUMN answers_json");
+    current.run("DELETE FROM schema_migrations WHERE version = 135");
+    current.close();
+
+    const migrated = new Database(filename);
+    const columns = migrated.all<{ name: string }>("PRAGMA table_info(ai_user_questions)").map((column) => column.name);
+    expect(columns).toContain("questions_json");
+    expect(columns).toContain("answers_json");
+    expect(migrated.get("SELECT question, options_json, questions_json, answers_json FROM ai_user_questions WHERE id = 'legacy-question'"))
+      .toEqual({ question: "旧问题？", options_json: '["甲","乙"]', questions_json: "[]", answers_json: "[]" });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 135")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
   it("迁移 126 创建按作品级联清理的加密远程 MCP 配置表", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-remote-mcp-"));
     roots.push(root);

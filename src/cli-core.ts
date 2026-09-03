@@ -5,6 +5,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { cliResourceDefinitions, cliResourceTypes, cliWorkDefinition, type CliResourceType } from "./cli-contract.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
+import { AI_USER_QUESTION_STATUSES } from "./ai-write-plans.js";
 import type { LocalServerOptions } from "./server-runtime.js";
 
 type OutputStream = { write(chunk: string): unknown };
@@ -525,10 +526,19 @@ function helpText(): string {
   scriverse annotation update <annotationId> --input <json-file|->
   scriverse annotation delete <annotationId> [--expected-version <number>]
 
+AI 对话与提问：
+  scriverse ai rename <conversationId> --title <text>
+  scriverse ai questions list <workId> [--status pending|answered|rejected|expired] [--conversation-id <id>] [--limit <number>]
+  scriverse ai questions get <workId> <questionId>
+  scriverse ai questions answer <workId> <questionId> --input <json-file|->
+  scriverse ai questions reject <workId> <questionId>
+
 AI 编辑辅助：
   scriverse schema list
   scriverse schema show <type>
   --field-file content=chapter.txt 可把长文本写入 JSON 字段
+  ai questions answer 的 --input 支持单项 {selectedOption, customAnswer} 或批量 {answers: [...最多 5 项]}
+  跨作品 IM 仅限网页或桌面交互式会话使用，不通过 CLI 开放
 
 全局选项：
   --config <path>  指定登录配置文件
@@ -549,9 +559,10 @@ function schemaList(): Record<string, unknown> {
       writing: ["progress", "goal"],
       chapter: ["move", "batch"],
       annotation: ["list", "list-work", "create", "update", "delete"],
-      manuscript: ["get"]
+      manuscript: ["get"],
+      ai: ["rename", "questions"]
     },
-    prohibited: ["用户管理", "作品成员管理", "系统管理", "AI 供应商与模型管理", "永久删除及作品、分卷、知识实体删除", "任意 HTTP 请求"],
+    prohibited: ["用户管理", "作品成员管理", "系统管理", "AI 供应商与模型管理", "永久删除及作品、分卷、知识实体删除", "任意 HTTP 请求", "跨作品 IM（仅限交互式会话）"],
     resources: cliResourceTypes.map((type) => ({
       type,
       description: cliResourceDefinitions[type].description,
@@ -709,7 +720,7 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
     throw new CliError("CLI_COMMAND_UNKNOWN", "未知 schema 命令");
   }
 
-  if (!["work", "manuscript", "search", "audit", "resource", "writing", "chapter", "annotation"].includes(group)) {
+  if (!["work", "manuscript", "search", "audit", "resource", "writing", "chapter", "annotation", "ai"].includes(group)) {
     throw new CliError("CLI_COMMAND_UNKNOWN", "未知命令；使用 --help 查看可用命令");
   }
   const config = requestConfig(parsed, path);
@@ -900,6 +911,83 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
       return;
     }
     throw new CliError("CLI_COMMAND_UNKNOWN", "未知 annotation 命令");
+  }
+
+  if (group === "ai") {
+    if (action === "rename") {
+      assertAllowedOptions(parsed, ["title"]);
+      const conversationId = requiredPosition(parsed.positionals, 2, "conversationId");
+      assertPositionCount(parsed.positionals, 3);
+      const title = option(parsed, "title")?.trim() ?? "";
+      if (!title) throw new CliError("CLI_TITLE_REQUIRED", "请使用 --title 提供新标题");
+      if (title.length > 200) throw new CliError("CLI_TITLE_INVALID", "标题不能超过 200 字");
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/ai-conversations/${encoded(conversationId)}/title`, {
+        method: "PATCH",
+        body: { title }
+      }), compact);
+      return;
+    }
+    if (action === "questions") {
+      const subaction = requiredPosition(parsed.positionals, 2, "questions 子命令");
+      if (subaction === "list") {
+        assertAllowedOptions(parsed, ["status", "conversation-id", "limit"]);
+        const workId = requiredPosition(parsed.positionals, 3, "workId");
+        assertPositionCount(parsed.positionals, 4);
+        const status = option(parsed, "status")?.trim();
+        if (status && !AI_USER_QUESTION_STATUSES.includes(status as never)) {
+          throw new CliError("CLI_QUESTION_STATUS_INVALID", `status 必须是 ${AI_USER_QUESTION_STATUSES.join("、")} 之一`);
+        }
+        const conversationId = option(parsed, "conversation-id")?.trim();
+        if (conversationId !== undefined && !conversationId) {
+          throw new CliError("CLI_CONVERSATION_ID_INVALID", "--conversation-id 不能为空");
+        }
+        const rawLimit = option(parsed, "limit");
+        const limit = rawLimit === undefined ? undefined : Number(rawLimit);
+        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200)) {
+          throw new CliError("CLI_QUESTION_LIMIT_INVALID", "limit 必须是 1 到 200 之间的整数");
+        }
+        const parameters = new URLSearchParams();
+        if (conversationId) parameters.set("conversationId", conversationId);
+        if (status) parameters.set("status", status);
+        if (limit !== undefined) parameters.set("limit", String(limit));
+        const query = parameters.size > 0 ? `?${parameters}` : "";
+        emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/ai/questions${query}`), compact);
+        return;
+      }
+      if (subaction === "get") {
+        assertAllowedOptions(parsed, []);
+        const workId = requiredPosition(parsed.positionals, 3, "workId");
+        const questionId = requiredPosition(parsed.positionals, 4, "questionId");
+        assertPositionCount(parsed.positionals, 5);
+        emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/ai/questions/${encoded(questionId)}`), compact);
+        return;
+      }
+      if (subaction === "answer") {
+        assertAllowedOptions(parsed, ["input", "field-file"]);
+        const workId = requiredPosition(parsed.positionals, 3, "workId");
+        const questionId = requiredPosition(parsed.positionals, 4, "questionId");
+        assertPositionCount(parsed.positionals, 5);
+        const body = await editInput(parsed, dependencies, false);
+        emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/ai/questions/${encoded(questionId)}/answer`, {
+          method: "POST",
+          body
+        }), compact);
+        return;
+      }
+      if (subaction === "reject") {
+        assertAllowedOptions(parsed, []);
+        const workId = requiredPosition(parsed.positionals, 3, "workId");
+        const questionId = requiredPosition(parsed.positionals, 4, "questionId");
+        assertPositionCount(parsed.positionals, 5);
+        emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/ai/questions/${encoded(questionId)}/reject`, {
+          method: "POST",
+          body: {}
+        }), compact);
+        return;
+      }
+      throw new CliError("CLI_COMMAND_UNKNOWN", "未知 ai questions 子命令");
+    }
+    throw new CliError("CLI_COMMAND_UNKNOWN", "未知 ai 命令");
   }
 
   if (group === "resource") {
