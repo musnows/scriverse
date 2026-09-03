@@ -18,6 +18,10 @@ let chapterIds: string[] = [];
 let otherWorkChapterId = "";
 let characterSectionId = "";
 let matrixVerified = false;
+let matrixInitialResultsVerified = false;
+let matrixExpectedCursor: number | null = null;
+let matrixContinuationCalls = 0;
+const matrixBothChapterRecords: JsonObject[] = [];
 let failureFeedbackVerified = false;
 let multiTurnVerified = false;
 let compactRequestVerified = false;
@@ -87,41 +91,64 @@ const mockAi = createServer(async (incoming, outgoing) => {
         assert.deepEqual(body.tools?.map((tool) => tool.function?.name), ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]);
         toolCalls(outgoing, [
           { id: "index-default", name: "story_index", arguments: {} },
-          { id: "index-boundary", name: "story_index", arguments: JSON.stringify({ offset: 1, limit: 50 }) },
+          { id: "index-boundary", name: "story_index", arguments: JSON.stringify({ chapterOffset: 1, limit: 50 }) },
           { id: "chapter-summary", name: "read_chapters", arguments: { chapterIds: [chapterIds[0]], include: "summary" } },
           { id: "chapter-content", name: "read_chapters", arguments: { chapterIds: chapterIds.slice(0, 2), include: "content" } },
           { id: "chapter-both", name: "read_chapters", arguments: { chapterIds, include: "both" } },
           { id: "chapter-errors", name: "read_chapters", arguments: { chapterIds: [chapterIds[0], "missing-chapter", otherWorkChapterId] } },
           { id: "knowledge-default", name: "search_story_entities", arguments: { query: "跃迁" } },
-          { id: "knowledge-all", name: "search_story_entities", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } },
+          { id: "knowledge-all", name: "search_story_entities", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"], includePhonetic: true } },
           { id: "character-section", name: "read_character_sections", arguments: { sectionIds: [characterSectionId], include: "both" } }
         ]);
         return;
       }
-      assert.equal(results.size, 9);
-      assert.deepEqual(object(object(results.get("index-default")).data).offset, 0);
-      assert.equal(array(object(object(results.get("index-boundary")).data).chapters).length, 2);
-      const summaryChapter = object(array(object(object(results.get("chapter-summary")).data).chapters)[0]);
-      assert.ok("summary" in summaryChapter);
-      assert.ok(!("content" in summaryChapter));
-      const contentChapter = object(array(object(object(results.get("chapter-content")).data).chapters)[0]);
-      assert.ok("content" in contentChapter);
-      assert.ok(!("summary" in contentChapter));
-      const bothChapters = array(object(object(results.get("chapter-both")).data).chapters).map(object);
-      assert.equal(bothChapters.length, 3);
-      assert.ok(bothChapters.every((chapter) => "summary" in chapter && "content" in chapter));
-      const errorChapters = array(object(object(results.get("chapter-errors")).data).chapters).map(object);
-      assert.equal(object(errorChapters[1]?.error).message, "The requested chapter was not found.");
-      assert.equal(object(errorChapters[2]?.error).message, "The requested chapter belongs to a different work.");
-      assert.deepEqual(object(results.get("knowledge-default")).ok, true);
-      assert.equal(object(object(results.get("knowledge-default")).data).matchMode, "hybrid_exact_phonetic");
-      const defaultMatches = array(object(object(results.get("knowledge-default")).data).matches).map(object);
-      assert.equal(defaultMatches.some((item) => String(item.type) === "setting" && String(item.title).includes("跃迁")), true);
-      assert.equal(array(object(object(results.get("knowledge-all")).data).matches).length >= 1, true);
-      assert.equal(object(object(results.get("knowledge-all")).data).matchMode, "hybrid_exact_phonetic");
-      const characterSection = object(array(object(object(results.get("character-section")).data).sections)[0]);
-      assert.equal(characterSection.characterName, "哥斯拉");
-      assert.match(String(characterSection.contentMarkdown), /守护地球生态/u);
+      if (!matrixInitialResultsVerified) {
+        assert.equal(results.size, 9);
+        assert.deepEqual(object(object(results.get("index-default")).data).chapterOffset, 0);
+        assert.equal(array(object(object(results.get("index-boundary")).data).chapters).length, 2);
+        const summaryChapter = object(array(object(object(results.get("chapter-summary")).data).chapters)[0]);
+        assert.ok("summary" in summaryChapter);
+        assert.ok(!("content" in summaryChapter));
+        const contentChapter = object(array(object(object(results.get("chapter-content")).data).chapters)[0]);
+        assert.ok("content" in contentChapter);
+        assert.ok(!("summary" in contentChapter));
+        const errorChapters = array(object(object(results.get("chapter-errors")).data).chapters).map(object);
+        assert.equal(object(errorChapters[1]?.error).message, "The requested chapter was not found.");
+        assert.equal(object(errorChapters[2]?.error).message, "The requested chapter belongs to a different work.");
+        assert.deepEqual(object(results.get("knowledge-default")).ok, true);
+        assert.equal(object(object(results.get("knowledge-default")).data).matchMode, "hybrid_exact");
+        const defaultMatches = array(object(object(results.get("knowledge-default")).data).matches).map(object);
+        assert.equal(defaultMatches.some((item) => String(item.type) === "setting" && String(item.title).includes("跃迁")), true);
+        assert.equal(array(object(object(results.get("knowledge-all")).data).matches).length >= 1, true);
+        assert.equal(object(object(results.get("knowledge-all")).data).matchMode, "hybrid_exact_phonetic");
+        const characterSection = object(array(object(object(results.get("character-section")).data).sections)[0]);
+        assert.equal(characterSection.characterName, "哥斯拉");
+        assert.match(String(characterSection.contentMarkdown), /守护地球生态/u);
+        matrixInitialResultsVerified = true;
+      }
+      const bothResultId = matrixExpectedCursor === null ? "chapter-both" : `chapter-both-cursor-${matrixExpectedCursor}`;
+      const bothResult = object(results.get(bothResultId));
+      matrixBothChapterRecords.push(...array(object(bothResult.data).chapters).map(object));
+      const pagination = object(bothResult.pagination);
+      assert.equal(pagination.cursor, matrixExpectedCursor ?? 0);
+      const nextCursor = pagination.nextCursor;
+      if (typeof nextCursor === "number") {
+        assert.ok(nextCursor > (matrixExpectedCursor ?? 0));
+        matrixExpectedCursor = nextCursor;
+        matrixContinuationCalls += 1;
+        toolCalls(outgoing, [{
+          id: `chapter-both-cursor-${nextCursor}`,
+          name: "read_chapters",
+          arguments: { chapterIds, include: "both", cursor: nextCursor }
+        }]);
+        return;
+      }
+      assert.equal(nextCursor, null);
+      for (const chapterId of chapterIds) {
+        const chapterRecords = matrixBothChapterRecords.filter((chapter) => chapter.chapterId === chapterId);
+        assert.ok(chapterRecords.some((chapter) => "summary" in chapter));
+        assert.ok(chapterRecords.some((chapter) => "content" in chapter));
+      }
       matrixVerified = true;
       completion(outgoing, { content: "模型已读取并正确处理全部九组工具结果。" });
       return;
@@ -239,7 +266,7 @@ try {
   const work = await api<JsonObject>("POST", "/works", { title: "AI 工具 E2E" });
   const workId = String(work.id);
   const volume = await api<JsonObject>("POST", `/works/${workId}/volumes`, { title: "第一卷" });
-  for (const [index, content] of ["林舟启动跃迁。", "飞船进入冷却阶段。", "北港记录了返回信标。"].entries()) {
+  for (const [index, content] of ["林舟启动跃迁。", "飞船进入冷却阶段。", "北港记录了返回信标。".repeat(400)].entries()) {
     const chapter = await api<JsonObject>("POST", `/works/${workId}/chapters`, {
       volumeId: String(volume.id),
       title: `第${index + 1}章`,
@@ -283,11 +310,12 @@ try {
   const matrix = await api<JsonObject>("POST", `/works/${workId}/suggestions`, {
     taskType: "chat",
     instruction: "E2E_TOOL_MATRIX",
-    scope: { type: "chapter", chapterId: chapterIds[0] },
+    scope: { type: "none" },
     modelId
   });
   assert.equal(matrix.content, "模型已读取并正确处理全部九组工具结果。");
-  assert.equal(array(matrix.toolCalls).length, 9);
+  assert.ok(matrixContinuationCalls > 0);
+  assert.equal(array(matrix.toolCalls).length, 9 + matrixContinuationCalls);
   assert.equal(matrixVerified, true);
   checked("tool-arguments", "all optional/default/boundary parameter combinations reached the model as structured results");
 
