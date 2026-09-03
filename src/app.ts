@@ -3634,6 +3634,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const permissions = requestPermissions(request, String(updated.workId));
     data(response, redactAiConversation(updated, permissions));
   });
+  app.patch("/api/ai-conversations/:conversationId/title", (request, response) => {
+    const input = parse(z.object({ title: nonEmpty.max(200) }).strict(), request.body);
+    const updated = store.setAiConversationTitle(request.params.conversationId, input.title);
+    const permissions = requestPermissions(request, String(updated.workId));
+    data(response, redactAiConversation(updated, permissions));
+  });
   app.delete("/api/ai-conversations/:conversationId", (request, response) => {
     store.deleteAiConversation(request.params.conversationId);
     data(response, { deleted: true });
