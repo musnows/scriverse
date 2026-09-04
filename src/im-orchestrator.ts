@@ -1,5 +1,11 @@
 import { AppError, notFound } from "./errors.js";
-import { estimateAiTokens, type AiManager, type ImAiPromptInput } from "./ai.js";
+import {
+  estimateAiTokens,
+  type AiManager,
+  type ImAiPromptInput,
+  type ImMessageSearchInput,
+  type ImMessageSearchResult
+} from "./ai.js";
 import type { Store } from "./store.js";
 import type { AuthUser, UserAuthService } from "./user-auth.js";
 import { runWithRequestActor } from "./request-context.js";
@@ -427,6 +433,87 @@ export class ImOrchestrator {
     return JSON.stringify({ ...this.participantList(conversationId), currentSender });
   }
 
+  private searchImMessages(
+    membership: Record<string, unknown>,
+    conversation: Record<string, unknown>,
+    throughSequence: number,
+    input: ImMessageSearchInput
+  ): ImMessageSearchResult {
+    const speakerClauses: string[] = [];
+    const params: Array<string | number> = [
+      requiredString(membership.id),
+      requiredString(conversation.id),
+      Number(conversation.context_epoch),
+      throughSequence,
+      input.startTime,
+      input.endTime
+    ];
+    for (const speaker of input.speakers) {
+      const mention = speaker.match(/^mention:\/\/(user|character)\/(.+)$/u);
+      if (mention) {
+        const speakerId = mention[2] ?? "";
+        if (mention[1] === "user") {
+          speakerClauses.push("(message.sender_kind = 'human' AND (message.sender_user_id = ? OR json_extract(message.sender_snapshot_json, '$.userId') = ?))");
+          params.push(speakerId, speakerId);
+        } else {
+          speakerClauses.push("(message.sender_kind = 'character' AND (message.sender_character_id = ? OR (message.sender_character_id IS NULL AND json_extract(message.sender_snapshot_json, '$.id') = ?)))");
+          params.push(speakerId, speakerId);
+        }
+        continue;
+      }
+      speakerClauses.push(`(
+        message.sender_user_id = ?
+        OR message.sender_character_id = ?
+        OR json_extract(message.sender_snapshot_json, '$.userId') = ?
+        OR json_extract(message.sender_snapshot_json, '$.id') = ?
+        OR json_extract(message.sender_snapshot_json, '$.name') = ?
+        OR json_extract(message.sender_snapshot_json, '$.displayName') = ?
+        OR json_extract(message.sender_snapshot_json, '$.username') = ?
+      )`);
+      params.push(speaker, speaker, speaker, speaker, speaker, speaker, speaker);
+    }
+    const rows = this.db.all(
+      `SELECT message.* FROM im_message_deliveries delivery
+       JOIN im_messages message ON message.id = delivery.message_id
+       WHERE delivery.character_membership_id = ?
+         AND message.conversation_id = ?
+         AND message.context_epoch = ?
+         AND message.sequence <= ?
+         AND message.created_at >= ?
+         AND message.created_at <= ?
+         ${speakerClauses.length > 0 ? `AND (${speakerClauses.join(" OR ")})` : ""}
+       ORDER BY message.sequence
+       LIMIT ?`,
+      ...params,
+      input.limit + 1
+    );
+    return {
+      messages: rows.slice(0, input.limit).map((row) => {
+        const sender = json<Record<string, unknown>>(requiredString(row.sender_snapshot_json), {});
+        const senderKind = requiredString(row.sender_kind);
+        const senderId = senderKind === "human"
+          ? optionalString(row.sender_user_id) ?? optionalString(sender.userId)
+          : senderKind === "character"
+            ? optionalString(row.sender_character_id) ?? optionalString(sender.id)
+            : null;
+        const senderName = optionalString(sender.name)
+          ?? optionalString(sender.displayName)
+          ?? optionalString(sender.username)
+          ?? (senderKind === "system" ? "系统" : "成员");
+        return {
+          id: requiredString(row.id),
+          sequence: Number(row.sequence),
+          senderKind,
+          senderId,
+          sender: { kind: senderKind, id: senderId, name: senderName },
+          content: requiredString(row.content),
+          createdAt: requiredString(row.created_at)
+        };
+      }),
+      hasMore: rows.length > input.limit
+    };
+  }
+
   private characterHistory(
     membership: Record<string, unknown>,
     conversation: Record<string, unknown>,
@@ -727,6 +814,12 @@ export class ImOrchestrator {
       instruction,
       participantContext,
       listMembers: () => this.participantList(requiredString(conversation.id)),
+      searchMessages: (input) => this.searchImMessages(
+        membership,
+        conversation,
+        Number(sourceMessage.sequence),
+        input
+      ),
       history: historyOverride?.history ?? context.history,
       summary: historyOverride?.summary ?? context.summary,
       characterPrompt: kind === "compact"
