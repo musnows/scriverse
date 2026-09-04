@@ -1440,6 +1440,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
     display: grid;
     grid-template-columns: auto minmax(0, 2em);
     align-items: start;
+    justify-content: start;
     word-break: break-all;
   }
   .module-nav > button[data-module="outlines"] {
