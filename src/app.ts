@@ -596,6 +596,7 @@ const modelSchema = z.object({
 
 const aiPromptSchema = z.object({
   systemPrompt: z.string().max(100_000).optional(),
+  systemPromptOverride: z.boolean().optional(),
   imageToolModelId: identifier.nullable().optional(),
   streamIdleTimeoutSeconds: z.number().int().min(MIN_AI_STREAM_IDLE_TIMEOUT_SECONDS).max(MAX_AI_STREAM_IDLE_TIMEOUT_SECONDS).optional()
 });
@@ -743,6 +744,7 @@ const aiProcessStepSchema = z.discriminatedUnion("type", [
 
 const workAiSettingsSchema = z.object({
   systemPrompt: z.string().max(100_000).optional(),
+  systemPromptOverride: z.boolean().optional(),
   dailyTokenQuota: z.number().int().min(1, "Token 额度必须设置大于 0").max(2_000_000_000).nullable().optional(),
   monthlyTokenQuota: z.number().int().min(1, "Token 额度必须设置大于 0").max(2_000_000_000).nullable().optional(),
   autoRunEnabled: z.boolean().optional(),

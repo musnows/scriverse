@@ -696,6 +696,113 @@ describe("IM AI 调度", () => {
     )).toEqual({ content: "我已经确认过在场成员。" });
   });
 
+  it("IM 回复可以按时间范围和发言人筛选聊天记录", async () => {
+    let requestCount = 0;
+    let searchToolResult = "";
+    let memberUserId = "";
+    let seededAt = "";
+    let toolNames: string[] = [];
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "im-search-messages-tool-secret-with-enough-length",
+      serveUi: false,
+      fetchImpl: async (_url, init) => {
+        requestCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        if (requestCount === 1) {
+          toolNames = (body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name);
+          return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+            id: "im-search-messages",
+            type: "function",
+            function: {
+              name: "search_im_messages",
+              arguments: JSON.stringify({ startTime: seededAt, endTime: seededAt, speakers: [memberUserId] })
+            }
+          }] }, finish_reason: "tool_calls" }] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        searchToolResult = messages.filter((message) => message.role === "tool").at(-1)?.content ?? "";
+        return completion("我已经找到指定时间和发言人的记录。", body.stream === true);
+      },
+      aiRetrySleep: async () => undefined
+    });
+    const owner = runtime.auth.register({ username: "search_messages_owner", password: "secure-password-123" }).session.user;
+    const member = runtime.auth.register({ username: "search_messages_human", password: "secure-password-123" }).session.user;
+    memberUserId = member.userId;
+    const models = seedModels(runtime);
+    const character = runWithRequestActor(actor(owner), () => {
+      const work = runtime.store.createWork({ title: "聊天记录筛选作品" });
+      return runtime.store.createCharacter(String(work.id), { name: "聊天记录筛选角色" });
+    });
+    runtime.im.updateSettings(owner.userId, {
+      primaryModelId: models.primaryModelId,
+      fallbackModelId: models.fallbackModelId,
+      retryCount: 1
+    });
+    const group = runtime.im.createGroup(owner, {
+      title: "聊天记录筛选群",
+      characterIds: [String(character.id)],
+      humanUserIds: [member.userId],
+      replyMode: "mention",
+      maxAiMessages: 1
+    });
+    const characterMembership = runtime.database.get(
+      "SELECT id FROM im_character_memberships WHERE conversation_id = ? AND character_id = ?",
+      String(group.id),
+      String(character.id)
+    );
+    const conversation = runtime.database.get(
+      "SELECT context_epoch FROM im_conversations WHERE id = ?",
+      String(group.id)
+    );
+    seededAt = "2026-01-01T00:00:00.000Z";
+    const seededMessageId = "im-seeded-search-message";
+    const seededSequence = Number(runtime.database.get(
+      "SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM im_messages WHERE conversation_id = ?",
+      String(group.id)
+    )?.sequence ?? 1);
+    runtime.database.run(
+      `INSERT INTO im_messages (
+         id, conversation_id, sequence, context_epoch, sender_kind, sender_user_id,
+         sender_snapshot_json, content, created_at
+       ) VALUES (?, ?, ?, ?, 'human', ?, ?, ?, ?)`,
+      seededMessageId,
+      String(group.id),
+      seededSequence,
+      Number(conversation?.context_epoch ?? 1),
+      member.userId,
+      JSON.stringify({ userId: member.userId, username: member.username, displayName: member.displayName }),
+      "这条旧消息应该被筛选出来。",
+      seededAt
+    );
+    runtime.database.run(
+      "INSERT INTO im_message_deliveries (message_id, character_membership_id, delivered_at) VALUES (?, ?, ?)",
+      seededMessageId,
+      String(characterMembership?.id),
+      seededAt
+    );
+    const sent = runtime.im.sendMessage(owner, String(group.id), {
+      content: `mention://character/${character.id} 请查找指定记录。`,
+      requestId: "im-search-messages-tool-0001"
+    });
+    runtime.imOrchestrator.publishMessageResult(sent);
+    const chain = await waitForChain(runtime, String((sent.chain as Record<string, unknown>).id));
+
+    expect(chain).toMatchObject({ status: "limit", generated_count: 1 });
+    expect(requestCount).toBe(2);
+    expect(toolNames).toContain("search_im_messages");
+    expect(searchToolResult).not.toContain("TOOL_NOT_AVAILABLE");
+    expect(searchToolResult).toContain("应该被筛选出来");
+    expect(searchToolResult).toContain(memberUserId);
+    expect(runtime.database.get(
+      "SELECT content FROM im_messages WHERE chain_id = ? AND sender_kind = 'character'",
+      String(chain.id)
+    )).toEqual({ content: "我已经找到指定时间和发言人的记录。" });
+  });
+
   it("IM 群聊角色可在列出成员后查询自己与指定成员的关系", async () => {
     let requestCount = 0;
     let memberToolResult = "";
