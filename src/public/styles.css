@@ -1779,6 +1779,21 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
 .config-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .platform-system-prompt-section { margin-bottom: 36px; }
+.system-prompt-override-settings { margin-top: 12px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
+.system-prompt-override-settings.is-enabled { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.system-prompt-override-settings summary { display: grid; min-height: 40px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; color: var(--muted); font-size: 11px; list-style: none; }
+.system-prompt-override-settings summary::-webkit-details-marker { display: none; }
+.system-prompt-override-settings summary::before { content: "›"; color: var(--muted); font-size: 16px; line-height: 1; transform: rotate(0deg); transition: transform .16s ease; }
+.system-prompt-override-settings[open] summary::before { transform: rotate(90deg); }
+.system-prompt-override-settings summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.system-prompt-override-settings summary strong { color: var(--ink); font-size: 10px; font-weight: 600; }
+.system-prompt-override-settings.is-enabled summary strong { color: var(--accent-dark); }
+.system-prompt-override-body { display: grid; gap: 10px; padding: 12px; border-top: 1px solid var(--line); }
+.system-prompt-override-body > .config-checkbox-field { display: inline-flex; width: fit-content; align-items: center; gap: 8px; margin: 0; color: var(--ink); font-size: 11px; }
+.system-prompt-override-body > .config-checkbox-field input { width: 18px; min-width: 18px; height: 18px; }
+.system-prompt-override-warning { padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.system-prompt-override-warning strong { color: var(--ink); font-size: 11px; }
+.system-prompt-override-warning p { margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
 .platform-image-tool-section { margin-bottom: 0; }
 .platform-image-tool-panel { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .platform-image-tool-field { display: grid; flex: 1 1 360px; gap: 7px; min-width: 0; color: var(--muted); font-size: 10px; }

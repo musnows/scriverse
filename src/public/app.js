@@ -9825,7 +9825,7 @@ const moduleMeta = {
   comments: ["正文协作", "正文评论与待办", "集中查看并处理当前作品所有章节的评论与待办。", ""],
   reviews: ["作者决策", "审核队列", "集中处理冲突、候选设定、低置信度关系和时间问题。", "新增审核项"],
   tasks: ["AI 深度分析", "AI 分析中心", "对全书或指定章节运行人物关系、世界观、设定、事件与一致性分析。", "开始 AI 分析"],
-  "ai-settings": ["书籍提示词", "本书 AI 设置", "本书系统提示词会追加在内置提示词和平台全局提示词之后；任务默认模型只作用于当前作品。", "保存设置"]
+  "ai-settings": ["书籍提示词", "本书 AI 设置", "本书系统提示词默认追加在内置提示词和平台全局提示词之后；可在折叠的高级设置中改为彻底覆写。任务默认模型只作用于当前作品。", "保存设置"]
 };
 
 async function showModule(module) {
@@ -13423,6 +13423,53 @@ function startBackgroundTaskCenter(workId) {
   void refreshBackgroundTaskCenter();
 }
 
+function systemPromptOverrideDetails({ inputId, checked, scope }) {
+  const platformScope = scope === "platform";
+  const consequence = platformScope
+    ? "保存后，普通 AI 请求只会把上方平台提示词作为 system 消息；Scriverse 内置规则、本书提示词、工具指引和时间信息都不会发送。"
+    : "保存后，本书的普通 AI 请求只会把上方本书提示词作为 system 消息；Scriverse 内置规则、平台提示词、工具指引和时间信息都不会发送。";
+  return `<details class="system-prompt-override-settings${checked ? " is-enabled" : ""}" ${checked ? "open" : ""}><summary><span>高级设置</span><strong data-system-prompt-override-state>${checked ? "已选择覆写" : "默认追加"}</strong></summary><div class="system-prompt-override-body"><label class="checkbox-field config-checkbox-field"><input id="${inputId}" type="checkbox" ${checked ? "checked" : ""} aria-describedby="${inputId}-warning">彻底覆写系统提示词</label><div id="${inputId}-warning" class="system-prompt-override-warning" role="alert"><strong>高风险设置</strong><p>${consequence} 空提示词会让请求不携带 system 消息，可能导致上下文、工具和安全约束失效。</p></div></div></details>`;
+}
+
+function syncSystemPromptOverridePresentation(input) {
+  const details = input.closest(".system-prompt-override-settings");
+  details?.classList.toggle("is-enabled", input.checked);
+  const stateLabel = details?.querySelector("[data-system-prompt-override-state]");
+  if (stateLabel) stateLabel.textContent = input.checked ? "已选择覆写" : "默认追加";
+}
+
+const systemPromptOverrideConfirmationByInput = new WeakMap();
+
+async function confirmSystemPromptOverride(input, scopeLabel) {
+  if (!input.checked) {
+    syncSystemPromptOverridePresentation(input);
+    return;
+  }
+  const pendingConfirmation = systemPromptOverrideConfirmationByInput.get(input);
+  if (pendingConfirmation) return pendingConfirmation;
+  input.disabled = true;
+  const confirmation = (async () => {
+    const confirmed = await confirmToast(
+      `开启后，${scopeLabel}提示词将彻底替换 Scriverse 内置系统提示词，模型不会收到内置规则、工具指引和其他追加提示。错误配置可能导致功能异常或安全约束失效，确认继续吗？`,
+      { title: "确认开启系统提示词覆写", confirmLabel: "确认开启" }
+    );
+    if (!confirmed) input.checked = false;
+    syncSystemPromptOverridePresentation(input);
+  })().finally(() => {
+    input.disabled = false;
+    if (systemPromptOverrideConfirmationByInput.get(input) === confirmation) {
+      systemPromptOverrideConfirmationByInput.delete(input);
+    }
+  });
+  systemPromptOverrideConfirmationByInput.set(input, confirmation);
+  return confirmation;
+}
+
+async function waitForSystemPromptOverrideConfirmation(input) {
+  const confirmation = systemPromptOverrideConfirmationByInput.get(input);
+  if (confirmation) await confirmation;
+}
+
 async function renderPlatformAiConfig() {
   const [providers, models, settings, protocolOptions] = await Promise.all([
     api("/api/platform/ai/providers"),
@@ -13440,12 +13487,23 @@ async function renderPlatformAiConfig() {
     const available = isSelectableModel({ ...model, providerStatus: provider?.status, providerConnectionStatus: provider?.connectionStatus });
     return `<option value="${esc(model.id)}" ${model.id === settings.imageToolModelId ? "selected" : ""} ${available || model.id === settings.imageToolModelId ? "" : "disabled"}>${esc(`${available ? "" : "不可用 · "}${modelOptionLabel({ ...model, providerName: model.providerName || provider?.name })}`)}</option>`;
   }).join("");
-  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section><section class="config-section platform-image-tool-section"><div class="config-section-header"><div><h2>多模态读图默认模型</h2><p>Agent 的 image 工具使用这里配置的模型读取设定库图片；作品可以在自己的 AI 设置中覆盖此选择。</p></div></div><div class="platform-image-tool-panel"><label class="platform-image-tool-field"><span>当前平台默认模型</span><select id="platform-image-tool-model" aria-label="平台多模态读图默认模型"><option value="">未配置</option>${imageModelOptions}</select></label><button id="save-platform-image-tool-model" class="ghost-button config-save-button" type="button">保存默认模型</button></div></section><section class="config-section platform-stream-timeout-section"><div class="config-section-header"><div><h2>AI 流事件空闲超时</h2><p>首个流事件或相邻流事件在此时间内没有新数据时，请求会被关闭。默认 90 秒，最低 30 秒，最高 600 秒。</p></div></div><div class="platform-stream-timeout-panel"><label class="platform-stream-timeout-field"><span>超时时间（秒）</span><input id="platform-ai-stream-idle-timeout" type="number" min="30" max="600" step="1" value="${esc(String(settings.streamIdleTimeoutSeconds ?? 90))}" aria-label="AI 流事件空闲超时时间（秒）"></label><button id="save-platform-ai-stream-idle-timeout" class="ghost-button config-save-button" type="button">保存流超时设置</button></div></section><section class="config-section platform-providers-section"><div class="config-section-header"><div><h2>模型供应商配置</h2><p>管理供应商连接、模型列表和连接状态；模型的多模态能力在对应模型配置中设置。</p></div></div>${renderProviderCards(providers, models, protocolOptions)}</section>`;
+  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>默认追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div>${systemPromptOverrideDetails({ inputId: "platform-system-prompt-override", checked: settings.systemPromptOverride === true, scope: "platform" })}<div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section><section class="config-section platform-image-tool-section"><div class="config-section-header"><div><h2>多模态读图默认模型</h2><p>Agent 的 image 工具使用这里配置的模型读取设定库图片；作品可以在自己的 AI 设置中覆盖此选择。</p></div></div><div class="platform-image-tool-panel"><label class="platform-image-tool-field"><span>当前平台默认模型</span><select id="platform-image-tool-model" aria-label="平台多模态读图默认模型"><option value="">未配置</option>${imageModelOptions}</select></label><button id="save-platform-image-tool-model" class="ghost-button config-save-button" type="button">保存默认模型</button></div></section><section class="config-section platform-stream-timeout-section"><div class="config-section-header"><div><h2>AI 流事件空闲超时</h2><p>首个流事件或相邻流事件在此时间内没有新数据时，请求会被关闭。默认 90 秒，最低 30 秒，最高 600 秒。</p></div></div><div class="platform-stream-timeout-panel"><label class="platform-stream-timeout-field"><span>超时时间（秒）</span><input id="platform-ai-stream-idle-timeout" type="number" min="30" max="600" step="1" value="${esc(String(settings.streamIdleTimeoutSeconds ?? 90))}" aria-label="AI 流事件空闲超时时间（秒）"></label><button id="save-platform-ai-stream-idle-timeout" class="ghost-button config-save-button" type="button">保存流超时设置</button></div></section><section class="config-section platform-providers-section"><div class="config-section-header"><div><h2>模型供应商配置</h2><p>管理供应商连接、模型列表和连接状态；模型的多模态能力在对应模型配置中设置。</p></div></div>${renderProviderCards(providers, models, protocolOptions)}</section>`;
+  $("#platform-system-prompt-override").addEventListener("change", (event) => {
+    void confirmSystemPromptOverride(event.currentTarget, "平台全局");
+  });
   $("#save-platform-system-prompt").addEventListener("click", async () => {
     const button = $("#save-platform-system-prompt");
     button.disabled = true;
     try {
-      await api("/api/platform/ai/settings", { method: "PATCH", body: { systemPrompt: $("#platform-system-prompt").value } });
+      const overrideInput = $("#platform-system-prompt-override");
+      await waitForSystemPromptOverrideConfirmation(overrideInput);
+      await api("/api/platform/ai/settings", {
+        method: "PATCH",
+        body: {
+          systemPrompt: $("#platform-system-prompt").value,
+          systemPromptOverride: overrideInput.checked
+        }
+      });
       toast("平台全局系统提示词已保存");
     } catch (error) {
       toast(error.message, "error");
@@ -13861,6 +13919,18 @@ async function renderBookAiSettings() {
       const available = isAvailableConfiguredModel(model);
       return `<option value="${esc(model.id)}" ${model.id === selectedId ? "selected" : ""} ${available || model.id === selectedId ? "" : "disabled"}>${esc(`${available ? "" : "不可用 · "}${modelOptionLabel(model)}`)}</option>`;
     }).join("");
+  const workSystemPrompt = host.querySelector("#work-system-prompt");
+  const workSystemPromptDescription = workSystemPromptSection?.querySelector(".config-section-header p");
+  if (workSystemPromptDescription) {
+    workSystemPromptDescription.textContent = `默认追加在内置系统提示词和平台全局系统提示词之后，只影响《${state.work.title}》的 AI 请求。`;
+  }
+  workSystemPrompt?.closest(".field-label")?.insertAdjacentHTML(
+    "afterend",
+    systemPromptOverrideDetails({ inputId: "work-system-prompt-override", checked: settings.systemPromptOverride === true, scope: "work" })
+  );
+  $("#work-system-prompt-override").addEventListener("change", (event) => {
+    void confirmSystemPromptOverride(event.currentTarget, "本书");
+  });
   const semanticSection = `<section id="semantic-search-settings" class="config-section semantic-search-settings"><div class="config-section-header"><div><h2>主动语义检索（RAG）</h2><p>与拼音索引并列维护。Embedding 和 rerank 复用平台供应商的端点与凭证保险库；普通聊天、续写、润色和分析不会自动调用此通道。</p></div></div><div class="semantic-settings-grid"><label class="checkbox-field config-checkbox-field semantic-enabled-field"><input id="semantic-search-enabled" type="checkbox" ${settings.semanticSearchEnabled ? "checked" : ""}>启用主动语义检索</label><label>Embedding 模型<select id="semantic-embedding-model" aria-label="RAG Embedding 模型"><option value="">请选择 embedding 模型</option>${semanticModelOptions("embedding", settings.semanticEmbeddingModelId)}</select></label><label>Rerank 模型（可选）<select id="semantic-rerank-model" aria-label="RAG Rerank 模型"><option value="">不使用 rerank</option>${semanticModelOptions("rerank", settings.semanticRerankModelId)}</select></label><label>向量维度<input id="semantic-vector-dimension" type="number" min="1" max="65536" value="${esc(String(settings.semanticVectorDimension ?? 1024))}"></label><label>语义召回数量<input id="semantic-recall-limit" type="number" min="1" max="200" value="${esc(String(settings.semanticRecallLimit ?? 20))}"></label><label>展示结果数量<input id="semantic-result-limit" type="number" min="1" max="100" value="${esc(String(settings.semanticResultLimit ?? 12))}"></label><label>上下文预算（Token）<input id="semantic-budget-tokens" type="number" min="256" max="100000" value="${esc(String(settings.semanticBudgetTokens ?? 4000))}"></label><label>RRF 语义通道权重<input id="semantic-channel-weight" type="number" min="0.1" max="5" step="0.1" value="${esc(String(settings.semanticChannelWeight ?? 1))}"></label></div><p class="usage-measurement-note">API Key 由所选模型所属供应商的凭证保险库加密保存；此页面不会读取或返回明文密钥。更换端点、模型、维度或分片规则后必须完整重建，旧向量不会继续参与检索。</p><div id="semantic-search-index-status" role="status" aria-live="polite">${semanticIndexStatusMarkup(semanticIndex)}</div><div class="relationship-index-actions"><button id="save-semantic-search-settings" class="primary-button config-save-button" type="button">保存 RAG 配置</button><button id="sync-semantic-search-index" class="ghost-button config-save-button" type="button">同步增量</button><button id="refresh-semantic-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-semantic-search-index" class="ghost-button config-save-button" type="button">完整重建 RAG</button></div></section>`;
   const relationshipSection = [...host.querySelectorAll(".config-section")].find((section) => section.querySelector("h2")?.textContent === "人物关系拼音索引");
   relationshipSection?.insertAdjacentHTML("afterend", semanticSection);
@@ -14123,7 +14193,15 @@ async function renderBookAiSettings() {
     const button = $("#save-work-system-prompt");
     button.disabled = true;
     try {
-      await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { systemPrompt: $("#work-system-prompt").value } });
+      const overrideInput = $("#work-system-prompt-override");
+      await waitForSystemPromptOverrideConfirmation(overrideInput);
+      await api(`/api/works/${state.work.id}/ai-settings`, {
+        method: "PATCH",
+        body: {
+          systemPrompt: $("#work-system-prompt").value,
+          systemPromptOverride: overrideInput.checked
+        }
+      });
       toast("本书系统提示词已保存");
       setAiContextMeter(null);
     } catch (error) {

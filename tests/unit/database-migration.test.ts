@@ -2623,4 +2623,36 @@ describe("数据库版本化迁移", () => {
     expect(database.all("PRAGMA foreign_key_check")).toEqual([]);
     database.close();
   });
+
+  it("迁移 137 为平台与作品系统提示词增加默认关闭的覆写开关", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-system-prompt-override-"));
+    roots.push(root);
+    const filename = join(root, "system-prompt-override.db");
+    const current = new Database(filename);
+    const currentStore = new Store(current);
+    const work = currentStore.createWork({ title: "系统提示词迁移作品" });
+    currentStore.updatePlatformAiSettings({ systemPrompt: "保留平台提示词" });
+    currentStore.updateWorkAiSettings(String(work.id), { systemPrompt: "保留作品提示词" });
+    current.run("ALTER TABLE platform_ai_settings DROP COLUMN system_prompt_override_enabled");
+    current.run("ALTER TABLE work_ai_settings DROP COLUMN system_prompt_override_enabled");
+    current.run("DELETE FROM schema_migrations WHERE version = 137");
+    current.close();
+
+    const migrated = new Database(filename);
+    const migratedStore = new Store(migrated);
+    expect(migrated.all("PRAGMA table_info(platform_ai_settings)").map((column) => column.name)).toContain("system_prompt_override_enabled");
+    expect(migrated.all("PRAGMA table_info(work_ai_settings)").map((column) => column.name)).toContain("system_prompt_override_enabled");
+    expect(migratedStore.getPlatformAiSettings()).toMatchObject({
+      systemPrompt: "保留平台提示词",
+      systemPromptOverride: false
+    });
+    expect(migratedStore.getWorkAiSettings(String(work.id))).toMatchObject({
+      systemPrompt: "保留作品提示词",
+      systemPromptOverride: false
+    });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 137")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
 });

@@ -7786,8 +7786,14 @@ export class AiManager {
       ? this.buildRoleplayUserCharacterPrompt(input.workId, roleplayUserCharacterId)
       : "";
     const skillsPrompt = writingSkillsPrompt(input, roleplayCharacterId);
-    const platformPrompt = roleplayCharacterId ? "" : String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
-    const workPrompt = roleplayCharacterId ? "" : String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
+    const platformAiSettings = roleplayCharacterId ? null : this.store.getPlatformAiSettings();
+    const workAiSettings = roleplayCharacterId ? null : this.store.getWorkAiSettings(input.workId);
+    const platformPrompt = platformAiSettings ? String(platformAiSettings.systemPrompt ?? "").trim() : "";
+    const workPrompt = workAiSettings ? String(workAiSettings.systemPrompt ?? "").trim() : "";
+    // 提示词覆写：作品级开关优先于平台级；开启后整段系统提示词只保留覆写文本。
+    const platformPromptOverride = Boolean(platformAiSettings?.systemPromptOverride);
+    const workPromptOverride = Boolean(workAiSettings?.systemPromptOverride);
+    const promptOverrideText = workPromptOverride ? workPrompt : platformPromptOverride ? platformPrompt : "";
     const enabledToolIds = this.enabledAgentToolIds(
       input.workId,
       input.taskType,
@@ -7936,23 +7942,28 @@ export class AiManager {
       const interactionState = input.conversationId
         ? this.buildAiInteractionState(input.workId, input.conversationId)
         : "";
-      systemPrompt = wrapSystemPrompt([
-        wrapAiContextRegion("core_rules", coreRules, { escape: false }),
-        wrapAiContextRegion("skills", skillsPrompt, { escape: false }),
-        wrapAiContextRegion("tool_guidance", combinedToolGuidance, { escape: false }),
-        wrapAiContextRegion("interactive_tool_guidance", [...interactiveWriteGuidance, ...askUserQuestionGuidance].join("\n"), { escape: false }),
-        wrapAiContextRegion(
-          "platform_system_prompt",
-          platformPrompt ? `平台全局追加系统提示词：\n${platformPrompt}` : ""
-        ),
-        wrapAiContextRegion(
-          "work_system_prompt",
-          workPrompt ? `本书追加系统提示词：\n${workPrompt}` : ""
-        ),
-        wrapAiContextRegion("extra_system_prompt", input.extraSystemPrompt ?? "", { escape: false }),
-        wrapAiContextRegion("ai_interaction_state", interactionState ? `与作者的待处理交互：\n${interactionState}` : ""),
-        wrapAiContextRegion("current_time", systemClock, { escape: false })
-      ]);
+      if (workPromptOverride || platformPromptOverride) {
+        // 覆写模式：原样发送用户配置，内置规则、标签和其他追加提示词都不再注入。
+        systemPrompt = promptOverrideText;
+      } else {
+        systemPrompt = wrapSystemPrompt([
+          wrapAiContextRegion("core_rules", coreRules, { escape: false }),
+          wrapAiContextRegion("skills", skillsPrompt, { escape: false }),
+          wrapAiContextRegion("tool_guidance", combinedToolGuidance, { escape: false }),
+          wrapAiContextRegion("interactive_tool_guidance", [...interactiveWriteGuidance, ...askUserQuestionGuidance].join("\n"), { escape: false }),
+          wrapAiContextRegion(
+            "platform_system_prompt",
+            platformPrompt ? `平台全局追加系统提示词：\n${platformPrompt}` : ""
+          ),
+          wrapAiContextRegion(
+            "work_system_prompt",
+            workPrompt ? `本书追加系统提示词：\n${workPrompt}` : ""
+          ),
+          wrapAiContextRegion("extra_system_prompt", input.extraSystemPrompt ?? "", { escape: false }),
+          wrapAiContextRegion("ai_interaction_state", interactionState ? `与作者的待处理交互：\n${interactionState}` : ""),
+          wrapAiContextRegion("current_time", systemClock, { escape: false })
+        ]);
+      }
     }
     const preparedContext = context.trim();
     const roleplaySceneContext = input.im
