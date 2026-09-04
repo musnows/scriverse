@@ -1798,6 +1798,7 @@ export class Store {
     const streamIdleTimeoutValue = Number(row?.stream_idle_timeout_seconds);
     return {
       systemPrompt: String(row?.system_prompt ?? ""),
+      systemPromptOverride: Number(row?.system_prompt_override_enabled ?? 0) === 1,
       imageToolModelId: row?.image_tool_model_id === null || row?.image_tool_model_id === undefined
         ? null
         : String(row.image_tool_model_id),
@@ -1810,6 +1811,7 @@ export class Store {
 
   updatePlatformAiSettings(input: {
     systemPrompt?: string;
+    systemPromptOverride?: boolean;
     imageToolModelId?: string | null;
     streamIdleTimeoutSeconds?: number;
   }): Record<string, unknown> {
@@ -1819,13 +1821,16 @@ export class Store {
     const streamIdleTimeoutSeconds = normalizeAiStreamIdleTimeoutSeconds(
       input.streamIdleTimeoutSeconds ?? currentStreamIdleTimeoutSeconds
     );
+    const nextOverride = input.systemPromptOverride ?? Boolean(current.systemPromptOverride);
     this.db.run(
-      `INSERT INTO platform_ai_settings (id, system_prompt, image_tool_model_id, stream_idle_timeout_seconds, updated_at) VALUES (1, ?, ?, ?, ?)
+      `INSERT INTO platform_ai_settings (id, system_prompt, system_prompt_override_enabled, image_tool_model_id, stream_idle_timeout_seconds, updated_at) VALUES (1, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET system_prompt = excluded.system_prompt,
+         system_prompt_override_enabled = excluded.system_prompt_override_enabled,
          image_tool_model_id = excluded.image_tool_model_id,
          stream_idle_timeout_seconds = excluded.stream_idle_timeout_seconds,
          updated_at = excluded.updated_at`,
       input.systemPrompt ?? String(current.systemPrompt),
+      nextOverride ? 1 : 0,
       input.imageToolModelId === undefined
         ? (current.imageToolModelId === null ? null : String(current.imageToolModelId))
         : input.imageToolModelId,
@@ -1915,6 +1920,7 @@ export class Store {
     return {
       workId,
       systemPrompt: String(row?.system_prompt ?? ""),
+      systemPromptOverride: Number(row?.system_prompt_override_enabled ?? 0) === 1,
       dailyTokenQuota: row?.daily_token_quota === null || row?.daily_token_quota === undefined
         ? null
         : Math.max(1, Number(row.daily_token_quota)),
@@ -1962,6 +1968,7 @@ export class Store {
 
   updateWorkAiSettings(workId: string, input: {
     systemPrompt?: string;
+    systemPromptOverride?: boolean;
     dailyTokenQuota?: number | null;
     monthlyTokenQuota?: number | null;
     autoRunEnabled?: boolean;
@@ -1984,6 +1991,7 @@ export class Store {
     const maximumAgentToolCallLimit = resolveMaxAgentToolCallLimit();
     const timestamp = now();
     const nextPrompt = input.systemPrompt ?? String(current.systemPrompt);
+    const nextSystemPromptOverride = input.systemPromptOverride ?? Boolean(current.systemPromptOverride);
     const nextDailyTokenQuota = input.dailyTokenQuota === undefined
       ? (current.dailyTokenQuota === null ? null : Number(current.dailyTokenQuota))
       : input.dailyTokenQuota;
@@ -2010,14 +2018,15 @@ export class Store {
       : input.titleGenerationModelId?.trim() || null;
     this.db.run(
       `INSERT INTO work_ai_settings (
-         work_id, system_prompt, daily_token_quota, monthly_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
+         work_id, system_prompt, system_prompt_override_enabled, daily_token_quota, monthly_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_stability_delay_minutes, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
          context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
          agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
+         system_prompt_override_enabled = excluded.system_prompt_override_enabled,
          daily_token_quota = excluded.daily_token_quota,
          monthly_token_quota = excluded.monthly_token_quota,
          auto_run_enabled = excluded.auto_run_enabled,
@@ -2041,6 +2050,7 @@ export class Store {
          updated_at = excluded.updated_at`,
       workId,
       nextPrompt,
+      nextSystemPromptOverride ? 1 : 0,
       nextDailyTokenQuota,
       nextMonthlyTokenQuota,
       nextEnabled ? 1 : 0,
@@ -2065,6 +2075,7 @@ export class Store {
     );
     this.audit(workId, "work.ai-settings.updated", "work-ai-settings", workId, {
       systemPromptChanged: input.systemPrompt !== undefined,
+      systemPromptOverride: nextSystemPromptOverride,
       dailyTokenQuota: nextDailyTokenQuota,
       monthlyTokenQuota: nextMonthlyTokenQuota,
       autoRunEnabled: nextEnabled,

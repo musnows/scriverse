@@ -1422,6 +1422,72 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(secondChapter.body.data.title).toBe("第二章");
   });
 
+  it("开启系统提示词覆写后仅发送覆写文本且作品级优先", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+
+    const requestBodies: Array<{ messages: Array<{ content: string }> }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      requestBodies.push(JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "覆写提示词已生效。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    await request(runtime.app).patch("/api/platform/ai/settings").send({
+      systemPrompt: "平台覆写：只遵循这一条规则。",
+      systemPromptOverride: true
+    }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ systemPrompt: "本书追加：哥斯拉不得离开地球。" }).expect(200);
+
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "检查平台覆写",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+    const platformOverridePrompt = String(requestBodies.at(-1)?.messages[0]?.content ?? "");
+    expect(platformOverridePrompt).toContain("平台覆写：只遵循这一条规则。");
+    expect(platformOverridePrompt).not.toContain("作者锁定的事实是不可违反的硬约束");
+    expect(platformOverridePrompt).not.toContain("本书追加：哥斯拉不得离开地球。");
+    expect(platformOverridePrompt).not.toContain("<current_time>");
+
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      systemPrompt: "本书覆写：作品规则优先。",
+      systemPromptOverride: true
+    }).expect(200);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "检查作品覆写",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+    const workOverridePrompt = String(requestBodies.at(-1)?.messages[0]?.content ?? "");
+    expect(workOverridePrompt).toContain("本书覆写：作品规则优先。");
+    expect(workOverridePrompt).not.toContain("平台覆写：只遵循这一条规则。");
+    expect(workOverridePrompt).not.toContain("作者锁定的事实是不可违反的硬约束");
+
+    await request(runtime.app).patch("/api/platform/ai/settings").send({ systemPromptOverride: false }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      systemPrompt: "本书追加：哥斯拉不得离开地球。",
+      systemPromptOverride: false
+    }).expect(200);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "检查追加恢复",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+    const restoredPrompt = String(requestBodies.at(-1)?.messages[0]?.content ?? "");
+    expect(restoredPrompt).toContain("作者锁定的事实是不可违反的硬约束");
+    expect(restoredPrompt).toContain("平台覆写：只遵循这一条规则。");
+    expect(restoredPrompt).toContain("本书追加：哥斯拉不得离开地球。");
+
+    const platformSettings = await request(runtime.app).get("/api/platform/ai/settings").expect(200);
+    expect(platformSettings.body.data.systemPromptOverride).toBe(false);
+    const workSettings = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);
+    expect(workSettings.body.data.systemPromptOverride).toBe(false);
+  });
+
   it("功能模型列表排除禁用模型但保留历史任务中的模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
