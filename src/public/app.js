@@ -13438,17 +13438,36 @@ function syncSystemPromptOverridePresentation(input) {
   if (stateLabel) stateLabel.textContent = input.checked ? "已选择覆写" : "默认追加";
 }
 
+const systemPromptOverrideConfirmationByInput = new WeakMap();
+
 async function confirmSystemPromptOverride(input, scopeLabel) {
   if (!input.checked) {
     syncSystemPromptOverridePresentation(input);
     return;
   }
-  const confirmed = await confirmToast(
-    `开启后，${scopeLabel}提示词将彻底替换 Scriverse 内置系统提示词，模型不会收到内置规则、工具指引和其他追加提示。错误配置可能导致功能异常或安全约束失效，确认继续吗？`,
-    { title: "确认开启系统提示词覆写", confirmLabel: "确认开启" }
-  );
-  if (!confirmed) input.checked = false;
-  syncSystemPromptOverridePresentation(input);
+  const pendingConfirmation = systemPromptOverrideConfirmationByInput.get(input);
+  if (pendingConfirmation) return pendingConfirmation;
+  input.disabled = true;
+  const confirmation = (async () => {
+    const confirmed = await confirmToast(
+      `开启后，${scopeLabel}提示词将彻底替换 Scriverse 内置系统提示词，模型不会收到内置规则、工具指引和其他追加提示。错误配置可能导致功能异常或安全约束失效，确认继续吗？`,
+      { title: "确认开启系统提示词覆写", confirmLabel: "确认开启" }
+    );
+    if (!confirmed) input.checked = false;
+    syncSystemPromptOverridePresentation(input);
+  })().finally(() => {
+    input.disabled = false;
+    if (systemPromptOverrideConfirmationByInput.get(input) === confirmation) {
+      systemPromptOverrideConfirmationByInput.delete(input);
+    }
+  });
+  systemPromptOverrideConfirmationByInput.set(input, confirmation);
+  return confirmation;
+}
+
+async function waitForSystemPromptOverrideConfirmation(input) {
+  const confirmation = systemPromptOverrideConfirmationByInput.get(input);
+  if (confirmation) await confirmation;
 }
 
 async function renderPlatformAiConfig() {
@@ -13476,11 +13495,13 @@ async function renderPlatformAiConfig() {
     const button = $("#save-platform-system-prompt");
     button.disabled = true;
     try {
+      const overrideInput = $("#platform-system-prompt-override");
+      await waitForSystemPromptOverrideConfirmation(overrideInput);
       await api("/api/platform/ai/settings", {
         method: "PATCH",
         body: {
           systemPrompt: $("#platform-system-prompt").value,
-          systemPromptOverride: $("#platform-system-prompt-override").checked
+          systemPromptOverride: overrideInput.checked
         }
       });
       toast("平台全局系统提示词已保存");
@@ -14172,11 +14193,13 @@ async function renderBookAiSettings() {
     const button = $("#save-work-system-prompt");
     button.disabled = true;
     try {
+      const overrideInput = $("#work-system-prompt-override");
+      await waitForSystemPromptOverrideConfirmation(overrideInput);
       await api(`/api/works/${state.work.id}/ai-settings`, {
         method: "PATCH",
         body: {
           systemPrompt: $("#work-system-prompt").value,
-          systemPromptOverride: $("#work-system-prompt-override").checked
+          systemPromptOverride: overrideInput.checked
         }
       });
       toast("本书系统提示词已保存");
