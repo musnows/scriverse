@@ -7895,10 +7895,8 @@ export class AiManager {
         ? this.buildAiInteractionState(input.workId, input.conversationId)
         : "";
       if (workPromptOverride || platformPromptOverride) {
-        // 覆写模式：内置规则、技能、工具指引、追加提示词、交互状态与时钟全部不发送。
-        systemPrompt = wrapSystemPrompt([
-          wrapAiContextRegion("system_prompt_override", promptOverrideText, { escape: false })
-        ]);
+        // 覆写模式：原样发送用户配置，内置规则、标签和其他追加提示词都不再注入。
+        systemPrompt = promptOverrideText;
       } else {
         systemPrompt = wrapSystemPrompt([
           wrapAiContextRegion("core_rules", coreRules, { escape: false }),

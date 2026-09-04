@@ -1433,10 +1433,11 @@ describe("AI 供应商、模型与建议 API", () => {
       return new Response(JSON.stringify({ choices: [{ message: { content: "覆写提示词已生效。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
 
-    await request(runtime.app).patch("/api/platform/ai/settings").send({
+    const platformOverrideSettings = await request(runtime.app).patch("/api/platform/ai/settings").send({
       systemPrompt: "平台覆写：只遵循这一条规则。",
       systemPromptOverride: true
     }).expect(200);
+    expect(platformOverrideSettings.body.data.systemPromptOverride).toBe(true);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ systemPrompt: "本书追加：哥斯拉不得离开地球。" }).expect(200);
 
     await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
@@ -1446,15 +1447,13 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId
     }).expect(201);
     const platformOverridePrompt = String(requestBodies.at(-1)?.messages[0]?.content ?? "");
-    expect(platformOverridePrompt).toContain("平台覆写：只遵循这一条规则。");
-    expect(platformOverridePrompt).not.toContain("作者锁定的事实是不可违反的硬约束");
-    expect(platformOverridePrompt).not.toContain("本书追加：哥斯拉不得离开地球。");
-    expect(platformOverridePrompt).not.toContain("<current_time>");
+    expect(platformOverridePrompt).toBe("平台覆写：只遵循这一条规则。");
 
-    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+    const workOverrideSettings = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       systemPrompt: "本书覆写：作品规则优先。",
       systemPromptOverride: true
     }).expect(200);
+    expect(workOverrideSettings.body.data.systemPromptOverride).toBe(true);
     await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "chat",
       instruction: "检查作品覆写",
@@ -1462,9 +1461,7 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId
     }).expect(201);
     const workOverridePrompt = String(requestBodies.at(-1)?.messages[0]?.content ?? "");
-    expect(workOverridePrompt).toContain("本书覆写：作品规则优先。");
-    expect(workOverridePrompt).not.toContain("平台覆写：只遵循这一条规则。");
-    expect(workOverridePrompt).not.toContain("作者锁定的事实是不可违反的硬约束");
+    expect(workOverridePrompt).toBe("本书覆写：作品规则优先。");
 
     await request(runtime.app).patch("/api/platform/ai/settings").send({ systemPromptOverride: false }).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
