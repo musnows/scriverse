@@ -1440,6 +1440,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
     display: grid;
     grid-template-columns: auto minmax(0, 2em);
     align-items: start;
+    justify-content: start;
     word-break: break-all;
   }
   .module-nav > button[data-module="outlines"] {
@@ -3535,6 +3536,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .dialog-fields .form-field-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
 .dialog-fields label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .dialog-fields input, .dialog-fields textarea, .dialog-fields select { width: 100%; padding: 9px 10px; font-size: 13px; }
+.dialog-fields input[type="checkbox"] { flex: 0 0 16px; width: 16px; min-width: 16px; height: 16px; min-height: 16px; margin: 0; padding: 0; }
 .dialog-fields select { padding-inline-end: 28px; }
 .dialog-fields .character-extraction-candidate-toggle { display: inline-flex; width: auto; align-items: center; gap: 7px; margin: 0; color: var(--ink); font-size: 9px; white-space: nowrap; }
 .dialog-fields .character-extraction-candidate-toggle input[type="checkbox"] { flex: 0 0 18px; width: 18px; min-width: 18px; height: 18px; padding: 0; }
@@ -3585,6 +3587,14 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .model-capability-option small, .model-multimodal-note { color: var(--muted); font-size: 9px; line-height: 1.5; }
 .model-capability-option:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 62%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
 .model-multimodal-note { margin: 0 2px; }
+#form-dialog:has(.model-kind-fields) { width: min(720px, 92vw); }
+#dialog-fields:has(.model-kind-fields) { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+#dialog-fields:has(.model-kind-fields) [data-chat-model-fields] { display: contents; }
+#dialog-fields:has(.model-kind-fields) > .model-kind-fields,
+#dialog-fields:has(.model-kind-fields) > .checkbox-field,
+#dialog-fields:has(.model-kind-fields) .chip-field,
+#dialog-fields:has(.model-kind-fields) .model-multimodal-fields,
+#dialog-fields:has(.model-kind-fields) .model-connection-test { grid-column: 1 / -1; }
 .analysis-type-description { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
 .task-chapter-field { transition: opacity .15s ease; }
 .task-chapter-field.is-disabled { opacity: .48; }
@@ -4482,6 +4492,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
     margin: auto;
     border-radius: 10px;
   }
+  #form-dialog:has(.model-kind-fields) { width: calc(100vw - 20px); max-width: calc(100vw - 20px); }
   .dialog-header { padding: 14px 16px 12px; }
   .dialog-header h2 { font-size: 20px; }
   .dialog-title-input { width: min(100%, calc(100vw - 100px)); font-size: 20px; }
@@ -4586,6 +4597,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .book-shelf { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 12px; max-width: none; }
   .book-add-card { min-height: 220px; }
   .onboarding-popover { width: calc(100vw - 20px); }
+}
+
+@media (max-width: 480px) {
+  #dialog-fields:has(.model-kind-fields) { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 850px) {
