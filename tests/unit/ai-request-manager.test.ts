@@ -3,6 +3,23 @@ import { describe, expect, it } from "vitest";
 import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "../../src/public/ai-request-manager.js";
 
 describe("AI 请求生命周期", () => {
+  it.each(["finish", "cancel", "cancelAll"])("waits for the original request before a question continuation (%s)", async (action) => {
+    const manager = createAiRequestManager();
+    const request = manager.begin({ tabId: "tab-a", workId: "work-a" });
+    let settled = false;
+    const idle = manager.whenIdle("tab-a").then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await manager.whenIdle("tab-b");
+    expect(manager.isCurrent(request)).toBe(true);
+    if (action === "finish") manager.finish(request);
+    else if (action === "cancel") manager.cancel("Cancelled", "tab-a");
+    else manager.cancelAll("Cancelled");
+    await idle;
+    expect(settled).toBe(true);
+    expect(manager.hasActive("tab-a")).toBe(false);
+  });
+
   it("为连续请求分配递增代次并取消旧请求", () => {
     const manager = createAiRequestManager();
     const first = manager.begin({ workId: "work-a", conversationId: "conversation-a" });

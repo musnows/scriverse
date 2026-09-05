@@ -14,7 +14,7 @@ import {
 } from "/roleplay-turn.js?v=20260823-ai-roleplay-scene-turn-v2";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { createAiChatTabManager, normalizeAiChatTabLimit } from "/ai-chat-tabs.js?v=20260816-ai-chat-switcher-v2";
-import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260816-ai-chat-tabs-v1";
+import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260905-question-stream-v2";
 import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
 import { CHAPTER_PARAGRAPH_INDENT, calculateChapterCaretScroll, chapterLineIndexAtOffset, insertIndentedParagraph } from "/chapter-editor-behavior.js?v=20260828-centered-scroll-v1";
@@ -665,8 +665,8 @@ function aiSendButtonIconMarkup(stateName) {
 
 function syncAiRequestControls() {
   const activeTabId = activeAiChatTab()?.id;
-  const sending = aiRequestManager.hasActive(activeTabId);
   const continuingQuestion = activeTabId ? aiQuestionContinuationTabIds.has(activeTabId) : false;
+  const sending = aiRequestManager.hasActive(activeTabId) && !continuingQuestion;
   const switching = aiConversationNavigationPending !== null;
   const button = $("#ai-send");
   const stateName = sending ? "stop" : (switching || continuingQuestion) ? "switching" : "send";
@@ -3532,18 +3532,23 @@ async function openAiUserQuestionDialog(questionId) {
   }
 }
 
-function beginAiQuestionContinuationUi(conversationId) {
+async function beginAiQuestionContinuationUi(conversationId) {
   const tab = conversationId ? aiChatTabManager.findByConversation(conversationId) : null;
   if (!tab) return null;
+  const workId = state.work.id;
+  await aiRequestManager.whenIdle(tab.id);
+  if (state.work?.id !== workId || !aiChatTabManager.get(tab.id)) throw createAiRequestAbortError("AI 请求目标已切换");
+  const requestHolder = { snapshot: aiRequestManager.begin({ tabId: tab.id, workId, conversationId }) };
   aiQuestionContinuationTabIds.add(tab.id);
   setAiChatTabStatus(tab, "streaming");
   if (isActiveAiChatTab(tab)) syncAiRequestControls();
   scrollAiFeedToBottom(tab.feed);
-  return { tab };
+  return { tab, requestHolder };
 }
 
 function finishAiQuestionContinuationUi(continuationUi, failed = false) {
   if (!continuationUi) return;
+  aiRequestManager.finish(continuationUi.requestHolder.snapshot);
   aiQuestionContinuationTabIds.delete(continuationUi.tab.id);
   if (aiChatTabManager.get(continuationUi.tab.id)) setAiChatTabStatus(continuationUi.tab, failed ? "error" : "ready");
   if (isActiveAiChatTab(continuationUi.tab)) syncAiRequestControls();
@@ -3557,7 +3562,7 @@ async function reloadAiQuestionConversation(conversationId) {
   if (String(conversation.workId ?? "") !== String(state.work?.id ?? "")) throw new Error("AI 对话不属于当前作品");
   upsertAiConversationSummary(conversation);
   applyConversationToAiChatTab(tab, conversation);
-  activateAiChatTab(tab.id, { persistCurrent: false, force: true });
+  if (isActiveAiChatTab(tab)) activateAiChatTab(tab.id, { persistCurrent: false, force: true });
   return conversation;
 }
 
@@ -3577,9 +3582,13 @@ async function respondAiUserQuestion(questionId, payload) {
     const conversationId = typeof knownQuestion?.conversationId === "string" ? knownQuestion.conversationId : null;
     if (questionDialog.open) questionDialog.close();
     if (approvalCenterDialog.open) approvalCenterDialog.close();
-    continuationUi = beginAiQuestionContinuationUi(conversationId);
+    continuationUi = await beginAiQuestionContinuationUi(conversationId);
     let question;
-    if (payload.action === "reject") {
+    if (continuationUi) {
+      const endpoint = questionsEndpoint(`/${encodeURIComponent(String(questionId))}/${payload.action === "reject" ? "reject" : "answer"}`);
+      const streamed = await streamChat(continuationUi.requestHolder, payload.action === "reject" ? {} : { answers: payload.answers }, createAiIdempotencyKey(), { endpoint });
+      question = streamed.question;
+    } else if (payload.action === "reject") {
       question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/reject`), { method: "POST" });
     } else {
       question = await api(questionsEndpoint(`/${encodeURIComponent(String(questionId))}/answer`), {
@@ -3588,8 +3597,7 @@ async function respondAiUserQuestion(questionId, payload) {
       });
     }
     cacheAiQuestionView(question);
-    currentAiQuestionDialogView = question;
-    aiQuestionDialogQuestionId = String(question.id);
+    if (aiQuestionDialogQuestionId === String(question.id)) currentAiQuestionDialogView = question;
     await reloadAiQuestionConversation(question.conversationId ?? conversationId);
     toast(payload.action === "reject" ? "已跳过该提问批次，AI 已继续处理" : "全部回答已提交，AI 已继续处理");
     return question;
@@ -3609,6 +3617,7 @@ async function respondAiUserQuestion(questionId, payload) {
   } finally {
     finishAiQuestionContinuationUi(continuationUi, continuationFailed);
     aiQuestionDialogBusy = false;
+    if (questionDialog.open && currentAiQuestionDialogView?.status === "pending") renderAiUserQuestionOptions(currentAiQuestionDialogView);
   }
 }
 
@@ -18313,7 +18322,7 @@ function renderAiStreamingCharacterProgress(meta, visibleCharacters) {
   meta.replaceChildren("正在生成 · ", createAiStreamCharacterCount(visible), " 字");
 }
 
-async function streamChat(requestHolder, body, idempotencyKey) {
+async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null } = {}) {
   const tab = aiChatTabForRequest(requestHolder.snapshot);
   if (!tab) throw createAiRequestAbortError("Agent 对话页签已关闭");
   const feed = tab.feed;
@@ -18336,7 +18345,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     window.clearInterval(streamConnectionTimer);
     streamConnectionTimer = null;
   };
-  const streamConnectionEstablishedEvents = new Set(["delta", "process_step", "tool_call", "context_compacted", "complete", "request_status", "error"]);
+  const streamConnectionEstablishedEvents = new Set(["continuation", "delta", "process_step", "tool_call", "context_compacted", "complete", "request_status", "error"]);
   const streamSpeedController = createStreamTypewriterSpeedController();
   let messageMounted = false;
   const mountAssistantMessage = () => {
@@ -18366,12 +18375,14 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   let persistedMessageCreatedAt = null;
   let conversationTitle = null;
   let writingSuggestion = null;
+  let question = null;
   let persistedUserMessage = null;
   let contextAction = "ready";
   let warningOnly = false;
   let streamContextCompacted = false;
   const processStartedAt = Date.now();
-  const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
+  let previousProcessDurationMs = 0;
+  const elapsedProcessTime = () => previousProcessDurationMs + Math.max(0, Date.now() - processStartedAt);
   const processStepTypewriters = new Map();
   const processStepVisibleContents = new Map();
   const renderStreamingProcessSteps = (completed, durationMs = elapsedProcessTime()) => {
@@ -18400,7 +18411,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   };
   try {
     const request = assertAiRequestCurrent(requestHolder.snapshot);
-    const response = await fetch(`/api/works/${encodeURIComponent(request.workId)}/chat/stream`, {
+    const response = await fetch(endpoint ?? `/api/works/${encodeURIComponent(request.workId)}/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream", "X-CSRF-Token": state.csrfToken, "Idempotency-Key": idempotencyKey },
       body: JSON.stringify(body),
@@ -18415,7 +18426,23 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     const consume = async (eventName, payload) => {
       assertAiRequestCurrent(requestHolder.snapshot);
       if (streamConnectionEstablishedEvents.has(eventName)) stopStreamConnectionTimer();
-      if (eventName === "context") {
+      if (eventName === "continuation") {
+        if (String(payload.conversationId ?? "") !== requestHolder.snapshot.conversationId) throw new Error("流式续接返回了其他对话");
+        toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : [];
+        processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : [];
+        previousProcessDurationMs = Math.max(0, Number(payload.processDurationMs) || 0);
+        const previousMessage = [...feed.querySelectorAll(".assistant-message[data-message-id]")]
+          .find((candidate) => candidate.dataset.messageId === String(payload.messageId));
+        if (previousMessage) {
+          attachMessageHeading(message, aiAssistantLabel("正在生成", tab.roleplayCharacter), undefined, tab);
+          previousMessage.replaceWith(message);
+          messageMounted = true;
+        } else mountAssistantMessage();
+        attachMessageIdentity(message, payload.messageId);
+        renderStreamingProcessSteps(false);
+        meta.textContent = "已收到回答，正在继续思考与执行……";
+        scrollAiFeedToBottom(feed);
+      } else if (eventName === "context") {
         contextAction = typeof payload.action === "string" ? payload.action : "ready";
         if (!tab.promptSent) setAiChatTabContextUsage(tab, payload.usage);
         if (payload.conversation?.id) {
@@ -18512,6 +18539,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         setAiChatTabContextUsage(tab, payload.contextUsage);
         if (messageMounted) meta.textContent = "已压缩工具上下文，正在继续生成";
       } else if (eventName === "complete") {
+        question = payload.question ?? null;
         if (payload.warningOnly === true) {
           warningOnly = true;
           setAiChatTabContextUsage(tab, payload.contextUsage);
@@ -18568,7 +18596,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     assertAiRequestCurrent(requestHolder.snapshot);
     if (streamError) throw streamError;
     assertAiStreamCompleted(streamCompleted);
-    return { action: warningOnly ? "warn" : contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, writingSuggestion, userMessage: persistedUserMessage };
+    return { action: warningOnly ? "warn" : contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, writingSuggestion, userMessage: persistedUserMessage, question };
   } catch (error) {
     const streamFailure = error instanceof Error ? error : new Error(String(error ?? "AI 流式调用失败"));
     const interruptionCode = typeof streamFailure.code === "string" ? streamFailure.code.slice(0, 100) : "AI_STREAM_FAILED";
