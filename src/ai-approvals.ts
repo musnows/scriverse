@@ -18,6 +18,7 @@ type PreparedOperation = {
   read: WorkPermissionModule[]; write: WorkPermissionModule[]; guards: Guard[]; changes: AiFieldChange[];
   effects: Array<{ module: WorkPermissionModule; targetId: string; targetName: string; changes: AiFieldChange[] }>;
   restoreFields?: Record<string, unknown>; model?: Record<string, unknown>; sourceDigest?: string;
+  memberRestores?: Array<{ characterId: string; raceId: string | null }>;
 };
 type ApprovalContent = {
   version: 1; workId: string; workTitle: string; conversationId: string; initiatedBy: string; conversationOwner: string;
@@ -236,6 +237,7 @@ export class AiApprovalService {
       }
     }
     authorize();
+    if (write.has("characters") && module !== "characters" && !this.getSettings(workId).enabled.includes("characters")) throw new AppError(409, "AI_APPROVAL_TOOL_DISABLED", "关联角色写入需要同时开启角色工具");
     const operation = { ...input, fields };
     const changes = approvalChanges(current, fields);
     if (!isCreate && !changes.length) throw new AppError(400, "AI_APPROVAL_NO_CHANGES", "修改前后内容相同");
@@ -261,7 +263,7 @@ export class AiApprovalService {
     return this.create(workId, conversationId, "question", input.question, [], input, toolCallId);
   }
 
-  private create(workId: string, conversationId: string, kind: ApprovalRow["kind"], summary: string, inputs: AiPlanOperation[], question?: AiUserQuestion, toolCallId?: string, parentId?: string): Record<string, unknown> {
+  private create(workId: string, conversationId: string, kind: ApprovalRow["kind"], summary: string, inputs: AiPlanOperation[], question?: AiUserQuestion, toolCallId?: string, parentId?: string, undoSource?: ApprovalContent): Record<string, unknown> {
     return this.store.db.transaction(() => {
       const context = this.context(workId, conversationId);
       if (toolCallId) {
@@ -272,7 +274,11 @@ export class AiApprovalService {
       if (question && !settings.enabled.includes("AskUserQuestions")) throw new AppError(409, "AI_APPROVAL_TOOL_DISABLED", "AskUserQuestions 工具已关闭");
       const questions = this.questions(conversationId);
       const operations = inputs.map((input) => this.prepare(workId, input, context.permissions));
-      const targets = operations.filter((operation) => operation.input.kind === "edit" || operation.input.kind === "create" && operation.targetId).map((operation) => `${(operation.input as AiEntityOperation).entity}:${operation.targetId}`);
+      if (undoSource) this.prepareMembershipUndo(workId, operations, undoSource, context.permissions);
+      const targets = operations.flatMap((operation) => [
+        ...(operation.input.kind === "edit" || operation.input.kind === "create" && operation.input.entity === "chapter-outline" ? [`${(operation.input as AiEntityOperation).entity}:${operation.targetId}`] : []),
+        ...operation.effects.map((effect) => `character:${effect.targetId}`)
+      ]);
       if (new Set(targets).size !== targets.length) throw new AppError(400, "AI_APPROVAL_TARGET_REPEATED", "同一份计划不能重复修改同一词条");
       const timestamp = now();
       const work = this.store.db.get("SELECT title, owner_user_id FROM works WHERE id = ?", workId)!;
@@ -284,6 +290,32 @@ export class AiApprovalService {
       this.store.audit(workId, "ai.approval.proposed", "ai-approval", approvalId, { kind, operationCount: operations.length });
       return this.get(workId, approvalId);
     });
+  }
+
+  private prepareMembershipUndo(workId: string, operations: PreparedOperation[], original: ApprovalContent, permissions: Record<string, WorkModulePermissions>): void {
+    for (const operation of operations) {
+      if (operation.input.kind !== "edit" || operation.input.entity !== "race") continue;
+      const source = original.operations.find((item) => item.targetId === operation.targetId && item.input.kind === "edit" && item.input.entity === "race");
+      if (!source?.effects.length) continue;
+      for (const value of Object.values(permissions)) this.requireModules(value, ["races", "characters"], ["races", "characters"]);
+      if (!this.getSettings(workId).enabled.includes("characters")) throw new AppError(409, "AI_APPROVAL_TOOL_DISABLED", "关联角色恢复需要同时开启角色工具");
+      operation.memberRestores = [];
+      operation.effects = [];
+      for (const effect of source.effects) {
+        const raceChange = effect.changes.find((change) => change.field === "raceId");
+        const originalGuard = source.guards.find((guard) => guard.entity === "character" && guard.id === effect.targetId);
+        if (!originalGuard) throw new AppError(409, "AI_APPROVAL_UNDO_INVALID", "关联角色缺少原始版本记录");
+        const character = this.store.getCharacter(effect.targetId);
+        const raceId = raceChange ? typeof raceChange.before === "string" ? raceChange.before : null : typeof character.raceId === "string" ? character.raceId : null;
+        operation.guards.push(this.guard("character", effect.targetId, workId));
+        if (raceId) operation.guards.push(this.guard("race", raceId, workId));
+        const species = raceId ? raceId === operation.targetId ? operation.input.fields.name ?? this.store.getRace(raceId).name : this.store.getRace(raceId).name : "";
+        operation.memberRestores.push({ characterId: effect.targetId, raceId });
+        operation.effects.push({ module: "characters", targetId: effect.targetId, targetName: String(character.name), changes: approvalChanges(character, { raceId, species }) });
+      }
+      operation.read = [...new Set([...operation.read, "characters" as const])];
+      operation.write = [...new Set([...operation.write, "characters" as const])];
+    }
   }
 
   private row(workId: string, approvalId: string): ApprovalRow {
@@ -429,7 +461,13 @@ export class AiApprovalService {
     if (input.entity === "setting") return input.kind === "create" ? this.store.createSetting(workId, fields as Parameters<Store["createSetting"]>[1]) : this.store.updateSetting(target, fields, ...args);
     if (input.entity === "character") return input.kind === "create" ? this.store.createCharacter(workId, fields as Parameters<Store["createCharacter"]>[1]) : this.store.updateCharacter(target, fields, ...args);
     if (input.entity === "character-section") return input.kind === "create" ? this.store.createCharacterProfileSection(target, fields as Parameters<Store["createCharacterProfileSection"]>[1]) : this.store.updateCharacterProfileSection(target, fields, ...args);
-    if (input.entity === "race") return input.kind === "create" ? this.store.createRace(workId, fields as Parameters<Store["createRace"]>[1]) : this.store.updateRace(target, fields, ...args);
+    if (input.entity === "race") {
+      const result = input.kind === "create" ? this.store.createRace(workId, fields as Parameters<Store["createRace"]>[1]) : this.store.updateRace(target, fields, ...args);
+      for (const restoration of operation.memberRestores ?? []) {
+        this.store.updateCharacter(restoration.characterId, { raceId: restoration.raceId }, "ai-approval", approvalId, "撤销种族成员变更", Number(this.store.getCharacter(restoration.characterId).versionNo));
+      }
+      return this.store.getRace(String(result.id));
+    }
     if (input.entity === "organization") return input.kind === "create" ? this.store.createOrganization(workId, fields as Parameters<Store["createOrganization"]>[1]) : this.store.updateOrganization(target, fields, ...args);
     if (input.entity === "timeline-track") return input.kind === "create" ? this.store.createTimelineTrack(workId, fields as Parameters<Store["createTimelineTrack"]>[1], args[0], approvalId) : this.store.updateTimelineTrack(target, fields, ...args);
     if (input.entity === "timeline-event") return input.kind === "create" ? this.store.createTimelineEvent(workId, fields as Parameters<Store["createTimelineEvent"]>[1], args[0], approvalId) : this.store.updateTimelineEvent(target, fields, ...args);
@@ -458,7 +496,7 @@ export class AiApprovalService {
         operations.push({ ...operation.input, fields: operation.restoreFields });
       });
       if (!operations.length) throw new AppError(409, "AI_APPROVAL_UNDO_INVALID", "此审批没有可撤销的词条编辑；新增词条、批注和任务不会被删除");
-      return this.create(workId, row.conversation_id, "undo", "撤销本次审批中的词条编辑；保留新增词条、正文批注和分析任务", operations, undefined, undefined, row.id);
+      return this.create(workId, row.conversation_id, "undo", "撤销本次审批中的词条编辑；保留新增词条、正文批注和分析任务", operations, undefined, undefined, row.id, content);
     });
   }
 

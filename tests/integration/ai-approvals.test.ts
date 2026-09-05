@@ -200,4 +200,25 @@ describe("persistent AI operation approvals", () => {
     expect(() => asActor(() => approvals.answer(workId, String(question.id), { answer: csrf }))).toThrow("未保存");
     expect(asActor(() => approvals.get(workId, String(question.id)))).toMatchObject({ status: "pending", result: null });
   });
+
+  it("restores the original race of transferred members when undoing an approved race edit", () => {
+    const originalRace = asActor(() => store.createRace(workId, { name: "Original race", memberIds: [characterId] }));
+    const newRace = asActor(() => store.createRace(workId, { name: "New race" }));
+    const approved = confirm(plan([{ kind: "edit", entity: "race", targetId: String(newRace.id), fields: { memberIds: [characterId] } }]));
+    expect(approved.status).toBe("succeeded");
+    expect(store.getCharacter(characterId)).toMatchObject({ raceId: newRace.id, species: "New race" });
+    const undo = asActor(() => approvals.requestUndo(workId, String(approved.id)));
+    expect(undo.operations).toMatchObject([{ effects: [{ targetId: characterId, changes: expect.arrayContaining([expect.objectContaining({ field: "raceId", before: newRace.id, after: originalRace.id })]) }] }]);
+    expect(confirm(undo).status).toBe("succeeded");
+    expect(store.getCharacter(characterId)).toMatchObject({ raceId: originalRace.id, species: "Original race" });
+    expect(store.getRace(String(newRace.id)).memberIds).toEqual([]);
+    expect(store.getRace(String(originalRace.id)).memberIds).toEqual([characterId]);
+  });
+
+  it("requires the character tool for cascade writes and rejects overlapping character effects", () => {
+    const race = asActor(() => store.createRace(workId, { name: "Race", memberIds: [characterId] }));
+    expect(() => plan([{ kind: "edit", entity: "race", targetId: String(race.id), fields: { name: "Renamed" } }, { kind: "edit", entity: "character", targetId: characterId, fields: { name: "Renamed Alice" } }])).toThrow("重复修改");
+    asActor(() => approvals.updateSettings(workId, { enabled: ["races"] }));
+    expect(() => plan([{ kind: "edit", entity: "race", targetId: String(race.id), fields: { name: "Renamed" } }])).toThrow("角色工具");
+  });
 });
