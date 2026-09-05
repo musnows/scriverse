@@ -1116,7 +1116,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.use(createExpensiveApiRateLimitMiddleware());
   app.use(createCliApiScopeMiddleware(options.disableUserAuth));
   app.use(createWorkAuthorizationMiddleware(auth, options.disableUserAuth));
-  app.use(/^\/api\/works\/[^/]+\/(?:ai-approvals(?:\/|$)|ai-settings\/write-tools(?:\/|$))/iu, (request, response, next) => {
+  app.use((request, response, next) => {
+    if (!/^\/api\/works\/[^/]+\/(?:ai-approvals(?:\/|$)|ai-settings\/write-tools(?:\/|$))/iu.test(request.path)) return next();
     if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return next();
     if (!request.get("origin")) throw new AppError(403, "AI_APPROVAL_ORIGIN_REQUIRED", "AI 审批操作必须由同源页面发起");
     createSameOriginMiddleware()(request, response, next);
