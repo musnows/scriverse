@@ -1,3 +1,4 @@
+import { createS3BackupUi } from "/s3-backup-ui.js?v=20260905-s3-backup-v1";
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260728-galaxy-edge-stars-v3";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
@@ -2770,6 +2771,7 @@ async function refreshAuthCaptcha(target = "login") {
 
 function showAuth(setupRequired, registrationOpen = false, setupTokenRequired = false) {
   if (state.user) return;
+  s3BackupUi.setUser(null);
   document.body.classList.add("auth-pending");
   $("#auth-view").classList.remove("hidden");
   const canRegister = registrationOpen === true;
@@ -2795,6 +2797,7 @@ function showAuth(setupRequired, registrationOpen = false, setupTokenRequired = 
 function applyAuthenticatedUser(session) {
   state.user = session.user;
   state.csrfToken = session.csrfToken;
+  s3BackupUi.setUser(session.user);
   $("#account-name").textContent = session.user.displayName;
   renderUserAvatar($("#account-avatar"), session.user);
   $("#account-menu-display-name").textContent = session.user.displayName;
@@ -3373,6 +3376,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#s3-backup-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -12022,6 +12026,8 @@ window.addEventListener("online", () => {
   void refreshSystemHealth();
 });
 window.addEventListener("offline", () => updateSystemHealth({ status: "offline" }));
+
+const s3BackupUi = createS3BackupUi({ api, toast, esc, openDialog, getUser: () => state.user, returnToSettings: returnToSettingsHub });
 
 initializePage().catch((error) => {
   restoringPageRoute = false;

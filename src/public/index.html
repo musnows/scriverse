@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-<link rel="stylesheet" href="/styles.css?v=20260801-ui-font-scale-shelf-v3">
+<link rel="stylesheet" href="/styles.css?v=20260905-s3-backup-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -209,6 +209,7 @@
             <button id="platform-usage-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">T</span><strong>Token 用量</strong><small>总消耗、缓存命中率、每日网格与作品明细</small></button>
             <button id="user-management-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">人</span><strong>用户管理</strong><small>管理员、普通用户与账户状态</small></button>
             <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面与分页</strong><small>设置通知位置及各模块的单页数量</small></button>
+            <button id="s3-backup-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">S3</span><strong>系统备份</strong><small>多目标 S3、数据库快照与图片同步</small></button>
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="writing-progress-button" class="settings-hub-card" type="button"><span class="settings-card-mark">字</span><strong>写作目标</strong><small>每日目标、总字数目标与近 30 天趋势</small></button>
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
@@ -770,6 +771,18 @@
       </form>
     </dialog>
 
+    <dialog id="s3-backup-dialog" class="dialog wide-dialog" aria-labelledby="s3-backup-title">
+      <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="s3-backup-title">系统备份</h2></div><div class="settings-dialog-header-actions"><button id="s3-backup-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="s3-backup-close" class="dialog-close" aria-label="关闭系统备份" type="button">×</button></div></div>
+      <div class="s3-backup-body">
+        <p class="s3-backup-intro">备份整个系统的数据库及可选图片，包含所有作品、账户与历史版本。</p>
+        <p id="s3-backup-timezone" class="s3-backup-intro"></p>
+        <div class="s3-backup-toolbar"><button id="s3-backup-add" class="primary-button" type="button" disabled>添加目标</button><button id="s3-backup-run" class="ghost-button" type="button" disabled>立即备份全部目标</button><button id="s3-backup-refresh" class="ghost-button" type="button">刷新状态</button></div>
+        <p id="s3-backup-summary" class="s3-backup-intro" role="status" aria-live="polite"></p>
+        <div id="s3-backup-targets" class="card-grid provider-card-grid"></div>
+        <p class="s3-backup-intro">数据库保存到 /scriverse/db，图片保存到 /scriverse/img；可在目标中添加桶内子目录。恢复加密凭据时仍需原实例的 master.key，请妥善保管。</p>
+      </div>
+    </dialog>
+
     <dialog id="platform-ui-settings-dialog" class="dialog" aria-labelledby="platform-ui-settings-title">
       <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="platform-ui-settings-title">界面与分页</h2></div><div class="settings-dialog-header-actions"><button id="platform-ui-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="platform-ui-settings-close" class="dialog-close" aria-label="关闭" type="button">×</button></div></div>
       <form id="platform-ui-settings-form">
@@ -951,6 +964,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260801-timeline-lifecycle-v1"></script>
+    <script type="module" src="/app.js?v=20260905-s3-backup-v1"></script>
   </body>
 </html>

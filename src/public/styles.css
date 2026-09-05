@@ -3346,3 +3346,24 @@ body { font-size: var(--ui-font-size); }
 .ai-tool-call-info dt, .ai-tool-call-detail h3 { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-tool-call-info dd { font-size: calc(11px * var(--ai-font-scale)); }
 .ai-tool-call-detail pre { font-size: calc(10px * var(--ai-font-scale)); }
+
+.s3-backup-body { display: grid; gap: 16px; padding: 22px 24px; }
+.s3-backup-intro { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.s3-backup-toolbar { display: flex; flex-wrap: wrap; gap: 8px; }
+.s3-backup-toolbar button { min-height: 36px; }
+.s3-backup-card { min-width: 0; }
+.s3-backup-card h3, .s3-backup-card p { overflow-wrap: anywhere; }
+.s3-backup-card .s3-backup-schedule { margin-top: 12px; color: var(--ink); }
+.s3-backup-card .s3-backup-result { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.s3-backup-result.is-error { color: var(--accent-dark); }
+.s3-target-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; }
+.s3-target-fields > * { min-width: 0; }
+.s3-target-fields .form-field-note { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.s3-target-fields .checkbox-field { gap: 8px; }
+.dialog-fields .s3-target-fields input[type="checkbox"] { flex: 0 0 16px; width: 16px; height: 16px; min-height: 16px; margin: 0; padding: 0; }
+.s3-backup-location, .s3-path-preview span { font-family: var(--font-latin), var(--font-cjk), monospace, sans-serif; }
+@media (max-width: 600px) {
+  .s3-backup-body { padding: 16px; }
+  .s3-target-fields { grid-template-columns: minmax(0, 1fr); }
+  .s3-backup-toolbar button { flex: 1 1 auto; }
+}
