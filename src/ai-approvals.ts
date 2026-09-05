@@ -322,7 +322,8 @@ export class AiApprovalService {
   get(workId: string, approvalId: string): Record<string, unknown> {
     const row = this.refresh(this.row(workId, approvalId));
     const content = JSON.parse(row.content_json) as ApprovalContent;
-    const base = { id: row.id, workId, conversationId: row.conversation_id, kind: row.kind, status: row.status, createdAt: row.created_at, expiresAt: row.expires_at, updatedAt: row.updated_at, reason: row.reason, initiatedBy: row.initiated_by_user_id, conversationOwner: row.conversation_owner_user_id, executedBy: row.executed_by_user_id, parentApprovalId: row.parent_approval_id ?? null };
+    const userName = (userId: string | null): string => String(this.store.db.get("SELECT display_name FROM users WHERE id = ?", userId)?.display_name ?? userId ?? "系统");
+    const base = { initiatedByName: userName(row.initiated_by_user_id), conversationOwnerName: userName(row.conversation_owner_user_id), executedByName: userName(row.executed_by_user_id), id: row.id, workId, conversationId: row.conversation_id, kind: row.kind, status: row.status, createdAt: row.created_at, expiresAt: row.expires_at, updatedAt: row.updated_at, reason: row.reason, initiatedBy: row.initiated_by_user_id, conversationOwner: row.conversation_owner_user_id, executedBy: row.executed_by_user_id, parentApprovalId: row.parent_approval_id ?? null };
     try {
       for (const userId of [...new Set([this.actorId(), row.conversation_owner_user_id])]) {
         const permissions = this.permissions(workId, userId);
@@ -333,11 +334,11 @@ export class AiApprovalService {
     return { ...base, summary: content.summary, workTitle: content.workTitle, operations: content.operations.map(({ input, targetId, targetName, targetVersion, module, read, write, changes, effects, model }) => ({ kind: input.kind, entity: "entity" in input ? input.entity : input.kind, targetId, targetName, targetVersion, module, requiredRead: read, requiredWrite: write, changes, effects, model })), question: content.question, result, canUndo: row.status === "succeeded" && row.kind === "plan" && content.operations.some((operation) => operation.input.kind === "edit") && !this.store.db.get("SELECT 1 FROM ai_operation_approvals WHERE parent_approval_id = ?", row.id), audit: this.store.db.all("SELECT id, action, entity_type AS entityType, entity_id AS entityId, user_id AS actorId, created_at AS createdAt FROM audit_logs WHERE work_id = ? AND entity_type = 'ai-approval' AND entity_id = ? ORDER BY created_at, id", workId, approvalId) };
   }
 
-  list(workId: string, offset = 0, limit = 30): Record<string, unknown> {
+  list(workId: string, offset = 0, limit = 30, status?: AiApprovalStatus): Record<string, unknown> {
     const actorId = this.actorId();
     this.requireModules(this.permissions(workId, actorId), ["ai-chat"], []);
-    const rows = this.store.db.all<{ id: string }>("SELECT id FROM ai_operation_approvals WHERE work_id = ? AND (initiated_by_user_id = ? OR conversation_owner_user_id = ?) ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", workId, actorId, actorId, limit, offset);
-    const total = Number(this.store.db.get("SELECT COUNT(*) AS count FROM ai_operation_approvals WHERE work_id = ? AND (initiated_by_user_id = ? OR conversation_owner_user_id = ?)", workId, actorId, actorId)?.count ?? 0);
+    const rows = this.store.db.all<{ id: string }>("SELECT id FROM ai_operation_approvals WHERE work_id = ? AND (initiated_by_user_id = ? OR conversation_owner_user_id = ?) AND (? IS NULL OR status = ?) ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", workId, actorId, actorId, status ?? null, status ?? null, limit, offset);
+    const total = Number(this.store.db.get("SELECT COUNT(*) AS count FROM ai_operation_approvals WHERE work_id = ? AND (initiated_by_user_id = ? OR conversation_owner_user_id = ?) AND (? IS NULL OR status = ?)", workId, actorId, actorId, status ?? null, status ?? null)?.count ?? 0);
     return { items: rows.map((row) => this.get(workId, row.id)), total, offset, limit };
   }
 

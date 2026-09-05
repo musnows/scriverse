@@ -19,7 +19,7 @@ describe("想法模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">想法</button>");
-    expect(page.text).toContain('/app.js?v=20260804-agent-history-score-sort-v1');
+    expect(page.text).toContain('/app.js?v=20260905-ai-approvals-v4');
     expect(application.text).toContain('drafts: ["临时想法", "创作想法"');
     expect(application.text).toContain('[["prose", "正文想法"], ["setting", "设定想法"]]');
     expect(application.text).toContain('field("volumeId", "绑定分卷"');

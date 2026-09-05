@@ -1,3 +1,4 @@
+import { AI_APPROVAL_STATUSES } from "./ai-approval-contract.js";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import JSZip from "jszip";
 import multer from "multer";
@@ -127,7 +128,7 @@ const presenceHeartbeatSchema = z.object({
   page: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal(presencePageKinds[0]) }).strict(),
     z.object({ kind: z.literal(presencePageKinds[1]), resourceId: identifier }).strict(),
-    z.object({ kind: z.literal(presencePageKinds[2]), module: z.enum(["drafts", "settings", "characters", "races", "organizations", "timeline", "comments", "relationships", "outlines", "reviews", "tasks", "ai-settings"]) }).strict(),
+    z.object({ kind: z.literal(presencePageKinds[2]), module: z.enum(["drafts", "settings", "characters", "races", "organizations", "timeline", "comments", "relationships", "outlines", "reviews", "tasks", "approvals", "ai-settings"]) }).strict(),
     z.object({ kind: z.literal(presencePageKinds[3]), module: z.enum(["setting", "character", "race", "organization", "relationship"]), resourceId: identifier.optional() }).strict(),
     z.object({ kind: z.literal(presencePageKinds[4]) }).strict()
   ])
@@ -2094,8 +2095,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId/ai-settings/write-tools", (request, response) => data(response, ai.approvals.getSettings(request.params.workId)));
   app.patch("/api/works/:workId/ai-settings/write-tools", (request, response) => data(response, ai.approvals.updateSettings(request.params.workId, request.body)));
   app.get("/api/works/:workId/ai-approvals", (request, response) => {
-    const query = parse(z.object({ offset: z.coerce.number().int().min(0).max(100000).default(0), limit: z.coerce.number().int().min(1).max(100).default(30) }).strict(), request.query);
-    data(response, ai.approvals.list(request.params.workId, query.offset, query.limit));
+    const query = parse(z.object({ offset: z.coerce.number().int().min(0).max(100000).default(0), limit: z.coerce.number().int().min(1).max(100).default(30), status: z.enum(AI_APPROVAL_STATUSES).optional() }).strict(), request.query);
+    data(response, ai.approvals.list(request.params.workId, query.offset, query.limit, query.status));
   });
   app.get("/api/works/:workId/ai-approvals/:approvalId", (request, response) => data(response, ai.approvals.get(request.params.workId, request.params.approvalId)));
   app.post("/api/works/:workId/ai-approvals/:approvalId/confirm", (request, response) => {

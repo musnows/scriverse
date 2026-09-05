@@ -12,6 +12,7 @@ import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stre
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260801-retain-usage-v1";
+import { createAiApprovalUi } from "/ai-approvals-ui.js?v=20260905-ai-approvals-v4";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
@@ -37,12 +38,12 @@ import {
   timelineStatusLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260804-agent-history-search-v1";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260731-work-comments-v2";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260905-ai-approvals-v4";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
-import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260731-drafts-to-ideas-v1";
+import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260905-ai-approvals-v4";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
@@ -137,6 +138,11 @@ const state = {
 };
 
 const moduleRequestCache = createModuleRequestCache();
+const approvalUi = createAiApprovalUi({ api, esc: (value) => esc(value), state, toast, raiseToastRegion, mountModuleCount, onChanged: async () => {
+  moduleRequestCache.clear();
+  await refreshBackgroundTaskCenter({ announce: false });
+  if (state.module === "editor" && state.chapter && !state.dirty) await selectChapter(state.chapter.id);
+} });
 const cachedWorkModules = new Set([
   "drafts",
   "settings",
@@ -4209,6 +4215,7 @@ function renderShelf() {
 }
 
 function resetWorkScopedUiCaches() {
+  approvalUi.reset();
   stopBackgroundTaskCenter();
   workScopedUiGeneration += 1;
   loadedAiModelsWorkId = null;
@@ -4293,6 +4300,7 @@ async function selectWork(workId, preferredChapterId = null) {
   if (!canReadModule(state.module)) state.module = firstReadableUiModule(state.work) ?? "editor";
   applyWorkAccessMode();
   startBackgroundTaskCenter(nextWork.id);
+  if (canReadPermissionModule(nextWork, "ai-chat")) approvalUi.start();
   updateDocumentTitle(state.work);
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
   $("#top-search-button").disabled = !canReadAggregateContent();
@@ -4783,6 +4791,7 @@ const moduleMeta = {
   relationships: ["跨章证据", "人物关系", "记录关系方向、阶段、置信度与原文依据。", "新建关系"],
   comments: ["正文协作", "正文评论", "集中查看并处理当前作品所有章节的评论与待办。", ""],
   reviews: ["作者决策", "审核队列", "集中处理冲突、候选设定、低置信度关系和时间问题。", "新增审核项"],
+  approvals: ["用户确认", "AI 操作审批中心", "查看修改计划、回答 AI 提问，并追踪执行结果与审计记录。", ""],
   tasks: ["AI 深度分析", "AI 分析中心", "对全书或指定章节运行人物关系、世界观、设定、事件与一致性分析。", "开始 AI 分析"],
   "ai-settings": ["书籍提示词", "本书 AI 设置", "本书系统提示词会追加在内置提示词和平台全局提示词之后；任务默认模型只作用于当前作品。", "保存设置"]
 };
@@ -4804,6 +4813,7 @@ async function showModule(module) {
   if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
+  $("#module-view").classList.toggle("approval-module", module === "approvals");
   if (module !== "tasks") stopTaskProgressRefresh();
   applyWorkAccessMode();
   markActiveModule(module);
@@ -4827,7 +4837,7 @@ async function showModule(module) {
   $("#module-description").textContent = meta[2];
   $("#module-header-actions").querySelectorAll("[data-module-header-action]").forEach((action) => action.remove());
   $("#module-create-button").textContent = meta[3];
-  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || module === "comments" || !canEditModule(module));
+  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || module === "comments" || module === "approvals" || !canEditModule(module));
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   bindModuleContentInteractions();
   try {
@@ -4842,6 +4852,7 @@ async function showModule(module) {
     if (module === "comments") await renderWorkChapterComments();
     if (module === "reviews") await renderReviews();
     if (module === "tasks") await renderTasks(taskListPage);
+    if (module === "approvals") await approvalUi.render();
     if (module === "ai-settings") await renderBookAiSettings();
   } catch (error) {
     $("#module-content").innerHTML = `<div class="empty-state"><b>载入失败</b>${esc(error.message)}</div>`;
@@ -7671,6 +7682,7 @@ async function renderBookAiSettings() {
     await renderBookAiSettings();
     await loadModels();
   }));
+  await approvalUi.bindSettings(host, canEditModule("ai-settings"));
 }
 
 async function loadModels() {
@@ -10516,6 +10528,7 @@ async function streamChat(body) {
         delete toolCall.round;
         if (toolCall.status === "failed") setAiAssistantStatus("error");
         toolCalls.push(toolCall);
+        if (toolCall.result?.approvalId) void approvalUi.notify(toolCall.result.approvalId);
         processSteps.push(aiToolProcessStep(toolCall, round));
         renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;

@@ -2406,6 +2406,65 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .toast-input { width: 100%; min-height: 34px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 11px; }
 .toast-confirmation-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 3px; }
 .toast-confirmation-actions button { min-height: 30px; padding: 6px 10px; }
+.approval-toast { max-height: min(420px, calc(100dvh - 110px)); overflow-y: auto; overflow-wrap: anywhere; }
+.approval-toast-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.approval-toast-heading button { min-height: 26px; padding: 2px 8px; }
+.approval-toast .toast-confirmation-actions { flex-wrap: wrap; }
+.approval-dialog { width: min(980px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); }
+.approval-dialog[open] { display: flex; flex-direction: column; }
+.approval-dialog .dialog-header { flex: 0 0 auto; gap: 16px; }
+.approval-detail { padding: 20px 24px; overflow-y: auto; min-height: 0; overflow-wrap: anywhere; }
+.approval-detail-meta { display: grid; gap: 8px; margin-bottom: 16px; font-size: 13px; }
+.approval-detail-meta p { margin: 0; white-space: pre-wrap; }
+.approval-detail-meta small, .approval-operation small, .approval-results small, .approval-audit small { display: block; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.approval-list { display: grid; gap: 14px; }
+.approval-card { min-width: 0; overflow-wrap: anywhere; }
+.approval-card h3 { line-height: 1.5; }
+.approval-card > p { white-space: pre-wrap; }
+.approval-status { display: inline-flex; width: fit-content; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.approval-status[data-status="pending"] { color: var(--accent); border-color: var(--accent); }
+.approval-status[data-status="succeeded"] { color: var(--ink); background: var(--surface-soft); }
+.approval-status[data-status="invalid"], .approval-status[data-status="failed"] { color: var(--toast-error-fg); }
+.approval-operation { margin: 14px 0; padding: 16px; }
+.approval-operation h3 { margin: 8px 0; font-size: 16px; line-height: 1.5; }
+.approval-operation small, .approval-results small { text-transform: none; letter-spacing: normal; }
+.approval-field { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+.approval-field h4 { margin: 0 0 9px; font-size: 13px; }
+.approval-field h4 code { font-size: 11px; color: var(--muted); font-weight: 400; }
+.approval-field-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.approval-field-values > div { min-width: 0; }
+.approval-field pre, .approval-diff pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.7; padding: 10px; margin: 5px 0; border: 1px solid var(--line); background: var(--surface-soft); border-radius: 4px; max-height: 300px; overflow-y: auto; }
+.approval-diff, .approval-audit { font-size: 12px; margin-top: 12px; }
+.approval-diff summary, .approval-audit summary { cursor: pointer; padding: 6px 0; }
+.approval-related { margin-top: 14px; padding: 12px; background: var(--surface-soft); }
+.approval-reason { padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--surface-soft); font-size: 12px; }
+.approval-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; padding: 14px 24px; border-top: 1px solid var(--line); }
+.approval-actions:empty { display: none; }
+.approval-actions span { flex: 1 1 220px; color: var(--muted); font-size: 11px; }
+.approval-filter-panel { padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--line); background: var(--surface-soft); }
+.approval-filter-panel label { display: flex; align-items: center; gap: 12px; font-size: 12px; }
+.approval-filter-panel select { width: 180px; min-height: 34px; font-size: 12px; }
+.approval-pagination { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; font-size: 12px; color: var(--muted); }
+.approval-question-form { display: grid; gap: 16px; }
+.approval-question-form fieldset { margin: 0; padding: 16px; border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
+.approval-question-form legend { padding: 0 6px; font-size: 15px; line-height: 1.6; }
+.approval-question-option { display: flex; align-items: flex-start; gap: 10px; padding: 12px; margin: 8px 0; border: 1px solid var(--line); border-radius: 5px; cursor: pointer; font-size: 13px; line-height: 1.6; }
+.approval-question-option:has(input:checked) { border-color: var(--accent); background: var(--surface-soft); }
+.approval-question-option input[type="radio"], .approval-tool-settings input[type="checkbox"] { appearance: auto; flex: 0 0 16px; width: 16px; height: 16px; min-width: 16px; min-height: 16px; margin: 3px 0 0; padding: 0; accent-color: var(--accent); }
+.approval-recommended { color: var(--accent); font-weight: 500; }
+.approval-custom-answer { width: 100%; min-height: 90px; font: inherit; padding: 10px; }
+.approval-question-form > button { justify-self: end; }
+@media (max-width: 600px) {
+  .approval-module #module-description { padding-right: 28px; }
+  .approval-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .approval-detail { padding: 14px 12px; }
+  .approval-operation { padding: 12px; }
+  .approval-field-values { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .approval-actions { padding: 12px; }
+  .approval-actions button { flex: 1 1 auto; }
+  .approval-question-form fieldset { padding: 10px; }
+  .approval-question-option { padding: 10px; }
+}
 .chapter-insight-toast {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);

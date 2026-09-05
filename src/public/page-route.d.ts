@@ -1,4 +1,4 @@
-export type RestorableModule = "drafts" | "settings" | "characters" | "races" | "organizations" | "timeline" | "outlines" | "relationships" | "reviews" | "tasks" | "ai-settings";
+export type RestorableModule = "approvals" | "drafts" | "settings" | "characters" | "races" | "organizations" | "timeline" | "outlines" | "relationships" | "reviews" | "tasks" | "ai-settings";
 export type PageRoute =
   | { view: "shelf" }
   | { view: "editor"; workId: string; chapterId: string | null }

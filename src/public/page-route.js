@@ -10,6 +10,7 @@ export const RESTORABLE_MODULES = Object.freeze([
   "relationships",
   "reviews",
   "tasks",
+  "approvals",
   "ai-settings"
 ]);
 

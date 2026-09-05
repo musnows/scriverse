@@ -9,7 +9,7 @@ export const WORK_PERMISSION_MODULES = Object.freeze([
   { id: "relationships", uiModule: "relationships", label: "关系" },
   { id: "outlines", uiModule: "outlines", label: "大纲/伏笔" },
   { id: "reviews", uiModule: "reviews", label: "审核" },
-  { id: "ai-chat", uiModule: null, label: "AI 对话" },
+  { id: "ai-chat", uiModule: "approvals", label: "AI 对话" },
   { id: "ai-analysis", uiModule: "tasks", label: "AI 分析" },
   { id: "ai-settings", uiModule: "ai-settings", label: "AI 设置" }
 ]);
