@@ -74,7 +74,8 @@ export function createStreamTypewriter({
   scheduleFrame = (callback) => window.requestAnimationFrame(callback),
   cancelFrame = (handle) => window.cancelAnimationFrame(handle),
   reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true,
-  speedController = null
+  speedController = null,
+  visibilitySource = typeof document === "undefined" ? null : document
 }) {
   if (typeof onRender !== "function") throw new TypeError("onRender must be a function");
 
@@ -83,10 +84,18 @@ export function createStreamTypewriter({
   const idleResolvers = [];
   let scheduledFrame = null;
   let finishing = false;
+  let listeningForVisibility = false;
 
   const snapshot = () => visibleCharacters.join("");
+  const visibilityChanged = () => {
+    if (pendingCharacters.length) typewriter.reveal();
+  };
   const resolveIdle = () => {
     if (pendingCharacters.length || scheduledFrame !== null) return;
+    if (listeningForVisibility) {
+      visibilitySource.removeEventListener("visibilitychange", visibilityChanged);
+      listeningForVisibility = false;
+    }
     const value = snapshot();
     for (const resolve of idleResolvers.splice(0)) resolve(value);
   };
@@ -97,7 +106,15 @@ export function createStreamTypewriter({
     });
   };
   const schedule = () => {
+    if (visibilitySource?.visibilityState === "hidden") {
+      typewriter.reveal();
+      return;
+    }
     if (scheduledFrame !== null || pendingCharacters.length === 0) return;
+    if (visibilitySource && !listeningForVisibility) {
+      visibilitySource.addEventListener("visibilitychange", visibilityChanged);
+      listeningForVisibility = true;
+    }
     scheduledFrame = scheduleFrame(() => {
       scheduledFrame = null;
       const batchSize = reducedMotion
@@ -114,7 +131,7 @@ export function createStreamTypewriter({
     });
   };
 
-  return {
+  const typewriter = {
     append(value) {
       const characters = Array.from(String(value ?? ""));
       if (!characters.length) return;
@@ -137,8 +154,9 @@ export function createStreamTypewriter({
     finish() {
       if (!pendingCharacters.length && scheduledFrame === null) return Promise.resolve(snapshot());
       finishing = true;
+      const completed = new Promise((resolve) => idleResolvers.push(resolve));
       schedule();
-      return new Promise((resolve) => idleResolvers.push(resolve));
+      return completed;
     },
     reveal() {
       if (scheduledFrame !== null) {
@@ -152,4 +170,5 @@ export function createStreamTypewriter({
       return snapshot();
     }
   };
+  return typewriter;
 }

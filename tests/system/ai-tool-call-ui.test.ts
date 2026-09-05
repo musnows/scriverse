@@ -48,6 +48,8 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain("window.cancelAnimationFrame(currentFrame);");
     expect(application).toContain("const processStepTypewriters = new Map();");
     expect(application).toContain("processStepTypewriter(targetStep).append(step.content)");
+    expect(application).toContain('/stream-typewriter.js?v=20260906-background-stream-v2');
+    expect(page).toContain("feature=ai-background-stream-v1");
     expect(application).toContain('step.type === "intermediate" && typeof step.content === "string"');
     expect(application).toContain("typewriter.replace(streamedText)");
     expect(application).toContain('step.type === "thinking") {');
