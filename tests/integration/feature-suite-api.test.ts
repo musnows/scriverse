@@ -1822,6 +1822,38 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(unchanged.body.data.versionNo).toBe(1);
   });
 
+  it("守卫调用失败时向建议返回安全的上游失败原因", async () => {
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      if (prompt.includes("检查下面的续写候选")) {
+        return new Response(JSON.stringify({ error: { message: "guard request temporarily unavailable for sk-feature-test" } }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "林舟继续检查旧信。" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    const modelId = await configureAi(runtime, workId);
+    const suggestion = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "continue",
+      instruction: "继续检查",
+      scope: { type: "chapter", chapterId: chapters[0].id },
+      modelId
+    }).expect(201);
+    expect(suggestion.body.data.guard.status).toBe("failed");
+    expect(suggestion.body.data.guard.failure).toContain("HTTP 401");
+    expect(suggestion.body.data.guard.failure).toContain("guard request temporarily unavailable");
+    expect(suggestion.body.data.guard.failure).toContain("sk-f*****est");
+    expect(suggestion.body.data.guard.failure).not.toContain("sk-feature-test");
+    expect(suggestion.body.data.guard.failure).not.toBe("AI 调用失败");
+  });
+
   it("分块分析全书、验证引文并丢弃无原文依据的关系", async () => {
     let chapterIds: string[] = [];
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {

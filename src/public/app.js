@@ -18821,7 +18821,10 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
 function continuationGuardMarkup(guard) {
   if (!guard) return "";
   const issues = Array.isArray(guard.issues) ? guard.issues : [];
-  return `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<p>${esc(guard.failure || "无法完成检查，请谨慎采纳")}</p>` : issues.map((issue) => `<p><b>${esc(levelLabel(issue.severity))} · ${esc(reviewItemTypeLabel(issue.type))}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>`;
+  const failure = typeof guard.failure === "string" && guard.failure.trim()
+    ? guard.failure.trim()
+    : "无法完成检查，请谨慎采纳";
+  return `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<details class="guard-failure-details"><summary>查看失败原因</summary><p>${esc(failure)}</p></details>` : issues.map((issue) => `<p><b>${esc(levelLabel(issue.severity))} · ${esc(reviewItemTypeLabel(issue.type))}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>`;
 }
 
 async function applyAcceptedWritingSuggestion(message, suggestion) {

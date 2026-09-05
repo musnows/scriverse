@@ -6761,7 +6761,11 @@ export class AiManager {
         contextRefs
       });
     } catch (error) {
-      const failure = error instanceof Error ? error.message : "一致性检查失败";
+      const errorDetails = error instanceof AppError && error.details && typeof error.details === "object"
+        ? error.details as Record<string, unknown>
+        : null;
+      const detailedFailure = typeof errorDetails?.failure === "string" ? errorDetails.failure.trim() : "";
+      const failure = detailedFailure || (error instanceof Error ? error.message : "一致性检查失败");
       const callId = error instanceof AppError && error.details && typeof error.details === "object" && "callId" in error.details
         ? String((error.details as Record<string, unknown>).callId)
         : null;
