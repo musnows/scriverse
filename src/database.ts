@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 74;
+export const DATABASE_SCHEMA_VERSION = 75;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -35,6 +35,7 @@ export class Database {
       this.raw.exec("PRAGMA busy_timeout = 5000");
       if (filename !== ":memory:") this.raw.exec("PRAGMA journal_mode = WAL");
       this.migrate();
+      this.migrateAiApprovals();
       this.recoverInterruptedOperations();
       if (filename !== ":memory:") {
         for (const path of [filename, `${filename}-wal`, `${filename}-shm`]) {
@@ -2947,6 +2948,60 @@ export class Database {
     }
   }
 
+  private migrateAiApprovals(): void {
+    if (this.get("SELECT 1 FROM schema_migrations WHERE version = 75")) return;
+    this.transaction(() => {
+      this.raw.exec(`
+        CREATE TABLE IF NOT EXISTS ai_write_tool_settings (
+          work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+          enabled_json TEXT NOT NULL DEFAULT '[]',
+          revision INTEGER NOT NULL DEFAULT 1,
+          updated_at TEXT NOT NULL,
+          updated_by_user_id TEXT
+        );
+        CREATE TABLE IF NOT EXISTS ai_operation_approvals (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          conversation_id TEXT NOT NULL,
+          initiated_by_user_id TEXT NOT NULL,
+          conversation_owner_user_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('plan', 'question', 'undo')),
+          status TEXT NOT NULL CHECK(status IN ('pending', 'rejected', 'expired', 'invalid', 'executing', 'succeeded', 'failed')),
+          content_json TEXT NOT NULL CHECK(json_valid(content_json)),
+          content_hash TEXT NOT NULL,
+          result_json TEXT CHECK(result_json IS NULL OR json_valid(result_json)),
+          reason TEXT NOT NULL DEFAULT '',
+          parent_approval_id TEXT REFERENCES ai_operation_approvals(id),
+          tool_call_id TEXT,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          executed_by_user_id TEXT,
+          UNIQUE(conversation_id, tool_call_id),
+          UNIQUE(parent_approval_id)
+        );
+        CREATE INDEX IF NOT EXISTS ai_operation_approvals_inbox
+          ON ai_operation_approvals(work_id, initiated_by_user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS ai_operation_approvals_conversation
+          ON ai_operation_approvals(conversation_id, kind, created_at);
+        CREATE TRIGGER IF NOT EXISTS ai_operation_approvals_immutable
+          BEFORE UPDATE OF work_id, conversation_id, initiated_by_user_id, conversation_owner_user_id,
+            kind, content_json, content_hash, parent_approval_id, tool_call_id, created_at, expires_at
+          ON ai_operation_approvals BEGIN
+            SELECT RAISE(ABORT, 'Approval plans are immutable');
+          END;
+        CREATE TRIGGER IF NOT EXISTS ai_operation_approvals_terminal
+          BEFORE UPDATE ON ai_operation_approvals
+          WHEN OLD.status IN ('rejected', 'expired', 'invalid', 'succeeded', 'failed') BEGIN
+            SELECT RAISE(ABORT, 'Approval is already terminal');
+          END;
+      `);
+      this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (75, ?)", new Date().toISOString());
+    });
+    if (this.all<{ integrity_check: string }>("PRAGMA integrity_check").some((row) => row.integrity_check !== "ok")) throw new Error("Database integrity check failed after approval migration");
+    if (this.all("PRAGMA foreign_key_check").length) throw new Error("Database foreign key check failed after approval migration");
+  }
+
   private normalizeCharacterName(value: string): string {
     return value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("zh-CN");
   }
@@ -2962,6 +3017,7 @@ export class Database {
 
   private recoverInterruptedOperations(): void {
     const timestamp = new Date().toISOString();
+    this.run("UPDATE ai_operation_approvals SET status = 'invalid', reason = '服务恢复时发现未完成审批，请重新生成计划', updated_at = ? WHERE status = 'executing'", timestamp);
     this.run(
       `UPDATE ai_calls SET status = 'failed', failure = COALESCE(failure, '服务重启导致调用中断'), completed_at = ?
        WHERE status = 'running'`,
