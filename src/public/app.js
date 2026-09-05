@@ -1,4 +1,4 @@
-import { createS3BackupUi } from "/s3-backup-ui.js?v=20260905-s3-backup-v1";
+import { createS3BackupUi } from "/s3-backup-ui.js?v=20260905-s3-backup-v2";
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260728-galaxy-edge-stars-v3";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";

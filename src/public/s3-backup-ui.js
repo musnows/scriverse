@@ -8,6 +8,22 @@ export function s3DisplayRoot(prefix) {
   return `/${directory ? `${directory}/` : ""}scriverse`;
 }
 
+export function s3BackupNotifications(events, initialized) {
+  const failures = events.filter((event) => event.status === "error");
+  const successes = initialized ? events.filter((event) => event.status === "success" && event.trigger === "manual") : [];
+  const messages = [];
+  if (failures.length === 1) {
+    const event = failures[0];
+    messages.push({ type: "error", message: `${event.trigger === "scheduled" ? "定时备份" : "手动备份"} · ${event.targetName}：${event.message.slice(0, 160)}` });
+  } else if (failures.length > 1) {
+    const names = [...new Set(failures.map((event) => event.targetName))];
+    messages.push({ type: "error", message: `S3 备份有 ${failures.length} 次失败：${names.slice(0, 3).join("、")}${names.length > 3 ? "等目标" : ""}。请在系统备份中查看结果。` });
+  }
+  if (successes.length === 1) messages.push({ type: "info", message: `${successes[0].targetName}：${successes[0].message}` });
+  else if (successes.length > 1) messages.push({ type: "info", message: `${successes.length} 个目标已完成手动备份，请在系统备份中查看结果。` });
+  return messages;
+}
+
 export function createS3BackupUi({ api, toast, esc, openDialog, getUser, returnToSettings }) {
   const $ = (selector) => document.querySelector(selector);
   const dialog = $("#s3-backup-dialog");
@@ -21,6 +37,7 @@ export function createS3BackupUi({ api, toast, esc, openDialog, getUser, returnT
   let seen = new Set();
   let activeUserId = null;
   let renderedCards = "";
+  let initialized = false;
 
   function rememberEvents() {
     try { sessionStorage.setItem(`scriverse.s3-events.${activeUserId}`, JSON.stringify([...seen].slice(-100))); } catch { /* 浏览器禁用会话存储时仍在当前页面去重。 */ }
@@ -67,11 +84,10 @@ export function createS3BackupUi({ api, toast, esc, openDialog, getUser, returnT
       const completed = status.running && !next.running;
       status = next;
       pollFailed = false;
-      for (const event of next.events) {
-        if (seen.has(event.id)) continue;
-        seen.add(event.id);
-        if (event.status === "error" || event.trigger === "manual") toast(`${event.trigger === "scheduled" ? "定时备份" : "手动备份"} · ${event.targetName}：${event.message}`, event.status === "error" ? "error" : "info");
-      }
+      const unseen = next.events.filter((event) => !seen.has(event.id));
+      for (const notification of s3BackupNotifications(unseen, initialized)) toast(notification.message, notification.type);
+      for (const event of unseen) seen.add(event.id);
+      initialized = true;
       rememberEvents();
       if (completed && dialog.open) configuration = await api("/api/platform/s3-backup");
       render();
@@ -182,6 +198,7 @@ export function createS3BackupUi({ api, toast, esc, openDialog, getUser, returnT
       activeUserId = user?.role === "admin" ? user.userId : null;
       configuration = null;
       status = { running: null, events: [] };
+      initialized = false;
       seen = new Set();
       if (!activeUserId) { dialog.close(); return; }
       try { seen = new Set(JSON.parse(sessionStorage.getItem(`scriverse.s3-events.${activeUserId}`) ?? "[]")); } catch { /* 无效的本地记录不会阻断备份通知。 */ }
