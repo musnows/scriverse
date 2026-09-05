@@ -18,7 +18,7 @@ describe("AI approval HTTP and agent boundaries", () => {
   let toolName: string;
   let toolArguments: Record<string, unknown>;
   const asActor = <T>(operation: () => T): T => runWithRequestActor(actor, operation);
-  const post = (path: string) => request(runtime.app).post(path).set("Cookie", cookie).set("X-CSRF-Token", csrfToken);
+  const post = (path: string) => request(runtime.app).post(path).set("Host", "approval.test").set("Origin", "http://approval.test").set("Cookie", cookie).set("X-CSRF-Token", csrfToken);
   const plan = (operations: unknown[]) => asActor(() => runtime.ai.approvals.propose(workId, conversationId, { summary: "Pending user approval", operations }));
   const createSetting = { kind: "create", entity: "setting", fields: { title: "New rule", category: "Rule", content: "Approved text" } };
   const path = (approvalId: unknown, action: string) => `/api/works/${workId}/ai-approvals/${approvalId}/${action}`;
@@ -57,6 +57,7 @@ describe("AI approval HTTP and agent boundaries", () => {
     const approval = plan([createSetting]);
     await request(runtime.app).post(path(approval.id, "confirm")).send({}).expect(401);
     await request(runtime.app).post(path(approval.id, "confirm")).set("Cookie", cookie).send({}).expect(403);
+    await request(runtime.app).post(path(approval.id, "confirm")).set("Cookie", cookie).set("X-CSRF-Token", csrfToken).send({}).expect(403);
     await post(path(approval.id, "confirm")).set("Origin", "https://attacker.test").send({}).expect(403);
     await post(path(approval.id, "confirm")).send({ operations: [createSetting], approved: true }).expect(400);
     await post(path("forged_approval", "confirm")).send({}).expect(404);
@@ -83,7 +84,7 @@ describe("AI approval HTTP and agent boundaries", () => {
     await request(runtime.app).get(`/api/works/${workId}/ai-approvals/${approval.id}`).set("Cookie", outsiderCookie).expect(403);
     runtime.database.run("INSERT INTO work_memberships (work_id, user_id, role, created_at) VALUES (?, ?, 'editor', ?)", workId, other.session.user.userId, new Date().toISOString());
     await request(runtime.app).get(`/api/works/${workId}/ai-approvals/${approval.id}`).set("Cookie", outsiderCookie).expect(404);
-    await request(runtime.app).post(path(approval.id, "confirm")).set("Cookie", outsiderCookie).set("X-CSRF-Token", other.session.csrfToken).send({}).expect(404);
+    await request(runtime.app).post(path(approval.id, "confirm")).set("Host", "approval.test").set("Origin", "http://approval.test").set("Cookie", outsiderCookie).set("X-CSRF-Token", other.session.csrfToken).send({}).expect(404);
     expect(runtime.store.listSettings(workId)).toHaveLength(0);
   });
 

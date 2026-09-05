@@ -1116,6 +1116,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.use(createExpensiveApiRateLimitMiddleware());
   app.use(createCliApiScopeMiddleware(options.disableUserAuth));
   app.use(createWorkAuthorizationMiddleware(auth, options.disableUserAuth));
+  app.use(/^\/api\/works\/[^/]+\/(?:ai-approvals(?:\/|$)|ai-settings\/write-tools(?:\/|$))/iu, (request, response, next) => {
+    if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return next();
+    if (!request.get("origin")) throw new AppError(403, "AI_APPROVAL_ORIGIN_REQUIRED", "AI 审批操作必须由同源页面发起");
+    createSameOriginMiddleware()(request, response, next);
+  });
   app.get("/api/cli/session", (request, response) => {
     if (!request.authUser || request.authMethod !== "api-key") throw new AppError(401, "API_KEY_REQUIRED", "请使用 API Key 登录");
     data(response, { authenticated: true, user: request.authUser, apiKeyPrefix: request.authApiKey?.prefix ?? null });
