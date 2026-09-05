@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 72;
+export const DATABASE_SCHEMA_VERSION = 73;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -2773,6 +2773,21 @@ export class Database {
       }
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(73)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS platform_s3_backup (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          revision INTEGER NOT NULL DEFAULT 0,
+          targets_json TEXT NOT NULL DEFAULT '[]',
+          events_json TEXT NOT NULL DEFAULT '[]'
+        )`);
+        this.run("INSERT INTO platform_s3_backup (id) VALUES (1) ON CONFLICT(id) DO NOTHING");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (73, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) throw new Error("Database integrity check failed after S3 backup migration");
+      if (this.all("PRAGMA foreign_key_check").length > 0) throw new Error("Database foreign key check failed after S3 backup migration");
     }
   }
 

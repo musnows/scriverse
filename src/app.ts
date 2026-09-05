@@ -13,6 +13,7 @@ import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
+import { S3BackupSettings, s3SettingsSchema } from "./s3-backup-settings.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
 import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
@@ -598,6 +599,7 @@ export type Runtime = {
   store: Store;
   ai: AiManager;
   auth: UserAuthService;
+  s3BackupSettings: S3BackupSettings;
   attachmentStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
@@ -938,6 +940,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
   const store = new Store(database);
+  const s3BackupSettings = new S3BackupSettings(database, new CredentialVault(options.masterSecret), store);
   let attachmentCleanupChain = Promise.resolve();
   const cleanupAttachments = (): Promise<void> => {
     const cleanup = attachmentCleanupChain.then(async () => {
@@ -2054,6 +2057,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const query = parse(aiUsageQuerySchema, request.query);
     data(response, ai.getPlatformTokenUsage(query.timezoneOffset));
   });
+  app.get("/api/platform/s3-backup", (_request, response) => data(response, s3BackupSettings.publicSettings()));
+  app.put("/api/platform/s3-backup", (request, response) => {
+    s3BackupSettings.save(parse(s3SettingsSchema, request.body));
+    data(response, s3BackupSettings.publicSettings());
+  });
+
   app.get("/api/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
   app.get("/api/platform/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
   app.patch("/api/platform/ui-settings", (request, response) => {
@@ -2574,7 +2583,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, s3BackupSettings, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
     ai.dispose();
     database.close();
