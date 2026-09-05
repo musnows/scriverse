@@ -2091,6 +2091,26 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
+  app.get("/api/works/:workId/ai-settings/write-tools", (request, response) => data(response, ai.approvals.getSettings(request.params.workId)));
+  app.patch("/api/works/:workId/ai-settings/write-tools", (request, response) => data(response, ai.approvals.updateSettings(request.params.workId, request.body)));
+  app.get("/api/works/:workId/ai-approvals", (request, response) => {
+    const query = parse(z.object({ offset: z.coerce.number().int().min(0).max(100000).default(0), limit: z.coerce.number().int().min(1).max(100).default(30) }).strict(), request.query);
+    data(response, ai.approvals.list(request.params.workId, query.offset, query.limit));
+  });
+  app.get("/api/works/:workId/ai-approvals/:approvalId", (request, response) => data(response, ai.approvals.get(request.params.workId, request.params.approvalId)));
+  app.post("/api/works/:workId/ai-approvals/:approvalId/confirm", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, ai.approvals.confirm(request.params.workId, request.params.approvalId));
+  });
+  app.post("/api/works/:workId/ai-approvals/:approvalId/reject", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, ai.approvals.reject(request.params.workId, request.params.approvalId));
+  });
+  app.post("/api/works/:workId/ai-approvals/:approvalId/answer", (request, response) => data(response, ai.approvals.answer(request.params.workId, request.params.approvalId, request.body)));
+  app.post("/api/works/:workId/ai-approvals/:approvalId/undo", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, ai.approvals.requestUndo(request.params.workId, request.params.approvalId));
+  });
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
     data(response, ai.getWorkTokenUsage(request.params.workId, query.timezoneOffset));

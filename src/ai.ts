@@ -30,6 +30,8 @@ import {
   withAgentToolCallQuotaNotice
 } from "./ai-tool-results.js";
 import { CredentialVault } from "./credential-vault.js";
+import { AiApprovalService } from "./ai-approvals.js";
+import { AI_ANALYSIS_TYPES, approvalEntitySchemas, askUserQuestionSchema, writePlanSchema } from "./ai-approval-contract.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
@@ -369,7 +371,8 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
 }
 
 const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"] as const;
-const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, "recall_self", "recall_relationship"] as const;
+const APPROVAL_AGENT_TOOL_IDS = ["ProposeWritePlan", "AskUserQuestions", "AnalysisTaskOptions"] as const;
+const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, "recall_self", "recall_relationship", ...APPROVAL_AGENT_TOOL_IDS] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type ConfiguredAgentToolId = (typeof CONFIGURED_AGENT_TOOL_IDS)[number];
 const AGENT_TOOL_READ_MODULES: Record<Exclude<ConfiguredAgentToolId, "search_story_entities">, readonly WorkPermissionModule[]> = {
@@ -713,6 +716,26 @@ const agentToolCursorParameter = {
 };
 
 const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
+  ProposeWritePlan: {
+    type: "function",
+    function: {
+      name: "ProposeWritePlan",
+      description: `提交不可变修改计划，由系统生成数据库差异并等待用户整体审批；此工具不会执行写入。支持新建和编辑词条、正文评论/待办和创建分析任务。禁止删除词条、修改章节正文或跳过确认。默认最多 5 项，以当前工具设置上限为准。编辑使用目标 ID；新建章节大纲的 targetId 是章节 ID，新建角色档案章节的 targetId 是角色 ID。分析任务先调用 AnalysisTaskOptions 选择明确的模型 ID；关系分析使用变更预览。各实体允许字段：${Object.entries(approvalEntitySchemas).map(([entity, schema]) => `${entity}: ${Object.keys(schema.shape).join(", ")}`).join("; ")}。`,
+      parameters: z.toJSONSchema(writePlanSchema, { io: "input" })
+    }
+  },
+  AskUserQuestions: {
+    type: "function",
+    function: {
+      name: "AskUserQuestions",
+      description: "一次仅提出一个问题，提供至少两个单选预置选项，将最推荐的选项放在第一项。用户也可自定义回答。系统会暂停当前回答并持久化提问；不得伪造用户回答，不得在未回答、拒绝、过期或失效后依赖该回答写入。",
+      parameters: z.toJSONSchema(askUserQuestionSchema, { io: "input" })
+    }
+  },
+  AnalysisTaskOptions: {
+    type: "function",
+    function: { name: "AnalysisTaskOptions", description: "读取可提交审批的分析任务类型、模型 ID、名称及计划操作上限，不创建任务。", parameters: { type: "object", properties: {}, additionalProperties: false } }
+  },
   story_index: {
     type: "function",
     function: {
@@ -1877,6 +1900,13 @@ export class AiManager {
     private readonly authorizeTaskRun?: (task: Record<string, unknown>, actor?: TaskRunActor) => void,
     private readonly attachmentStorage?: AttachmentStorage
   ) {
+    this.approvals = new AiApprovalService(store, {
+      describe: (workId, operation) => {
+        const { model, provider } = this.resolveModel(workId, this.analysisTaskModelPurpose(operation.taskType), operation.modelId);
+        return { id: String(model.id), displayName: String(model.display_name), modelId: String(model.model_id), providerId: String(provider.id), providerName: String(provider.name) };
+      },
+      create: (workId, operation) => this.createTask(workId, operation)
+    });
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
     this.autoRunStartupTimer = setTimeout(() => {
@@ -1890,6 +1920,8 @@ export class AiManager {
     }, 0);
     logger.info("ai.manager.ready");
   }
+
+  readonly approvals: AiApprovalService;
 
   getPlatformTokenUsage(timezoneOffset: number): Record<string, unknown> {
     return this.getTokenUsage(null, timezoneOffset, true);
@@ -3970,6 +4002,7 @@ export class AiManager {
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
           "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
+          ,"所有写操作只能通过 ProposeWritePlan 提出计划，审批 ID 不是用户同意。只能依据系统持久化的 succeeded 状态报告已完成。AskUserQuestions 未获得系统记录的真实回答前必须等待；拒绝、过期或失效时不得猜测答案。禁止通过分析范围、正文建议或其他工具绕过写入审批。"
         ].join("\n")
       : "";
     const coreRules = [
@@ -4035,11 +4068,16 @@ export class AiManager {
         )
       ]);
     // 分析任务指令含服务端 CHAPTER/json 等标记，不能转义；分区边界仍靠外层标签约束。
+    let approvalState = "";
+    if (input.conversationId && input.taskType === "chat" && !roleplayCharacterId && currentRequestActor()) {
+      const interactions = this.approvals.conversationState(input.workId, input.conversationId);
+      if (interactions.length) approvalState = wrapAiContextRegion("persisted_user_interactions", JSON.stringify(interactions));
+    }
     const currentInstruction = wrapAiContextRegion(
       roleplayCharacterId ? "user_message" : "author_instruction",
       input.instruction,
       { escape: false }
-    );
+    ) + (approvalState ? `\n\n${approvalState}` : "");
     const conversation = input.conversationId
       ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
       : null;
@@ -4237,9 +4275,14 @@ export class AiManager {
     const enabled = new Set((sourceTools as unknown[])
       .filter((item): item is ConfiguredAgentToolId => typeof item === "string" && CONFIGURED_AGENT_TOOL_IDS.includes(item as ConfiguredAgentToolId)));
     const requested = requestedToolIds ? new Set(requestedToolIds) : null;
-    return CONFIGURED_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)
+    const readTools: AgentToolId[] = CONFIGURED_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)
       && (!requested || requested.has(toolId))
       && this.canReadWithAgentTool(permissions, toolId));
+    const writeTools = taskType === "chat" ? this.approvals.availableTools(workId, conversationId) : [];
+    if (writeTools.some((tool) => tool !== "AskUserQuestions") && (!requested || requested.has("ProposeWritePlan"))) readTools.push("ProposeWritePlan");
+    if (writeTools.includes("AskUserQuestions") && (!requested || requested.has("AskUserQuestions"))) readTools.push("AskUserQuestions");
+    if (writeTools.includes("analysis") && (!requested || requested.has("AnalysisTaskOptions"))) readTools.push("AnalysisTaskOptions");
+    return readTools;
   }
 
   private enabledAgentTools(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[], conversationId?: string): Record<string, unknown>[] {
@@ -4372,7 +4415,8 @@ export class AiManager {
     roleplayCharacterId: string | null = null,
     allowedToolIds?: ReadonlySet<AgentToolId>,
     signal?: AbortSignal,
-    onUsage?: (usage: ResolvedAiTokenUsage) => void
+    onUsage?: (usage: ResolvedAiTokenUsage) => void,
+    conversationId?: string
   ): Promise<AgentToolCallResult> {
     const name = toolCall.function.name;
     const calledAt = now();
@@ -4395,6 +4439,25 @@ export class AiManager {
     const suppliedArguments = rawArguments && typeof rawArguments === "object" && !Array.isArray(rawArguments)
       ? rawArguments as Record<string, unknown>
       : null;
+    if (APPROVAL_AGENT_TOOL_IDS.includes(name as typeof APPROVAL_AGENT_TOOL_IDS[number])) {
+      try {
+        if (!conversationId || roleplayCharacterId || !allowedToolIds?.has(name as AgentToolId)
+          || !this.enabledAgentToolIds(workId, "chat", undefined, conversationId).includes(name as AgentToolId)) {
+          throw new AppError(403, "TOOL_NOT_AVAILABLE", "该工具未开启或当前对话无权使用");
+        }
+        if (name === "AnalysisTaskOptions") {
+          if (!suppliedArguments || Object.keys(suppliedArguments).length) throw new AppError(400, "TOOL_ARGUMENTS_INVALID", "该查询不接受参数");
+          const models = this.listWorkModels(workId).map((model) => ({ id: model.id, displayName: model.displayName, modelId: model.modelId }));
+          return { id: toolCall.id, name, calledAt, arguments: {}, status: "completed", result: { taskTypes: [...AI_ANALYSIS_TYPES], models, maxOperations: this.approvals.maxOperations } };
+        }
+        const approval = name === "AskUserQuestions"
+          ? this.approvals.ask(workId, conversationId, suppliedArguments, toolCall.id)
+          : this.approvals.propose(workId, conversationId, suppliedArguments, toolCall.id);
+        return { id: toolCall.id, name, calledAt, arguments: { approvalId: approval.id }, status: "completed", result: { approvalId: approval.id, status: approval.status, awaitingUser: true, message: name === "AskUserQuestions" ? "问题已保存，请在提问卡片中选择或填写回答。" : "修改计划已保存，等待你查看详情并整体确认。" } };
+      } catch (error) {
+        return { id: toolCall.id, name, calledAt, arguments: null, status: "failed", result: { ok: false, error: { code: error instanceof AppError ? error.code : "AI_APPROVAL_FAILED", message: error instanceof AppError && /^(AI_APPROVAL_|AI_QUESTION_|TOOL_)/u.test(error.code) ? error.message : "无法创建审批，请检查操作对象、权限和模型" } } };
+      }
+    }
     const schema = name === "story_index" ? storyIndexArguments
       : name === "read_chapters" ? readChaptersArguments
       : name === "grep" ? grepArguments
@@ -5392,6 +5455,7 @@ export class AiManager {
         }
         const maximumResultChars = toolResultMaximumChars(assistantToolMessage, toolCalls.length);
         const currentRoundMessages: CompletionMessage[] = [assistantToolMessage];
+        let pendingUserInteraction: string | null = null;
         for (const toolCall of toolCalls) {
           const execution = await this.executeAgentTool(
             input.workId,
@@ -5400,7 +5464,8 @@ export class AiManager {
             generationRoleplayCharacterId,
             allowedToolIds,
             input.signal,
-            trackUsage
+            trackUsage,
+            input.conversationId
           );
           logger.info("ai.tool_call.completed", {
             callId,
@@ -5419,6 +5484,14 @@ export class AiManager {
           processSteps.push({ id: id("process"), type: "tool", round, toolCall: execution, createdAt: execution.calledAt });
           input.onToolCall?.(execution, round);
           currentRoundMessages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(execution.result) });
+          if (execution.result.awaitingUser === true) {
+            pendingUserInteraction = String(execution.result.message);
+            break;
+          }
+        }
+        if (pendingUserInteraction) {
+          choice = { message: { content: pendingUserInteraction }, finish_reason: "stop" };
+          break;
         }
         const projectedMessages = [...completionMessages, ...currentRoundMessages];
         try {

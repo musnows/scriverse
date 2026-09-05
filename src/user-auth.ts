@@ -908,6 +908,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/members(?:\/[^/]+)?$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/presence$/u.test(pathname)) return {};
   if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
+  if (/^\/api\/works\/[^/]+\/ai-approvals(?:\/|$)/u.test(pathname)) return { read: ["ai-chat"] };
   if (/^\/api\/works\/[^/]+\/(?:writing-progress|writing-goal)$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/chapter-annotations$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/attachments$/u.test(pathname)) {
