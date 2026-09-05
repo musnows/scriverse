@@ -4420,7 +4420,8 @@ export class AiManager {
     allowedToolIds?: ReadonlySet<AgentToolId>,
     signal?: AbortSignal,
     onUsage?: (usage: ResolvedAiTokenUsage) => void,
-    conversationId?: string
+    conversationId?: string,
+    generationCallId?: string
   ): Promise<AgentToolCallResult> {
     const name = toolCall.function.name;
     const calledAt = now();
@@ -4454,9 +4455,10 @@ export class AiManager {
           const models = this.listWorkModels(workId).map((model) => ({ id: model.id, displayName: model.displayName, modelId: model.modelId }));
           return { id: toolCall.id, name, calledAt, arguments: {}, status: "completed", result: { taskTypes: [...AI_ANALYSIS_TYPES], models, maxOperations: this.approvals.maxOperations } };
         }
+        const interactionCallId = `${generationCallId}:${toolCall.id}`;
         const approval = name === "AskUserQuestions"
-          ? this.approvals.ask(workId, conversationId, suppliedArguments, toolCall.id)
-          : this.approvals.propose(workId, conversationId, suppliedArguments, toolCall.id);
+          ? this.approvals.ask(workId, conversationId, suppliedArguments, interactionCallId)
+          : this.approvals.propose(workId, conversationId, suppliedArguments, interactionCallId);
         return { id: toolCall.id, name, calledAt, arguments: { approvalId: approval.id }, status: "completed", result: { approvalId: approval.id, status: approval.status, awaitingUser: true, message: name === "AskUserQuestions" ? "问题已保存，请在提问卡片中选择或填写回答。" : "修改计划已保存，等待你查看详情并整体确认。" } };
       } catch (error) {
         return { id: toolCall.id, name, calledAt, arguments: null, status: "failed", result: { ok: false, error: { code: error instanceof AppError ? error.code : "AI_APPROVAL_FAILED", message: error instanceof AppError && /^(AI_APPROVAL_|AI_QUESTION_|TOOL_)/u.test(error.code) ? error.message : "无法创建审批，请检查操作对象、权限和模型" } } };
@@ -5469,7 +5471,8 @@ export class AiManager {
             allowedToolIds,
             input.signal,
             trackUsage,
-            input.conversationId
+            input.conversationId,
+            callId
           );
           logger.info("ai.tool_call.completed", {
             callId,

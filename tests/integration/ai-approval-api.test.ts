@@ -148,6 +148,7 @@ describe("AI approval HTTP and agent boundaries", () => {
     await post(`/api/works/${workId}/chat/stream`).send({ conversationId, instruction: "Continue", scope: { type: "none" }, modelId }).expect(200);
     const body = String(fetchMock.mock.calls.at(-1)?.[1]?.body);
     expect(body).toContain("My own answer");
+    expect(runtime.database.all("SELECT kind, status FROM ai_operation_approvals ORDER BY created_at")).toEqual([{ kind: "question", status: "succeeded" }, { kind: "plan", status: "pending" }]);
   });
 
   it("rejects a forged model tool call after its switch is disabled", async () => {
