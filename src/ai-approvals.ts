@@ -560,8 +560,9 @@ export class AiApprovalService {
   }
 
   conversationState(workId: string, conversationId: string): Array<Record<string, unknown>> {
-    this.context(workId, conversationId);
-    const rows = this.store.db.all<{ id: string }>("SELECT id FROM ai_operation_approvals WHERE work_id = ? AND conversation_id = ? ORDER BY created_at DESC LIMIT 20", workId, conversationId);
+    const actorId = this.actorId();
+    this.requireModules(this.permissions(workId, actorId), ["ai-chat"], []);
+    const rows = this.store.db.all<{ id: string }>("SELECT id FROM ai_operation_approvals WHERE work_id = ? AND conversation_id = ? AND (initiated_by_user_id = ? OR conversation_owner_user_id = ?) ORDER BY created_at DESC LIMIT 20", workId, conversationId, actorId, actorId);
     return rows.map((row) => {
       const approval = this.get(workId, row.id);
       return { id: approval.id, kind: approval.kind, status: approval.status, question: approval.question, result: approval.status === "succeeded" ? approval.result : null };

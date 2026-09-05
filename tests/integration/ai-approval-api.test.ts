@@ -181,4 +181,13 @@ describe("AI approval HTTP and agent boundaries", () => {
     await expect(asActor(() => runtime.ai.runTask(taskId))).rejects.toThrow("不一致");
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("preserves ordinary chat in legacy conversations without enabling ownerless writes", async () => {
+    runtime.database.run("UPDATE ai_conversations SET created_by_user_id = NULL WHERE id = ?", conversationId);
+    fetchMock.mockImplementation(async () => Response.json({ choices: [{ message: { content: "Read-only conversation remains available" } }] }));
+    const response = await post(`/api/works/${workId}/chat/stream`).send({ conversationId, instruction: "Discuss the story", scope: { type: "none" }, modelId }).expect(200);
+    expect(response.text).toContain("Read-only conversation remains available");
+    expect(response.text).not.toContain("event: error");
+    expect(asActor(() => runtime.ai.approvals.availableTools(workId, conversationId))).toEqual([]);
+  });
 });
