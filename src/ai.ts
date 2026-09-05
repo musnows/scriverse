@@ -3693,6 +3693,7 @@ export class AiManager {
   ): Promise<Record<string, unknown>> {
     const task = this.store.getTask(taskId);
     this.authorizeTaskRun?.(task, actor);
+    this.approvals.assertTaskRun(task, actor?.userId, modelId);
     const workId = String(task.workId);
     const taskModel = task.model && typeof task.model === "object" && !Array.isArray(task.model)
       ? task.model as Record<string, unknown>
@@ -9216,6 +9217,7 @@ export class AiManager {
     if (!taskId) return true;
     const task = this.store.getTask(taskId);
     if (task.status !== "running") return false;
+    this.approvals.assertTaskRun(task, currentRequestActor()?.userId);
     if (this.store.isTaskSourceCurrent(taskId)) return true;
     this.store.updateTask(taskId, { status: "expired" });
     return false;

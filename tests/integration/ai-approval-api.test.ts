@@ -157,4 +157,27 @@ describe("AI approval HTTP and agent boundaries", () => {
     expect(runtime.database.all("SELECT * FROM ai_operation_approvals")).toHaveLength(0);
     expect(runtime.store.listSettings(workId)).toHaveLength(0);
   });
+
+  it("rechecks the conversation owner's permissions when an approved task eventually runs", async () => {
+    const owner = runtime.auth.register({ username: "approval-chat-owner", password: "Chat-owner-password1" }).session.user;
+    runtime.database.run("INSERT INTO work_memberships (work_id, user_id, role, permissions_json, created_at) VALUES (?, ?, 'editor', ?, ?)", workId, owner.userId, JSON.stringify({ modules: fullWorkModulePermissions() }), new Date().toISOString());
+    conversationId = String(runWithRequestActor({ ...owner, authentication: "session" }, () => runtime.store.createAiConversation(workId, "Other owner's conversation", "chat")).id);
+    const approval = plan([{ kind: "analysis", taskType: "book-analysis", scope: { type: "book" }, modelId }]);
+    const response = await post(path(approval.id, "confirm")).send({}).expect(200);
+    const taskId = response.body.data.result.operations[0].targetId;
+    runtime.database.run("UPDATE work_memberships SET permissions_json = ? WHERE work_id = ? AND user_id = ?", JSON.stringify({ modules: { ...fullWorkModulePermissions(), prose: "none" } }), workId, owner.userId);
+    await expect(asActor(() => runtime.ai.runTask(taskId))).rejects.toThrow("读取权限");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(runtime.store.getTask(taskId).status).toBe("pending");
+  });
+
+  it("refuses an altered model or scope on an approved queued task", async () => {
+    const approval = plan([{ kind: "analysis", taskType: "chapter-analysis", scope: { type: "chapter", chapterId }, modelId }]);
+    const response = await post(path(approval.id, "confirm")).send({}).expect(200);
+    const taskId = response.body.data.result.operations[0].targetId;
+    await expect(asActor(() => runtime.ai.runTask(taskId, "forged_model"))).rejects.toThrow("不一致");
+    runtime.database.run("UPDATE analysis_tasks SET scope_json = ? WHERE id = ?", JSON.stringify({ type: "book" }), taskId);
+    await expect(asActor(() => runtime.ai.runTask(taskId))).rejects.toThrow("不一致");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

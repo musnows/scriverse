@@ -500,6 +500,30 @@ export class AiApprovalService {
     });
   }
 
+  assertTaskRun(task: Record<string, unknown>, actorId?: string, modelOverride?: string): void {
+    const workId = String(task.workId);
+    const row = this.store.db.get<ApprovalRow>(`SELECT approval.* FROM ai_operation_approvals approval
+      WHERE approval.work_id = ? AND approval.status = 'succeeded' AND approval.kind = 'plan'
+      AND EXISTS (SELECT 1 FROM json_each(approval.result_json, '$.operations') result WHERE json_extract(result.value, '$.targetId') = ?)`, workId, String(task.id));
+    if (!row) return;
+    const content = JSON.parse(row.content_json) as ApprovalContent;
+    const result = JSON.parse(row.result_json!) as { operations: Array<{ targetId: string; index: number }> };
+    const index = result.operations.find((item) => item.targetId === task.id)?.index;
+    const operation = index === undefined ? null : content.operations[index];
+    if (!operation || operation.input.kind !== "analysis") throw new AppError(409, "AI_APPROVAL_PLAN_CHANGED", "任务审批记录不匹配");
+    for (const userId of [...new Set([row.initiated_by_user_id, row.conversation_owner_user_id, ...(actorId ? [actorId] : [])])]) {
+      this.requireModules(this.permissions(workId, userId), operation.read, ["ai-analysis"]);
+    }
+    if (!this.getSettings(workId).enabled.includes("analysis")) throw new AppError(403, "AI_APPROVAL_TOOL_DISABLED", "分析任务工具已关闭，不能运行该 AI 审批任务");
+    const actualScope = { ...fieldRecord(task.scope) };
+    const { targetCharacters: _targetCharacters, ...scope } = actualScope;
+    if (task.taskType !== operation.input.taskType || stableJson(scope) !== stableJson(operation.input.scope)
+      || fieldRecord(task.model).id !== operation.input.modelId || modelOverride && modelOverride !== operation.input.modelId) {
+      throw new AppError(409, "AI_APPROVAL_PLAN_CHANGED", "任务类型、模型或分析范围与审批内容不一致");
+    }
+    if (!this.tasks || stableJson(this.tasks.describe(workId, operation.input)) !== stableJson(operation.model)) throw new AppError(409, "AI_APPROVAL_MODEL_INVALID", "审批指定的分析模型已发生变化");
+  }
+
   conversationState(workId: string, conversationId: string): Array<Record<string, unknown>> {
     this.context(workId, conversationId);
     const rows = this.store.db.all<{ id: string }>("SELECT id FROM ai_operation_approvals WHERE work_id = ? AND conversation_id = ? ORDER BY created_at DESC LIMIT 20", workId, conversationId);
