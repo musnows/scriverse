@@ -4858,6 +4858,151 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(captured[2]?.toolNames).not.toContain("ask_user_question");
   });
 
+  it.each(["answer", "reject"])("streams question continuation before generation completes (%s)", async (action) => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({ tools: { ask_user_questions: true } }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    let releaseThinking = () => {};
+    const observedThinking = new Promise<void>((resolve) => { releaseThinking = resolve; });
+    let completionCount = 0;
+    fetchMock.mockImplementation(async () => {
+      completionCount += 1;
+      if (completionCount === 1) return new Response(JSON.stringify({ choices: [{ message: {
+        content: null, reasoning_content: "Before the question.",
+        tool_calls: [{ id: "ask-stream", type: "function", function: {
+          name: "ask_user_question", arguments: { question: "Choose a direction?", options: ["A", "B"] }
+        } }]
+      } }] }), { status: 200 });
+      return new Response(new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"reasoning_content":"Resumed thinking is visible."}}]}\n\n'));
+          await observedThinking;
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"Continuation finished."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'));
+          controller.close();
+        }
+      }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "Ask before continuing", scope: { type: "chapter", chapterId }, modelId, conversationId
+    }).expect(200);
+    const questions = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}`).expect(200);
+    const questionId = String(questions.body.data.questions[0].id);
+    const original = runtime.database.get<{ id: string }>(
+      "SELECT id FROM ai_conversation_messages WHERE conversation_id = ? AND role = 'assistant'", conversationId
+    );
+    await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
+      .set("Accept", "text/event-stream").send({ selectedOption: 99 }).expect(400);
+    let received = "";
+    try {
+      await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/${action}`)
+        .set("Accept", "text/event-stream")
+        .send(action === "answer" ? { selectedOption: 0 } : {})
+        .buffer(true)
+        .parse((response, callback) => {
+          response.on("data", (chunk: Buffer) => {
+            received += chunk.toString("utf8");
+            if (received.includes("Resumed thinking is visible.")) releaseThinking();
+          });
+          response.on("end", () => callback(null, received));
+          response.on("error", callback);
+        }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    } finally {
+      releaseThinking();
+    }
+    expect(received).toContain("event: continuation");
+    expect(received).toContain(`"messageId":"${original?.id}"`);
+    expect(received.indexOf("Resumed thinking is visible.")).toBeLessThan(received.indexOf("Continuation finished."));
+    expect(received).toContain('"round":2');
+    expect(received).toContain('"resumeState":"completed"');
+    const complete = received.split("event: complete\ndata: ")[1]?.split("\n\n")[0];
+    const metadata = JSON.parse(complete ?? "{}");
+    expect(metadata.processSteps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "thinking", round: 1, content: "Before the question." }),
+      expect.objectContaining({ type: "tool", toolCall: expect.objectContaining({ name: "ask_user_question" }) }),
+      expect.objectContaining({ type: "thinking", round: 2, content: "Resumed thinking is visible." })
+    ]));
+    const messages = runtime.store.getAiConversation(conversationId).messages as Array<{ id: string; role: string; content: string; metadata: Record<string, unknown> }>;
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toMatchObject({ id: original?.id, content: "Continuation finished.", metadata: { processSteps: metadata.processSteps } });
+    await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/${action}`)
+      .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(409);
+    expect(completionCount).toBe(2);
+  });
+
+  it("streams later tools and repeated questions into the original assistant message", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({ tools: { ask_user_questions: true } }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async () => {
+      completionCount += 1;
+      const tool = completionCount === 2
+        ? { id: "read-after-answer", name: "story_index", arguments: { limit: 1 } }
+        : { id: `ask-${completionCount}`, name: "ask_user_question", arguments: { question: "Choose a direction?", options: ["A", "B"] } };
+      return new Response(JSON.stringify({ choices: [{ message: {
+        reasoning_content: `Thinking round ${completionCount}.`,
+        content: completionCount === 4 ? "Finished after both answers." : null,
+        ...(completionCount < 4 ? { tool_calls: [{ id: tool.id, type: "function", function: { name: tool.name, arguments: tool.arguments } }] } : {})
+      } }] }), { status: 200 });
+    });
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "Ask twice and read the index", scope: { type: "chapter", chapterId }, modelId, conversationId
+    }).expect(200);
+    for (const round of [1, 3]) {
+      const questions = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}&status=pending`).expect(200);
+      expect(questions.body.data.questions).toHaveLength(1);
+      const questionId = String(questions.body.data.questions[0].id);
+      const otherWork = await createWork(runtime, "Other work");
+      await request(runtime.app).post(`/api/works/${otherWork.id}/ai/questions/${questionId}/answer`)
+        .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(404);
+      const resumed = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
+        .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(200);
+      expect(resumed.text).toContain(`Thinking round ${round + 1}.`);
+      if (round === 1) {
+        expect(resumed.text).toContain('event: tool_call\ndata: {"id":"read-after-answer"');
+        expect(resumed.text).toContain('event: tool_call\ndata: {"id":"ask-3"');
+      }
+    }
+    const messages = runtime.store.getAiConversation(conversationId).messages as Array<{ content: string; metadata: Record<string, unknown> }>;
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.content).toBe("Finished after both answers.");
+    expect(messages[1]?.metadata.processSteps).toEqual(expect.arrayContaining([1, 2, 3, 4].map((round) =>
+      expect.objectContaining({ type: "thinking", round, content: `Thinking round ${round}.` })
+    )));
+    expect(completionCount).toBe(4);
+  });
+
+  it("reports continuation failures through SSE and leaves the answer claimed only once", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({ tools: { ask_user_questions: true } }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+      id: "ask-failure", type: "function", function: { name: "ask_user_question", arguments: { question: "Choose?", options: ["A", "B"] } }
+    }] } }] }), { status: 200 }));
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "Ask before continuing", scope: { type: "chapter", chapterId }, modelId, conversationId
+    }).expect(200);
+    const questions = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}`).expect(200);
+    const questionId = String(questions.body.data.questions[0].id);
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: { message: "Provider unavailable" } }), { status: 401 }));
+    const failed = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
+      .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(200);
+    expect(failed.text).toContain("event: error");
+    expect(failed.text).not.toContain("event: complete");
+    expect(failed.text).not.toContain("sk-sensitive-test-value");
+    const question = await request(runtime.app).get(`/api/works/${workId}/ai/questions/${questionId}`).expect(200);
+    expect(question.body.data).toMatchObject({ status: "answered", resumeState: "failed" });
+    await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
+      .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(409);
+  });
+
   it("AskUserQuestions 持久化挂起 Agent loop 并在回答后只恢复一次", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
