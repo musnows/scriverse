@@ -82,7 +82,10 @@ describe("AI 对话历史弹窗", () => {
     expect(application.text).toContain('$("#ai-history-dialog").addEventListener("cancel"');
     expect(application.text).toContain('fork.setAttribute("aria-label", "从此消息续写为新对话")');
     expect(application.text).toContain("const forkRequestId = createAiIdempotencyKey()");
+    expect(application.text).toContain('const dismissForkingToast = persistentToast("正在创建分支对话…")');
+    expect(application.text).toContain("dismissForkingToast();");
     expect(application.text).toContain("body: { messageId: message.dataset.messageId, requestId: forkRequestId }");
+    expect(page.text).toContain("feature=ai-fork-progress-toast-v1");
     expect(application.text).toContain('message.dataset.messageId && message.classList.contains("assistant-message")');
     expect(styles.text).toContain(".ai-history-dialog-body");
     expect(styles.text).toContain(".ai-heading-action-icon");
