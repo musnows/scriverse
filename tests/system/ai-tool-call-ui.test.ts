@@ -94,7 +94,7 @@ describe("AI 工具调用记录界面", () => {
     expect(page).toContain("feature=ai-question-actions-footer-v1");
     expect(page).toContain("feature=ai-question-option-supplement-v1");
     expect(page).toContain("feature=ai-question-selection-highlight-v1");
-    expect(page).toContain("feature=ai-question-continuation-ui-v1");
+    expect(page).toContain("feature=ai-question-continuation-ui-v3");
     expect(page).toContain('class="card-actions ai-question-actions"');
     expect(page).toContain("自定义回答 / 补充信息");
     expect(page).toContain('id="ai-question-answer-count"');

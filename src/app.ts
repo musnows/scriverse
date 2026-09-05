@@ -3849,7 +3849,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId/ai/questions/:questionId", (request, response) => {
     data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, planViewer()));
   });
-  const resumeQuestionWorkflow = async (questionId: string, workId: string, viewer: PlanViewer): Promise<void> => {
+  const resumeQuestionWorkflow = async (
+    questionId: string,
+    workId: string,
+    viewer: PlanViewer,
+    stream: Parameters<AiManager["resumeUserQuestion"]>[1] = {}
+  ): Promise<Record<string, unknown> | undefined> => {
     const continuation = aiWritePlanManager.claimQuestionContinuation(questionId, workId, viewer);
     if (!continuation) return;
     try {
@@ -3878,11 +3883,68 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           : {}),
         ...(typeof continuation.round === "number" ? { round: continuation.round } : {}),
         ...(Array.isArray(continuation.toolMessages) ? { toolMessages: continuation.toolMessages } : {})
-      });
+      }, stream);
       aiWritePlanManager.finishQuestionContinuation(questionId, { callId: resumed.callId ?? null, completed: true });
+      return resumed;
     } catch (error) {
       aiWritePlanManager.finishQuestionContinuation(questionId, { message: error instanceof Error ? error.message : "恢复失败" }, true);
       throw error;
+    }
+  };
+  const respondWithQuestionContinuation = async (request: Request<{ questionId: string; workId: string }>, response: Response, viewer: PlanViewer): Promise<void> => {
+    const { questionId, workId } = request.params;
+    if (!request.get("Accept")?.includes("text/event-stream")) {
+      await resumeQuestionWorkflow(questionId, workId, viewer);
+      data(response, aiWritePlanManager.getQuestion(questionId, workId, viewer));
+      return;
+    }
+    const controller = new AbortController();
+    response.status(200);
+    response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    response.setHeader("Cache-Control", "no-cache, no-transform");
+    response.setHeader("Connection", "keep-alive");
+    response.setHeader("X-Accel-Buffering", "no");
+    response.flushHeaders();
+    const sendEvent = (event: string, payload: unknown): void => {
+      if (!response.writableEnded && !response.destroyed) response.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+    };
+    const heartbeat = setInterval(() => {
+      if (!response.writableEnded && !response.destroyed) response.write(": heartbeat\n\n");
+    }, aiStreamHeartbeatIntervalMs);
+    heartbeat.unref();
+    response.on("close", () => {
+      clearInterval(heartbeat);
+      if (!response.writableEnded) controller.abort(new Error("浏览器已中断流式请求"));
+    });
+    try {
+      const resumed = await resumeQuestionWorkflow(questionId, workId, viewer, {
+        signal: controller.signal,
+        onStart: (message) => sendEvent("continuation", message),
+        onDelta: (delta) => sendEvent("delta", { delta }),
+        onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),
+        onProcessStep: (step) => sendEvent("process_step", step),
+        onContextCompacted: (event) => sendEvent("context_compacted", event)
+      });
+      const message = resumed?.conversationMessage as Record<string, unknown> | undefined;
+      const metadata = message?.metadata as Record<string, unknown> | undefined;
+      sendEvent("complete", {
+        warningOnly: !resumed,
+        model: resumed?.model,
+        outputTokens: metadata?.outputTokens ?? resumed?.outputTokens,
+        cacheHitPercent: metadata?.cacheHitPercent ?? resumed?.cacheHitPercent,
+        processDurationMs: metadata?.processDurationMs ?? resumed?.processDurationMs,
+        toolCalls: metadata?.toolCalls ?? resumed?.toolCalls,
+        processSteps: metadata?.processSteps ?? resumed?.processSteps,
+        contextUsage: resumed?.contextUsage,
+        messageId: message?.id,
+        messageCreatedAt: message?.createdAt,
+        question: aiWritePlanManager.getQuestion(questionId, workId, viewer)
+      });
+    } catch (error) {
+      if (!controller.signal.aborted) sendEvent("error", publicAiStreamError(error));
+    } finally {
+      clearInterval(heartbeat);
+      if (!response.writableEnded && !response.destroyed) response.end();
     }
   };
   app.post("/api/works/:workId/ai/questions/:questionId/answer", async (request, response) => {
@@ -3894,14 +3956,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       viewer,
       input
     );
-    await resumeQuestionWorkflow(request.params.questionId, request.params.workId, viewer);
-    data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, viewer));
+    await respondWithQuestionContinuation(request, response, viewer);
   });
   app.post("/api/works/:workId/ai/questions/:questionId/reject", async (request, response) => {
     const viewer = planViewer();
     aiWritePlanManager.rejectQuestion(request.params.questionId, request.params.workId, viewer);
-    await resumeQuestionWorkflow(request.params.questionId, request.params.workId, viewer);
-    data(response, aiWritePlanManager.getQuestion(request.params.questionId, request.params.workId, viewer));
+    await respondWithQuestionContinuation(request, response, viewer);
   });
 
   app.get("/api/works/:workId/providers", (request, response) => {

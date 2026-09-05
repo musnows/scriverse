@@ -17,7 +17,7 @@ describe("AI 流连接耗时显示", () => {
     expect(application).toContain("let streamConnectionTimer = window.setInterval(renderStreamConnectionElapsed, 1000);");
     expect(application).toContain("window.clearInterval(streamConnectionTimer);");
     expect(application).toContain("streamConnectionTimer = null;");
-    expect(application).toContain('new Set(["delta", "process_step", "tool_call", "context_compacted", "complete", "request_status", "error"])');
+    expect(application).toContain('new Set(["continuation", "delta", "process_step", "tool_call", "context_compacted", "complete", "request_status", "error"])');
     expect(application).toContain("if (streamConnectionEstablishedEvents.has(eventName)) stopStreamConnectionTimer();");
     expect(styles).toContain(".message-meta .ai-stream-connection-seconds { display: inline-block; min-width: 3ch; font-variant-numeric: tabular-nums; text-align: right; }");
   });

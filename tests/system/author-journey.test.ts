@@ -881,7 +881,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".timeline-list { position: relative; margin-left: 15px; border-left: 1px solid var(--line); }");
     expect(styles.text).toContain(".timeline-item::before { content: \"\"; position: absolute; left: -5px; top: 5px;");
     expect(styles.text).not.toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
-    expect(application.text).toContain("async function streamChat(requestHolder, body, idempotencyKey)");
+    expect(application.text).toContain("async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null } = {})");
     expect(application.text).toContain("createStreamTypewriter");
     expect(application.text).toContain("content.innerHTML = renderMarkdown(text)");
     expect(application.text).toContain('class="message-body"');
