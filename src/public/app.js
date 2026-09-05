@@ -32,7 +32,7 @@ import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260822-private-ai-endpoint-hint-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
-import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260818-ai-agent-turn-process-v1";
+import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260906-background-stream-v2";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount, usageCalendarYears } from "/ai-usage.js?v=20260830-ai-usage-year-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
