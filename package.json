@@ -50,6 +50,8 @@
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1127.0",
+    "@smithy/protocol-http": "^5.6.2",
     "docx": "^9.7.1",
     "express": "^5.1.0",
     "jszip": "^3.10.1",

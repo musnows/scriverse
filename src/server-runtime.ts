@@ -99,6 +99,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       masterSecret: loadMasterSecret(join(options.dataDirectory, "master.key"), options.env.AI_NOVEL_MASTER_KEY),
       publicPath,
       security,
+      s3Backup: { allowPrivateEndpoints: options.env.APP_ALLOW_PRIVATE_S3_ENDPOINTS === "true" || isDevelopmentServer(options.env) },
       disableUserAuth: devAuthBypass,
       devAuthBypass,
       developmentServer: isDevelopmentServer(options.env)
@@ -133,6 +134,8 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
         if (closed) return;
         closed = true;
         logger.info("server.stopping", { host: options.host, port });
+        runtime.s3Backup.dispose();
+        await runtime.s3Backup.waitForIdle();
         server.closeAllConnections();
         try {
           await new Promise<void>((resolveClose, rejectClose) => {
