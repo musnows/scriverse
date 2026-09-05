@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamTypewriter, createStreamTypewriterSpeedController, streamTypewriterBatchSize } from "../../src/public/stream-typewriter.js";
 // @ts-expect-error 浏览器端 Markdown 模块没有单独的类型声明，测试仅调用纯函数导出。
 import { renderMarkdown } from "../../src/public/markdown.js";
@@ -28,7 +28,120 @@ function manualFrames() {
   };
 }
 
+class PageVisibility extends EventTarget {
+  visibilityState: DocumentVisibilityState = "visible";
+
+  changeTo(state: DocumentVisibilityState) {
+    this.visibilityState = state;
+    this.dispatchEvent(new Event("visibilitychange"));
+  }
+}
+
 describe("流式打字机", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("renders background chunks and finishes without animation frames", async () => {
+    const frames = manualFrames();
+    const visibility = new PageVisibility();
+    visibility.changeTo("hidden");
+    vi.stubGlobal("document", visibility);
+    const renders: string[] = [];
+    const typewriter = createStreamTypewriter({
+      onRender: (text) => renders.push(text),
+      scheduleFrame: frames.schedule,
+      cancelFrame: frames.cancel
+    });
+
+    typewriter.append("后台收到");
+    expect(renders.at(-1)).toBe("后台收到");
+    typewriter.append("𠮷的回复");
+    expect(renders.at(-1)).toBe("后台收到𠮷的回复");
+    await expect(typewriter.finish()).resolves.toBe("后台收到𠮷的回复");
+    expect(frames.runAll()).toBe(0);
+  });
+
+  it("flushes pending thinking and text when hidden, without replaying on return", async () => {
+    const frames = manualFrames();
+    const visibility = new PageVisibility();
+    const renders: string[][] = [[], []];
+    const writers = renders.map((output) => createStreamTypewriter({
+      onRender: (text) => output.push(text),
+      scheduleFrame: frames.schedule,
+      cancelFrame: frames.cancel,
+      reducedMotion: false,
+      visibilitySource: visibility
+    }));
+    writers[0]!.append("思考".repeat(500));
+    writers[1]!.append("正文".repeat(500));
+    frames.runNext();
+    expect(renders[0]!.at(-1)?.length).toBeLessThan(1_000);
+    const completed = Promise.all(writers.map((writer) => writer.finish()));
+    visibility.changeTo("hidden");
+    await expect(completed).resolves.toEqual(["思考".repeat(500), "正文".repeat(500)]);
+    expect(frames.runAll()).toBe(0);
+
+    const renderCounts = renders.map((output) => output.length);
+    visibility.changeTo("visible");
+    expect(frames.runAll()).toBe(0);
+    expect(renders.map((output) => output.length)).toEqual(renderCounts);
+    writers[1]!.append("继续输出");
+    frames.runNext();
+    expect(renders[1]!.at(-1)).toBe("正文".repeat(500) + "继");
+    const final = writers[1]!.finish();
+    frames.runAll();
+    await expect(final).resolves.toBe("正文".repeat(500) + "继续输出");
+  });
+
+  it.each(["append", "finish"])("handles hidden state before its visibility event (%s)", async (action) => {
+    const frames = manualFrames();
+    const visibility = new PageVisibility();
+    let rendered = "";
+    const writer = createStreamTypewriter({
+      onRender: (text) => { rendered = text; },
+      scheduleFrame: frames.schedule,
+      cancelFrame: frames.cancel,
+      visibilitySource: visibility
+    });
+    writer.append("先前积压");
+    visibility.visibilityState = "hidden";
+    if (action === "append") writer.append("后台追加");
+    const completed = writer.finish();
+    expect(rendered).toBe(action === "append" ? "先前积压后台追加" : "先前积压");
+    await expect(completed).resolves.toBe(rendered);
+    expect(frames.runAll()).toBe(0);
+  });
+
+  it.each(["finish", "replace", "reveal"])("releases visibility listeners after settling (%s)", async (action) => {
+    const frames = manualFrames();
+    const visibility = new PageVisibility();
+    const add = vi.spyOn(visibility, "addEventListener");
+    const remove = vi.spyOn(visibility, "removeEventListener");
+    const render = vi.fn();
+    const writer = createStreamTypewriter({
+      onRender: render,
+      scheduleFrame: frames.schedule,
+      cancelFrame: frames.cancel,
+      visibilitySource: visibility
+    });
+    for (let round = 0; round < 3; round += 1) {
+      writer.append("本轮");
+      writer.append("输出");
+      expect(add).toHaveBeenCalledTimes(round + 1);
+      if (action === "finish") {
+        const completed = writer.finish();
+        frames.runAll();
+        await completed;
+      } else if (action === "replace") writer.replace("替换文本");
+      else writer.reveal();
+      expect(remove).toHaveBeenCalledTimes(round + 1);
+    }
+    const renderCount = render.mock.calls.length;
+    visibility.changeTo("hidden");
+    visibility.changeTo("visible");
+    expect(render).toHaveBeenCalledTimes(renderCount);
+    expect(frames.runAll()).toBe(0);
+  });
+
   it("逐帧显示收到的 Unicode 字符并在完成时返回全文", async () => {
     const frames = manualFrames();
     const renders: string[] = [];
