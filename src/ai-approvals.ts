@@ -193,8 +193,12 @@ export class AiApprovalService {
       if (!this.tasks) throw new AppError(409, "AI_APPROVAL_MODEL_INVALID", "分析任务模型不可用");
       const operation = input.taskType === "relationship-analysis" ? { ...input, scope: { ...input.scope, previewRelationshipChanges: true as const } } : input;
       const model = this.tasks.describe(workId, operation);
+      const scopeDetails = { ...operation.scope, workTitle: String(this.store.getWork(workId).title),
+        ...(input.scope.chapterId ? { chapterTitle: String(this.store.getChapter(input.scope.chapterId).title) } : {}),
+        ...(input.scope.volumeId ? { volumeTitle: String(this.store.getVolume(input.scope.volumeId).title) } : {}),
+        ...(input.scope.characterIds?.length ? { characterNames: input.scope.characterIds.map((entityId) => String(this.store.getCharacter(entityId).name)) } : {}) };
       return { input: operation, module, targetId: null, targetName: String(this.store.getWork(workId).title), targetVersion: 0, read: [...read], write: [...write], guards, effects, model,
-        sourceDigest: this.sourceDigest(workId, [...read]), changes: approvalChanges(null, { taskType: input.taskType, modelId: model, scope: operation.scope }) };
+        sourceDigest: this.sourceDigest(workId, [...read]), changes: approvalChanges(null, { taskType: input.taskType, modelId: model, scope: scopeDetails }) };
     }
     const isCreate = input.kind === "create";
     const schema = approvalEntitySchemas[input.entity];

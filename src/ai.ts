@@ -31,7 +31,7 @@ import {
 } from "./ai-tool-results.js";
 import { CredentialVault } from "./credential-vault.js";
 import { AiApprovalService } from "./ai-approvals.js";
-import { AI_ANALYSIS_TYPES, approvalEntitySchemas, askUserQuestionSchema, writePlanSchema } from "./ai-approval-contract.js";
+import { AI_ANALYSIS_TYPES, approvalAnalysisScopes, approvalEntitySchemas, askUserQuestionSchema, writePlanSchema } from "./ai-approval-contract.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
@@ -4453,7 +4453,7 @@ export class AiManager {
         if (name === "AnalysisTaskOptions") {
           if (!suppliedArguments || Object.keys(suppliedArguments).length) throw new AppError(400, "TOOL_ARGUMENTS_INVALID", "该查询不接受参数");
           const models = this.listWorkModels(workId).map((model) => ({ id: model.id, displayName: model.displayName, modelId: model.modelId }));
-          return { id: toolCall.id, name, calledAt, arguments: {}, status: "completed", result: { taskTypes: [...AI_ANALYSIS_TYPES], models, maxOperations: this.approvals.maxOperations } };
+          return { id: toolCall.id, name, calledAt, arguments: {}, status: "completed", result: { taskTypes: AI_ANALYSIS_TYPES.map((taskType) => ({ taskType, scopes: approvalAnalysisScopes(taskType) })), models, maxOperations: this.approvals.maxOperations } };
         }
         const interactionCallId = `${generationCallId}:${toolCall.id}`;
         const approval = name === "AskUserQuestions"

@@ -10,6 +10,13 @@ export type AiApprovalStatus = typeof AI_APPROVAL_STATUSES[number];
 export const AI_APPROVAL_ENTITIES = ["setting", "character", "character-section", "race", "organization", "timeline-track", "timeline-event", "relationship", "chapter-outline", "foreshadow"] as const;
 export type AiApprovalEntity = typeof AI_APPROVAL_ENTITIES[number];
 export const AI_ANALYSIS_TYPES = ["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis", "relationship-analysis"] as const;
+export function approvalAnalysisScopes(taskType: string): string[] {
+  if (taskType === "chapter-analysis") return ["chapter"];
+  if (taskType === "character-identity-audit") return ["book"];
+  if (taskType === "relationship-analysis") return ["chapter", "book", "settings"];
+  if (["character-extraction", "character-summary", "worldview-analysis", "setting-extraction"].includes(taskType)) return ["chapter", "volume", "book"];
+  return ["chapter", "volume", "book", "settings"];
+}
 
 const identifier = z.string().trim().min(1).max(160).regex(/^[a-zA-Z0-9_-]+$/u);
 const text = z.string().max(50_000);
@@ -47,6 +54,7 @@ export const analysisScopeSchema = z.object({
 const entityOperationSchema = z.object({ kind: z.enum(["create", "edit"]), entity: z.enum(AI_APPROVAL_ENTITIES), targetId: identifier.optional(), fields: object }).strict();
 const annotationOperationSchema = z.object({ kind: z.literal("annotation"), chapterId: identifier, annotationType: z.enum(["note", "todo"]), startLine: z.number().int().min(1).max(100000), endLine: z.number().int().min(1).max(100000), note: z.string().trim().min(1).max(10000) }).strict().refine((value) => value.endLine >= value.startLine && value.endLine - value.startLine < 20);
 export const analysisOperationSchema = z.object({ kind: z.literal("analysis"), taskType: z.enum(AI_ANALYSIS_TYPES), modelId: identifier, scope: analysisScopeSchema }).strict().superRefine((operation, ctx) => {
+  if (!approvalAnalysisScopes(operation.taskType).includes(operation.scope.type)) ctx.addIssue({ code: "custom", message: "This task cannot execute the requested scope without widening it" });
   if (operation.taskType === "relationship-analysis") {
     if (!["chapter", "book", "settings"].includes(operation.scope.type)) ctx.addIssue({ code: "custom", message: "Invalid relationship analysis scope" });
     if (operation.scope.includeAllSettings && operation.scope.type !== "book") ctx.addIssue({ code: "custom", message: "All settings require book scope" });

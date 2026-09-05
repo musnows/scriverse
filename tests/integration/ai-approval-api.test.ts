@@ -100,7 +100,7 @@ describe("AI approval HTTP and agent boundaries", () => {
   });
 
   it.each(AI_ANALYSIS_TYPES)("queues the exact confirmed %s type, model and scope once", async (taskType) => {
-    const scope = taskType === "relationship-analysis" ? { type: "chapter", chapterId, previewRelationshipChanges: true } : { type: "chapter", chapterId };
+    const scope = taskType === "character-identity-audit" ? { type: "book" } : taskType === "relationship-analysis" ? { type: "chapter", chapterId, previewRelationshipChanges: true } : { type: "chapter", chapterId };
     const approval = plan([{ kind: "analysis", taskType, scope, modelId }]);
     expect(runtime.database.all("SELECT * FROM analysis_tasks")).toHaveLength(0);
     const response = await post(path(approval.id, "confirm")).send({}).expect(200);
@@ -189,5 +189,17 @@ describe("AI approval HTTP and agent boundaries", () => {
     expect(response.text).toContain("Read-only conversation remains available");
     expect(response.text).not.toContain("event: error");
     expect(asActor(() => runtime.ai.approvals.availableTools(workId, conversationId))).toEqual([]);
+  });
+
+  it("rejects scopes that existing task executors would silently widen or cannot execute", () => {
+    for (const [taskType, scope] of [
+      ["character-identity-audit", { type: "chapter", chapterId }],
+      ["character-extraction", { type: "settings" }],
+      ["worldview-analysis", { type: "none" }],
+      ["chapter-analysis", { type: "book" }]
+    ] as const) expect(() => plan([{ kind: "analysis", taskType, scope, modelId }])).toThrow("参数无效");
+    expect(runtime.database.all("SELECT * FROM analysis_tasks")).toHaveLength(0);
+    const approval = plan([{ kind: "analysis", taskType: "chapter-analysis", scope: { type: "chapter", chapterId }, modelId }]);
+    expect(approval.operations).toMatchObject([{ changes: expect.arrayContaining([expect.objectContaining({ field: "scope", after: expect.objectContaining({ chapterTitle: "Chapter", workTitle: "Approval API work" }) })]) }]);
   });
 });
