@@ -82,6 +82,14 @@ export class AiApprovalService {
     for (const module of write) if (permissions[module] !== "write") throw new AppError(403, "AI_APPROVAL_PERMISSION_CHANGED", `缺少${workPermissionModuleLabels[module]}写入权限`);
   }
 
+  private requireTools(workId: string, modules: WorkPermissionModule[]): void {
+    const enabled = this.getSettings(workId).enabled;
+    for (const module of modules) {
+      const tool = module === "prose" ? "annotations" : module === "ai-analysis" ? "analysis" : module as AiWriteTool;
+      if (!enabled.includes(tool)) throw new AppError(409, "AI_APPROVAL_TOOL_DISABLED", `${workPermissionModuleLabels[module]}工具未开启，不能执行关联写入`);
+    }
+  }
+
   private context(workId: string, conversationId: string): { actorId: string; ownerId: string; permissions: Record<string, WorkModulePermissions> } {
     const actorId = this.actorId();
     const conversation = this.store.db.get("SELECT work_id, created_by_user_id, task_type, roleplay_character_id FROM ai_conversations WHERE id = ?", conversationId);
@@ -205,6 +213,22 @@ export class AiApprovalService {
       guards.push(this.guard("chapter-outline", input.targetId!, workId));
       if (Number(this.snapshot("chapter-outline", input.targetId!).versionNo)) throw new AppError(409, "AI_APPROVAL_TARGET_INVALID", "章节大纲已经存在，请使用编辑操作");
     } else if (input.entity === "character-section") reference("character", input.targetId);
+    if (Array.isArray(fields.settingsSections)) fields.settingsSections = fields.settingsSections.map((value, index) => {
+      const section = fieldRecord(value);
+      return { title: section.title, contentMarkdown: section.contentMarkdown ?? "", summary: String(section.summary ?? "").trim(), sortOrder: section.sortOrder ?? index };
+    });
+    if (input.entity === "relationship") {
+      if (fields.keywords) fields.keywords = [...new Map(valueIds(fields.keywords).map((word) => {
+        const normalized = word.normalize("NFKC").trim().replace(/\s+/gu, " ");
+        return [normalized.toLocaleLowerCase("zh-CN"), normalized] as const;
+      }).filter(([, word]) => word)).values()].slice(0, 30);
+      const fromId = String(fields.fromCharacterId ?? current?.fromCharacterId);
+      const toId = String(fields.toCharacterId ?? current?.toCharacterId);
+      if (!(fields.directed ?? current?.directed ?? false) && fromId.localeCompare(toId) > 0) {
+        fields.fromCharacterId = toId;
+        fields.toCharacterId = fromId;
+      }
+    }
     if (input.entity === "character" && isCreate && fields.raceId === undefined) fields.raceId = null;
     reference("race", fields.raceId, true);
     reference("race", fields.parentRaceId);
@@ -238,6 +262,7 @@ export class AiApprovalService {
     }
     authorize();
     if (write.has("characters") && module !== "characters" && !this.getSettings(workId).enabled.includes("characters")) throw new AppError(409, "AI_APPROVAL_TOOL_DISABLED", "关联角色写入需要同时开启角色工具");
+    this.requireTools(workId, [...write]);
     const operation = { ...input, fields };
     const changes = approvalChanges(current, fields);
     if (!isCreate && !changes.length) throw new AppError(400, "AI_APPROVAL_NO_CHANGES", "修改前后内容相同");
@@ -249,7 +274,7 @@ export class AiApprovalService {
 
   private sourceDigest(workId: string, modules: WorkPermissionModule[]): string {
     const tables: Partial<Record<WorkPermissionModule, string[]>> = { prose: ["chapters", "volumes"], settings: ["settings"], characters: ["characters", "character_profile_sections"], races: ["races"], organizations: ["organizations"], timeline: ["timeline_tracks", "timeline_events"], relationships: ["relationships"], outlines: ["foreshadows"], reviews: ["review_items"] };
-    return approvalDigest(modules.flatMap((module) => (tables[module] ?? []).map((table) => ({ table, rows: this.store.db.all(`SELECT * FROM ${table} WHERE work_id = ? ORDER BY id`, workId) }))));
+    return approvalDigest({ sources: modules.flatMap((module) => (tables[module] ?? []).map((table) => ({ table, rows: this.store.db.all(`SELECT * FROM ${table} WHERE work_id = ? ORDER BY id`, workId) }))), outlines: modules.includes("outlines") ? this.store.db.all("SELECT outline.* FROM chapter_outlines outline JOIN chapters chapter ON chapter.id = outline.chapter_id WHERE chapter.work_id = ? ORDER BY outline.chapter_id", workId) : [] });
   }
 
   propose(workId: string, conversationId: string, value: unknown, toolCallId?: string): Record<string, unknown> {
@@ -329,6 +354,7 @@ export class AiApprovalService {
   private validate(row: ApprovalRow): void {
     const content = JSON.parse(row.content_json) as ApprovalContent;
     this.assertSafeContent(row.work_id, content);
+    if (content.operations.length > this.maxOperations) throw new AppError(409, "AI_APPROVAL_PLAN_TOO_LARGE", "当前计划操作上限已变化，请重新生成计划");
     if (approvalDigest(content) !== row.content_hash) throw new AppError(409, "AI_APPROVAL_PLAN_CHANGED", "审批计划完整性校验失败");
     const context = this.context(row.work_id, row.conversation_id);
     if (context.ownerId !== content.conversationOwner) throw new AppError(409, "AI_APPROVAL_CONVERSATION_INVALID", "对话归属已发生变化");
@@ -337,8 +363,10 @@ export class AiApprovalService {
       if (stableJson(this.permissions(row.work_id, userId)) !== stableJson(original)) throw new AppError(409, "AI_APPROVAL_PERMISSION_CHANGED", "发起用户或对话归属用户的作品权限已发生变化");
     }
     if (this.getSettings(row.work_id).revision !== content.toolRevision) throw new AppError(409, "AI_APPROVAL_TOOL_DISABLED", "作品 AI 工具设置已发生变化");
+    if (row.kind === "question" && !this.getSettings(row.work_id).enabled.includes("AskUserQuestions")) throw new AppError(409, "AI_APPROVAL_TOOL_DISABLED", "AskUserQuestions 工具已关闭");
     if (row.kind !== "question" && stableJson(this.questions(row.conversation_id)) !== stableJson(content.questions)) throw new AppError(409, "AI_QUESTION_UNANSWERED", "提问交互状态已发生变化");
     for (const operation of content.operations) {
+      this.requireTools(row.work_id, operation.write);
       for (const permissions of Object.values(context.permissions)) this.requireModules(permissions, operation.read, operation.write);
       for (const guard of operation.guards) {
         if (stableJson(this.guard(guard.entity, guard.id, row.work_id)) !== stableJson(guard)) throw new AppError(409, "AI_APPROVAL_VERSION_CHANGED", "目标词条、正文位置或关联资料版本已发生变化");
@@ -429,6 +457,13 @@ export class AiApprovalService {
         const content = JSON.parse(row.content_json) as ApprovalContent;
         const results = content.operations.map((operation, index) => {
           const result = this.execute(workId, operation, row.id);
+          if (operation.input.kind === "create" || operation.input.kind === "edit") {
+            for (const [field, expected] of Object.entries(operation.input.fields)) {
+              const unordered = ["memberIds", "organizationIds", "lockedFields"].includes(field);
+              const normalize = (value: unknown): unknown => unordered && Array.isArray(value) ? [...value].sort() : value;
+              if (stableJson(normalize(result[field])) !== stableJson(normalize(expected))) throw new AppError(409, "AI_APPROVAL_RESULT_CHANGED", "实际写入与审批字段不一致，整份计划已回滚");
+            }
+          }
           const resultId = String(result.id ?? result.chapterId);
           const entity = "entity" in operation.input ? operation.input.entity : operation.input.kind;
           const versionNo = Number(result.versionNo ?? 0);

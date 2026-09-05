@@ -64,7 +64,7 @@ describe("persistent AI operation approvals", () => {
 
   it.each(["setting", "character", "character-section", "race", "organization", "timeline-track", "timeline-event", "relationship", "chapter-outline", "foreshadow"] as const)("creates and edits %s using existing versions", (entity) => {
     const fields = entity === "setting" ? { title: "New setting", category: "Rule", content: "Content" }
-      : entity === "relationship" ? { fromCharacterId: characterId, toCharacterId: secondCharacterId, category: "Friend" }
+      : entity === "relationship" ? { fromCharacterId: characterId, toCharacterId: secondCharacterId, category: "social" }
       : entity === "chapter-outline" ? { goal: "Find the moon" }
       : entity === "foreshadow" || entity === "character-section" ? { title: "New entry" } : { name: "New entry" };
     const targetId = entity === "chapter-outline" ? chapterId : entity === "character-section" ? characterId : undefined;
@@ -220,5 +220,24 @@ describe("persistent AI operation approvals", () => {
     expect(() => plan([{ kind: "edit", entity: "race", targetId: String(race.id), fields: { name: "Renamed" } }, { kind: "edit", entity: "character", targetId: characterId, fields: { name: "Renamed Alice" } }])).toThrow("重复修改");
     asActor(() => approvals.updateSettings(workId, { enabled: ["races"] }));
     expect(() => plan([{ kind: "edit", entity: "race", targetId: String(race.id), fields: { name: "Renamed" } }])).toThrow("角色工具");
+  });
+
+  it("previews canonical relationship endpoints and knowledge sections exactly as they are stored", () => {
+    const [fromCharacterId, toCharacterId] = [characterId, secondCharacterId].sort((a, b) => b.localeCompare(a));
+    const proposed = plan([{ kind: "create", entity: "relationship", fields: { fromCharacterId, toCharacterId, category: "social", keywords: [" Friend ", "FRIEND"] } }, { kind: "create", entity: "race", fields: { name: "Detailed race", settingsSections: [{ title: "Origin", contentMarkdown: "History", summary: " Summary " }] } }]);
+    expect(proposed.operations).toMatchObject([{ changes: expect.arrayContaining([expect.objectContaining({ field: "fromCharacterId", after: toCharacterId }), expect.objectContaining({ field: "keywords", after: ["FRIEND"] })]) }, { changes: expect.arrayContaining([expect.objectContaining({ field: "settingsSections", after: [{ title: "Origin", contentMarkdown: "History", summary: "Summary", sortOrder: 0 }] })]) }]);
+    expect(confirm(proposed).status).toBe("succeeded");
+  });
+
+  it("rolls back unexpected normalization and rechecks actual switches even without a revision bump", () => {
+    const proposed = plan([setting()]);
+    const create = store.createSetting.bind(store);
+    vi.spyOn(store, "createSetting").mockImplementation((targetWorkId, input) => create(targetWorkId, { ...input, content: "Unexpected mutation" }));
+    expect(confirm(proposed)).toMatchObject({ status: "invalid", reason: expect.stringContaining("整份计划已回滚") });
+    expect(store.listSettings(workId)).toHaveLength(0);
+    vi.restoreAllMocks();
+    const next = plan([setting()]);
+    db.run("UPDATE ai_write_tool_settings SET enabled_json = '[]' WHERE work_id = ?", workId);
+    expect(confirm(next).status).toBe("invalid");
   });
 });
