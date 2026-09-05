@@ -40,8 +40,24 @@ const valueIds = (value: unknown): string[] => Array.isArray(value) ? value.filt
 
 export class AiApprovalService {
   readonly maxOperations: number;
-  constructor(private readonly store: Store, private readonly tasks?: ApprovalTaskAdapter) {
+  constructor(private readonly store: Store, private readonly tasks?: ApprovalTaskAdapter, private readonly sensitiveValues?: () => string[]) {
     this.maxOperations = aiWritePlanMaxOperations();
+  }
+
+  private assertSafeContent(workId: string, value: unknown): void {
+    const serialized = JSON.stringify(value);
+    if (serialized.length > 1_500_000) throw new AppError(400, "AI_APPROVAL_CONTENT_TOO_LARGE", "完整修改详情过大，请缩小计划范围");
+    const secrets = [
+      ...this.store.db.all("SELECT csrf_token FROM user_sessions WHERE revoked_at IS NULL").map((row) => String(row.csrf_token)),
+      String(this.store.getPlatformAiSettings().systemPrompt ?? ""),
+      String(this.store.getWorkAiSettings(workId).systemPrompt ?? ""),
+      "你是小说作者的创作协作助手。作者锁定的事实是不可违反的硬约束。",
+      ...(this.sensitiveValues?.() ?? [])
+    ].flatMap((secret) => [secret, ...secret.split("\n")]).filter((secret) => secret.trim().length >= 12);
+    if (/\bsk-[A-Za-z0-9_-]{12,}|\bBearer\s+[A-Za-z0-9._~-]{12,}|-----BEGIN[^-]*PRIVATE KEY-----/u.test(serialized)
+      || secrets.some((secret) => serialized.includes(JSON.stringify(secret).slice(1, -1)))) {
+      throw new AppError(400, "AI_APPROVAL_SENSITIVE_CONTENT", "计划或回答包含凭据、会话信息或系统提示词，未保存该内容");
+    }
   }
 
   private actorId(): string {
@@ -261,6 +277,7 @@ export class AiApprovalService {
       const timestamp = now();
       const work = this.store.db.get("SELECT title, owner_user_id FROM works WHERE id = ?", workId)!;
       const content: ApprovalContent = { version: 1, workId, workTitle: String(work.title), workOwner: String(work.owner_user_id), conversationId, initiatedBy: context.actorId, conversationOwner: context.ownerId, createdAt: timestamp, summary, toolRevision: settings.revision, permissions: context.permissions, operations, question, questions };
+      this.assertSafeContent(workId, content);
       const approvalId = id("aiApproval");
       this.store.db.run(`INSERT INTO ai_operation_approvals (id, work_id, conversation_id, initiated_by_user_id, conversation_owner_user_id, kind, status, content_json, content_hash, parent_approval_id, tool_call_id, created_at, expires_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`, approvalId, workId, conversationId, context.actorId, context.ownerId, kind, JSON.stringify(content), approvalDigest(content), parentId ?? null, toolCallId ?? null, timestamp, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), timestamp);
@@ -279,6 +296,7 @@ export class AiApprovalService {
 
   private validate(row: ApprovalRow): void {
     const content = JSON.parse(row.content_json) as ApprovalContent;
+    this.assertSafeContent(row.work_id, content);
     if (approvalDigest(content) !== row.content_hash) throw new AppError(409, "AI_APPROVAL_PLAN_CHANGED", "审批计划完整性校验失败");
     const context = this.context(row.work_id, row.conversation_id);
     if (context.ownerId !== content.conversationOwner) throw new AppError(409, "AI_APPROVAL_CONVERSATION_INVALID", "对话归属已发生变化");
@@ -325,6 +343,8 @@ export class AiApprovalService {
     const userName = (userId: string | null): string => String(this.store.db.get("SELECT display_name FROM users WHERE id = ?", userId)?.display_name ?? userId ?? "系统");
     const base = { initiatedByName: userName(row.initiated_by_user_id), conversationOwnerName: userName(row.conversation_owner_user_id), executedByName: userName(row.executed_by_user_id), id: row.id, workId, conversationId: row.conversation_id, kind: row.kind, status: row.status, createdAt: row.created_at, expiresAt: row.expires_at, updatedAt: row.updated_at, reason: row.reason, initiatedBy: row.initiated_by_user_id, conversationOwner: row.conversation_owner_user_id, executedBy: row.executed_by_user_id, parentApprovalId: row.parent_approval_id ?? null };
     try {
+      this.assertSafeContent(workId, content);
+      if (row.result_json) this.assertSafeContent(workId, JSON.parse(row.result_json) as unknown);
       for (const userId of [...new Set([this.actorId(), row.conversation_owner_user_id])]) {
         const permissions = this.permissions(workId, userId);
         this.requireModules(permissions, ["ai-chat", ...content.operations.flatMap((operation) => [...operation.read, ...operation.write])], []);
@@ -357,6 +377,7 @@ export class AiApprovalService {
       if (row.kind !== "question") throw new AppError(400, "AI_APPROVAL_INPUT_INVALID", "该记录不是提问");
       if (row.status === "pending") {
         this.validate(row);
+        this.assertSafeContent(workId, { answer });
         this.transition(row.id, "succeeded", "", { answer, answeredBy: this.actorId(), answeredAt: now() });
         this.store.audit(workId, "ai.question.answered", "ai-approval", row.id);
       }

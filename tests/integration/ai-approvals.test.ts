@@ -188,4 +188,16 @@ describe("persistent AI operation approvals", () => {
     expect(db.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
+
+  it("never persists credentials, active session tokens or system prompt material in plans or answers", () => {
+    const csrf = String(db.get("SELECT csrf_token FROM user_sessions LIMIT 1")!.csrf_token);
+    asActor(() => store.updateWorkAiSettings(workId, { systemPrompt: "Confidential system instructions for this work" }));
+    for (const secret of ["sk-do-not-disclose-this-model-key", csrf, "Confidential system instructions for this work"]) {
+      expect(() => asActor(() => approvals.propose(workId, conversationId, { summary: secret, operations: [setting()] }))).toThrow("未保存");
+      expect(db.all("SELECT * FROM ai_operation_approvals")).toHaveLength(0);
+    }
+    const question = asActor(() => approvals.ask(workId, conversationId, { question: "Choose?", options: ["First", "Second"] }));
+    expect(() => asActor(() => approvals.answer(workId, String(question.id), { answer: csrf }))).toThrow("未保存");
+    expect(asActor(() => approvals.get(workId, String(question.id)))).toMatchObject({ status: "pending", result: null });
+  });
 });

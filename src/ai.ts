@@ -1906,7 +1906,10 @@ export class AiManager {
         return { id: String(model.id), displayName: String(model.display_name), modelId: String(model.model_id), providerId: String(provider.id), providerName: String(provider.name) };
       },
       create: (workId, operation) => this.createTask(workId, operation)
-    });
+    }, () => this.store.db.all("SELECT * FROM providers").flatMap((provider) => {
+      try { return [this.decryptKey(provider)]; }
+      catch { return []; }
+    }));
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
     this.autoRunStartupTimer = setTimeout(() => {
