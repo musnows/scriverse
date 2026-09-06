@@ -2911,20 +2911,22 @@ async function discardPendingAiQuestion(message, button) {
   button.disabled = true;
   if (label) label.textContent = "正在作废提问";
   try {
-    let questionId = String(message.dataset.pendingQuestionId ?? "");
-    if (!questionId) {
-      const parameters = new URLSearchParams({ conversationId: tab.conversationId, status: "pending", limit: "1" });
-      const payload = await api(`/api/works/${encodeURIComponent(tab.workId)}/ai/questions?${parameters}`);
-      const questions = Array.isArray(payload) ? payload : (Array.isArray(payload?.questions) ? payload.questions : []);
-      questionId = String(questions[0]?.id ?? "");
-    }
+    const expectedQuestionId = String(message.dataset.pendingQuestionId ?? "");
+    const parameters = new URLSearchParams({ conversationId: tab.conversationId, status: "pending", limit: "1" });
+    const payload = await api(`/api/works/${encodeURIComponent(tab.workId)}/ai/questions?${parameters}`);
+    const questions = Array.isArray(payload) ? payload : (Array.isArray(payload?.questions) ? payload.questions : []);
+    const questionId = String(questions.find((question) => String(question?.id ?? "") === expectedQuestionId)?.id ?? questions[0]?.id ?? "");
     if (!questionId) {
       if (label) label.textContent = "提问已处理";
       toast("当前对话已经没有待回答问题，可以重新发送消息");
       return;
     }
     await respondAiUserQuestion(questionId, { action: "reject" });
-    if (label?.isConnected) label.textContent = "提问已作废";
+    for (const action of tab.feed.querySelectorAll(".ai-question-discard-button")) {
+      action.disabled = true;
+      const actionLabel = action.querySelector("span");
+      if (actionLabel) actionLabel.textContent = "提问已作废";
+    }
   } catch (error) {
     button.disabled = false;
     if (label) label.textContent = "作废提问并继续";
