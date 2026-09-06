@@ -3309,6 +3309,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         chapterId: "chapter_secret",
         volumeId: "volume_secret",
         chapterIds: ["chapter_secret"],
+        volumeIds: ["volume_collection_secret"],
         characterIds: ["character_secret"],
         settingIds: ["setting_secret"],
         includeBookSummary: true
@@ -3320,6 +3321,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(response.body.data[0].contextScope).toEqual({ type: "selection", restricted: true });
     expect(JSON.stringify(response.body.data)).not.toContain("TOP_SECRET_SELECTION_CONTEXT");
     expect(JSON.stringify(response.body.data)).not.toContain("chapter_secret");
+    expect(JSON.stringify(response.body.data)).not.toContain("volume_collection_secret");
     expect(JSON.stringify(response.body.data)).not.toContain("character_secret");
     expect(JSON.stringify(response.body.data)).not.toContain("setting_secret");
   });

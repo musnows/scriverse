@@ -1247,7 +1247,7 @@ function redactAiCallContext(record: Record<string, unknown>, permissions: WorkM
   const redactedScope = { ...scope };
   let restricted = false;
   if (permissions.prose === "none") {
-    for (const field of ["selection", "selectionStart", "selectionEnd", "writingChapterVersion", "chapterId", "volumeId", "chapterIds", "includeBookSummary"] as const) {
+    for (const field of ["selection", "selectionStart", "selectionEnd", "writingChapterVersion", "chapterId", "volumeId", "chapterIds", "volumeIds", "includeBookSummary"] as const) {
       if (field in redactedScope) {
         delete redactedScope[field];
         restricted = true;
