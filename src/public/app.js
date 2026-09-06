@@ -18723,11 +18723,20 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     scene.append(sceneLabel, sceneBody);
     message.querySelector(".message-body")?.prepend(scene);
   }
+  const chapterReferences = state.work?.volumes.flatMap((volume) => volume.chapters.map((chapter) => ({
+    id: chapter.id,
+    name: `${volume.title} / ${chapter.title}`
+  }))) ?? [];
+  const settingReferences = state.settings.map((setting) => ({ id: setting.id, name: setting.title }));
+  const contextSettingReferences = [{ id: "include-setting-info", name: "注入上下文设定" }];
   const mentionGroups = role === "user"
     ? [
       ["角色", metadata?.mentionCharacterIds, state.characters],
       ["种族", metadata?.mentionRaceIds, state.races],
-      ["组织", metadata?.mentionOrganizationIds, state.organizations]
+      ["组织", metadata?.mentionOrganizationIds, state.organizations],
+      ["设定", metadata?.mentionSettingIds, settingReferences],
+      ["章节", metadata?.mentionChapterIds, chapterReferences],
+      ["能力", metadata?.mentionContextSettingIds, contextSettingReferences]
     ]
       .flatMap(([kind, ids, items]) => userMessageMentionNames(ids, items).map((name) => ({ kind, name })))
     : [];
