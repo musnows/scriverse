@@ -44,12 +44,13 @@ import {
   cacheAiQuestionView,
   cacheAiWritePlanDetail,
   createInteractiveToolCard,
+  normalizeAiQuestionItems,
   parseInteractiveToolPayload,
   renderApprovalCenterRows,
   renderWritePlanDetailMarkup,
   isInteractiveToolPending,
   aiFormatDateTime
-} from "/ai-interactive.js?v=20260903-question-batch-v7";
+} from "/ai-interactive.js?v=20260906-question-render-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
@@ -3262,14 +3263,14 @@ function handleInteractiveToolCallEvent(toolCall) {
     return;
   }
   if (name !== "ask_user_question" || toolCall.status === "failed") return;
-  const question = toolCall.result?.question;
+  const question = parseInteractiveToolPayload(toolCall)?.question;
   if (!question?.id) return;
   cacheAiQuestionView(question);
   const questionId = String(question.id);
   if (autoOpenedQuestionIds.has(questionId)) return;
   autoOpenedQuestionIds.add(questionId);
   // 直接弹出回答框等待作者选择；不会预填任何答案。
-  openAiUserQuestionDialog(questionId).catch(() => undefined);
+  openAiUserQuestionDialog(questionId, question).catch(() => undefined);
 }
 
 function questionsEndpoint(path) {
@@ -3392,22 +3393,7 @@ async function fetchAiUserQuestion(questionId) {
 }
 
 function aiQuestionItems(question) {
-  const items = Array.isArray(question?.questions) && question.questions.length > 0
-    ? question.questions
-    : [{
-        question: question?.question ?? "",
-        options: question?.options ?? [],
-        selectedOption: question?.selectedOption ?? null,
-        customAnswer: question?.customAnswer ?? "",
-        answerText: question?.answerText ?? "",
-        isCustomAnswer: question?.isCustomAnswer === true
-      }];
-  return items.map((item, index) => ({
-    ...item,
-    index,
-    question: String(item?.question ?? ""),
-    options: Array.isArray(item?.options) ? item.options : []
-  }));
+  return normalizeAiQuestionItems(question);
 }
 
 function resetAiQuestionDialogState(question) {
@@ -3517,17 +3503,23 @@ async function refreshAiQuestionDialog() {
   return question;
 }
 
-async function openAiUserQuestionDialog(questionId) {
+async function openAiUserQuestionDialog(questionId, initialQuestion = null) {
   aiQuestionDialogQuestionId = String(questionId);
   const dialog = $("#ai-question-dialog");
   if (!dialog.open) dialog.showModal();
-  $("#ai-question-text").textContent = "";
-  $("#ai-question-options").replaceChildren();
-  $("#ai-question-custom-answer").value = "";
-  $("#ai-question-navigation").classList.add("hidden");
-  $("#ai-question-progress").textContent = "正在加载问题";
-  syncAiQuestionAnswerCount();
-  $("#ai-question-expiry").textContent = "正在加载问题……";
+  if (initialQuestion?.id && String(initialQuestion.id) === aiQuestionDialogQuestionId) {
+    currentAiQuestionDialogView = initialQuestion;
+    resetAiQuestionDialogState(initialQuestion);
+    renderAiUserQuestionOptions(initialQuestion);
+  } else {
+    $("#ai-question-text").textContent = "";
+    $("#ai-question-options").replaceChildren();
+    $("#ai-question-custom-answer").value = "";
+    $("#ai-question-navigation").classList.add("hidden");
+    $("#ai-question-progress").textContent = "正在加载问题";
+    syncAiQuestionAnswerCount();
+    $("#ai-question-expiry").textContent = "正在加载问题……";
+  }
   try {
     return await refreshAiQuestionDialog();
   } catch (error) {

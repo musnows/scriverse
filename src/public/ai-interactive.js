@@ -114,17 +114,61 @@ export function parseInteractiveToolPayload(toolCall) {
       error
     };
   }
-  const options = Array.isArray(toolCall?.arguments?.options) ? toolCall.arguments.options : [];
+  const rawArguments = toolCall?.arguments;
+  let suppliedArguments = rawArguments;
+  if (typeof rawArguments === "string") {
+    try { suppliedArguments = JSON.parse(rawArguments); } catch { suppliedArguments = null; }
+  }
+  const argumentQuestions = Array.isArray(suppliedArguments?.questions)
+    ? suppliedArguments.questions
+    : suppliedArguments?.question
+      ? [{ question: suppliedArguments.question, options: suppliedArguments.options }]
+      : [];
+  const resultQuestion = ok && result?.question && typeof result.question === "object" && !Array.isArray(result.question)
+    ? result.question
+    : null;
+  const question = resultQuestion && (!Array.isArray(resultQuestion.questions) || resultQuestion.questions.length === 0) && argumentQuestions.length > 0
+    ? { ...resultQuestion, questions: argumentQuestions }
+    : resultQuestion;
   return {
     kind: "question",
     ok,
     name,
     calledAt: toolCall?.calledAt ?? "",
-    question: ok ? result.question ?? null : null,
-    argumentOptions: options.map((option) => String(option)),
+    question,
+    argumentQuestions,
     message: typeof result?.message === "string" ? result.message : "",
     error
   };
+}
+
+/** 兼容历史单题、批量题目、字符串选项与完整 API 选项对象。 */
+export function normalizeAiQuestionItems(question) {
+  const items = Array.isArray(question?.questions) && question.questions.length > 0
+    ? question.questions
+    : [{
+        question: question?.question ?? "",
+        options: question?.options ?? [],
+        selectedOption: question?.selectedOption ?? null,
+        customAnswer: question?.customAnswer ?? "",
+        answerText: question?.answerText ?? "",
+        isCustomAnswer: question?.isCustomAnswer === true
+      }];
+  return items.map((item, index) => ({
+    ...item,
+    index,
+    question: String(item?.question ?? ""),
+    options: (Array.isArray(item?.options) ? item.options : []).map((option, optionIndex) => (
+      option && typeof option === "object" && !Array.isArray(option)
+        ? {
+            ...option,
+            index: Number.isInteger(option.index) ? Number(option.index) : optionIndex,
+            label: String(option.label ?? ""),
+            recommended: option.recommended === true || (option.recommended === undefined && optionIndex === 0)
+          }
+        : { index: optionIndex, label: String(option ?? ""), recommended: optionIndex === 0 }
+    ))
+  }));
 }
 
 /**
@@ -294,9 +338,7 @@ function buildQuestionCard(model, actions) {
     card.append(body);
   }
 
-  const options = question?.options?.length
-    ? question.options.map((option) => option.label)
-    : model.argumentOptions;
+  const options = normalizeAiQuestionItems(question).flatMap((item) => item.options.map((option) => option.label));
   if (options.length > 0) {
     const list = document.createElement("ol");
     list.className = "ai-question-option-preview";

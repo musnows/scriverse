@@ -127,7 +127,7 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain("if (questionDialog.open) questionDialog.close();");
     expect(application).toContain("if (approvalCenterDialog.open) approvalCenterDialog.close();");
     expect(application).toContain("await reloadAiQuestionConversation(question.conversationId ?? conversationId);");
-    expect(application).toContain('from "/ai-interactive.js?v=20260903-question-batch-v7"');
+    expect(application).toContain('from "/ai-interactive.js?v=20260906-question-render-v1"');
     expect(page).toContain("feature=ai-question-tool-result-v1");
     expect(page).toContain("feature=ai-question-tool-summary-v1");
     expect(await readFile(join(publicPath, "ai-interactive.js"), "utf8")).toContain("作者回答已作为 ask_user_question 的工具结果返回");
@@ -141,6 +141,7 @@ describe("AI 工具调用记录界面", () => {
     expect(page).toContain("feature=ai-question-answer-limit-v1");
     expect(page).toContain("feature=ai-question-batch-v1");
     expect(page).toContain("feature=ai-question-submit-guidance-v1");
+    expect(page).toContain("feature=ai-question-render-recovery-v1");
     expect(styles).toContain(".ai-question-navigation { display: grid;");
     expect(styles).not.toContain("padding: 30px 12px 12px;");
     expect(styles).not.toContain("ai-stream-cursor");
