@@ -1410,11 +1410,14 @@ export function publicAiStreamError(error: unknown): {
         "monthStartedAt"
       ].filter((key) => details[key] !== undefined).map((key) => [key, details[key]]))
       : undefined;
+    const publicPendingQuestionDetails = error.code === "AI_QUESTION_PENDING" && typeof details?.questionId === "string"
+      ? { questionId: details.questionId }
+      : undefined;
     return {
       code: error.code,
       message: error.message,
       status: error.status,
-      ...(publicQuotaDetails ? { details: publicQuotaDetails } : {}),
+      ...(publicQuotaDetails || publicPendingQuestionDetails ? { details: publicQuotaDetails ?? publicPendingQuestionDetails } : {}),
       ...((error.status < 500 || error.code === "AI_CALL_FAILED") && typeof details?.failure === "string" ? { failure: details.failure } : {}),
       ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
       ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
@@ -3712,6 +3715,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         interrupted: z.boolean().optional(),
         interruptionCode: z.string().max(100).optional(),
         interruptionMessage: z.string().max(500).optional(),
+        errorCode: z.string().max(100).optional(),
+        errorStatus: z.number().int().min(100).max(599).optional(),
+        pendingQuestionId: identifier.optional(),
         toolCalls: z.array(aiToolCallResultSchema).max(12).optional(),
         processSteps: z.array(aiProcessStepSchema).max(50).optional()
       }).optional()
@@ -4343,8 +4349,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }
       const currentMessageId = String(begun.userMessage?.id ?? input.currentMessageId ?? "");
       if (begun.userMessage) sendEvent("user_message", { message: redactAiConversationMessage(begun.userMessage, permissions) });
-      if (aiWritePlanManager.latestPendingQuestion(conversationId)) {
-        throw new AppError(409, "AI_QUESTION_PENDING", "当前对话仍有待回答问题，请先回答或拒绝后再继续");
+      const pendingQuestion = aiWritePlanManager.latestPendingQuestion(conversationId);
+      if (pendingQuestion) {
+        throw new AppError(409, "AI_QUESTION_PENDING", "当前对话仍有待回答问题，请先回答或拒绝后再继续", {
+          questionId: pendingQuestion.id
+        });
       }
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,

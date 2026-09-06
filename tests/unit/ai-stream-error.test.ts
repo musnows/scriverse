@@ -104,4 +104,17 @@ describe("publicAiStreamError", () => {
       providerId: "provider_1"
     });
   });
+
+  it("只公开待回答问题的恢复标识", () => {
+    expect(publicAiStreamError(new AppError(409, "AI_QUESTION_PENDING", "请先处理问题", {
+      questionId: "aiQ_pending_1",
+      conversationId: "conversation-private",
+      secret: "must-not-be-forwarded"
+    }))).toEqual({
+      code: "AI_QUESTION_PENDING",
+      message: "请先处理问题",
+      status: 409,
+      details: { questionId: "aiQ_pending_1" }
+    });
+  });
 });

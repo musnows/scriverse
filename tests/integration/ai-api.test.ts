@@ -5156,4 +5156,52 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`).send({ selectedOption: 0 }).expect(409);
     expect(completionCount).toBe(2);
   });
+
+  it("待回答错误公开恢复标识并可作废提问继续原工作流", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({ tools: { ask_user_questions: true } }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async () => {
+      completionCount += 1;
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "ask-recovery",
+          type: "function",
+          function: { name: "ask_user_question", arguments: { questions: [{ question: "是否继续？", options: ["继续", "停止"] }] } }
+        }] } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已作废旧提问并继续处理。" } }] }), { status: 200 });
+    });
+
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "先询问再继续",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      conversationId
+    }).expect(200);
+    const pending = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}&status=pending`).expect(200);
+    const questionId = String(pending.body.data.questions[0].id);
+
+    const blocked = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "continue",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      conversationId
+    }).expect(200);
+    expect(blocked.text).toContain('"code":"AI_QUESTION_PENDING"');
+    expect(blocked.text).toContain(`"details":{"questionId":"${questionId}"}`);
+    expect(completionCount).toBe(1);
+
+    const recovered = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/reject`)
+      .set("Accept", "text/event-stream")
+      .send({})
+      .expect(200);
+    expect(recovered.text).toContain("已作废旧提问并继续处理。");
+    const resolved = await request(runtime.app).get(`/api/works/${workId}/ai/questions/${questionId}`).expect(200);
+    expect(resolved.body.data).toMatchObject({ status: "rejected", resumeState: "completed" });
+    expect(completionCount).toBe(2);
+  });
 });
