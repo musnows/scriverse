@@ -41,15 +41,18 @@ import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import {
   AI_WRITE_TOOLS_META,
+  aiFailureCode,
+  aiQuestionDialogCanClose,
   cacheAiQuestionView,
   cacheAiWritePlanDetail,
   createInteractiveToolCard,
+  normalizeAiQuestionItems,
   parseInteractiveToolPayload,
   renderApprovalCenterRows,
   renderWritePlanDetailMarkup,
   isInteractiveToolPending,
   aiFormatDateTime
-} from "/ai-interactive.js?v=20260903-question-batch-v7";
+} from "/ai-interactive.js?v=20260906-question-recovery-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
@@ -2898,6 +2901,41 @@ function aiRetryStreamRequestBody(body, retry) {
     : body;
 }
 
+async function discardPendingAiQuestion(message, button) {
+  const feed = message.closest(".ai-feed");
+  const tab = aiChatTabManager.get(feed?.dataset.aiTabId);
+  if (!tab?.conversationId || !tab.workId || String(tab.workId) !== String(state.work?.id ?? "")) {
+    throw new Error("无法确定待回答问题所属的当前对话");
+  }
+  const label = button.querySelector("span");
+  button.disabled = true;
+  if (label) label.textContent = "正在作废提问";
+  try {
+    const expectedQuestionId = String(message.dataset.pendingQuestionId ?? "");
+    const parameters = new URLSearchParams({ conversationId: tab.conversationId, status: "pending", limit: "1" });
+    const payload = await api(`/api/works/${encodeURIComponent(tab.workId)}/ai/questions?${parameters}`);
+    const questions = Array.isArray(payload) ? payload : (Array.isArray(payload?.questions) ? payload.questions : []);
+    const questionId = String(questions.find((question) => String(question?.id ?? "") === expectedQuestionId)?.id ?? questions[0]?.id ?? "");
+    if (!questionId) {
+      if (label) label.textContent = "提问已处理";
+      button.setAttribute("aria-label", "待回答提问已处理");
+      toast("当前对话已经没有待回答问题，可以重新发送消息");
+      return;
+    }
+    await respondAiUserQuestion(questionId, { action: "reject" });
+    for (const action of tab.feed.querySelectorAll(".ai-question-discard-button")) {
+      action.disabled = true;
+      action.setAttribute("aria-label", "待回答提问已作废");
+      const actionLabel = action.querySelector("span");
+      if (actionLabel) actionLabel.textContent = "提问已作废";
+    }
+  } catch (error) {
+    button.disabled = false;
+    if (label) label.textContent = "作废提问并继续";
+    throw error;
+  }
+}
+
 function renderMessageCardActions(message) {
   let actions = message.querySelector(".message-card-actions");
   if (!actions) {
@@ -2927,18 +2965,30 @@ function renderMessageCardActions(message) {
     actions.append(copy);
   }
   if (message.dataset.status === "failed" && message.classList.contains("assistant-message")) {
-    const retry = document.createElement("button");
-    retry.type = "button";
-    retry.className = "message-retry-button";
-    retry.setAttribute("aria-label", "重试");
-    retry.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.7-4L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.7 4L20 15"/><path d="M20 20v-5h-5"/></svg><span>重试</span>';
-    retry.addEventListener("click", () => {
-      retry.disabled = true;
-      void retryAiMessage(message).finally(() => {
-        if (retry.isConnected) retry.disabled = false;
+    if (message.dataset.errorCode === "AI_QUESTION_PENDING") {
+      const discard = document.createElement("button");
+      discard.type = "button";
+      discard.className = "message-retry-button ai-question-discard-button";
+      discard.setAttribute("aria-label", "作废待回答提问并让 AI 继续");
+      discard.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/><path d="M15 12h6M18 9l3 3-3 3"/></svg><span>作废提问并继续</span>';
+      discard.addEventListener("click", () => {
+        void discardPendingAiQuestion(message, discard).catch((error) => toast(`作废提问失败：${error.message}`, "error"));
       });
-    });
-    actions.append(retry);
+      actions.append(discard);
+    } else {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "message-retry-button";
+      retry.setAttribute("aria-label", "重试");
+      retry.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.7-4L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.7 4L20 15"/><path d="M20 20v-5h-5"/></svg><span>重试</span>';
+      retry.addEventListener("click", () => {
+        retry.disabled = true;
+        void retryAiMessage(message).finally(() => {
+          if (retry.isConnected) retry.disabled = false;
+        });
+      });
+      actions.append(retry);
+    }
   } else if (message.dataset.messageId && message.classList.contains("assistant-message")) {
     const fork = document.createElement("button");
     fork.type = "button";
@@ -3262,14 +3312,14 @@ function handleInteractiveToolCallEvent(toolCall) {
     return;
   }
   if (name !== "ask_user_question" || toolCall.status === "failed") return;
-  const question = toolCall.result?.question;
+  const question = parseInteractiveToolPayload(toolCall)?.question;
   if (!question?.id) return;
   cacheAiQuestionView(question);
   const questionId = String(question.id);
   if (autoOpenedQuestionIds.has(questionId)) return;
   autoOpenedQuestionIds.add(questionId);
   // 直接弹出回答框等待作者选择；不会预填任何答案。
-  openAiUserQuestionDialog(questionId).catch(() => undefined);
+  openAiUserQuestionDialog(questionId, question).catch(() => undefined);
 }
 
 function questionsEndpoint(path) {
@@ -3392,22 +3442,7 @@ async function fetchAiUserQuestion(questionId) {
 }
 
 function aiQuestionItems(question) {
-  const items = Array.isArray(question?.questions) && question.questions.length > 0
-    ? question.questions
-    : [{
-        question: question?.question ?? "",
-        options: question?.options ?? [],
-        selectedOption: question?.selectedOption ?? null,
-        customAnswer: question?.customAnswer ?? "",
-        answerText: question?.answerText ?? "",
-        isCustomAnswer: question?.isCustomAnswer === true
-      }];
-  return items.map((item, index) => ({
-    ...item,
-    index,
-    question: String(item?.question ?? ""),
-    options: Array.isArray(item?.options) ? item.options : []
-  }));
+  return normalizeAiQuestionItems(question);
 }
 
 function resetAiQuestionDialogState(question) {
@@ -3446,6 +3481,14 @@ function syncAiQuestionAnswerCount() {
   const input = $("#ai-question-custom-answer");
   const maximum = Number(input.maxLength) || 3000;
   $("#ai-question-answer-count").textContent = `已填写 ${input.value.length} / ${maximum}`;
+}
+
+function syncAiQuestionDismissState() {
+  const closeButton = $("#ai-question-close");
+  const canClose = aiQuestionDialogCanClose(currentAiQuestionDialogView);
+  closeButton.disabled = !canClose;
+  closeButton.classList.toggle("hidden", !canClose);
+  $("#ai-question-dialog").dataset.dismissLocked = String(!canClose);
 }
 
 function renderAiUserQuestionOptions(question) {
@@ -3502,6 +3545,7 @@ function renderAiUserQuestionOptions(question) {
   // 提交按钮由选择状态驱动：待回答且已选择（或输入）时才可提交。
   if (isPending) syncAiQuestionSubmitState();
   else $("#ai-question-submit").disabled = true;
+  syncAiQuestionDismissState();
   $("#ai-question-submit").textContent = items.length > 1 ? "提交全部回答" : "提交回答";
   $("#ai-question-skip").disabled = !isPending;
   $("#ai-question-expiry").textContent = isPending
@@ -3517,17 +3561,25 @@ async function refreshAiQuestionDialog() {
   return question;
 }
 
-async function openAiUserQuestionDialog(questionId) {
+async function openAiUserQuestionDialog(questionId, initialQuestion = null) {
   aiQuestionDialogQuestionId = String(questionId);
   const dialog = $("#ai-question-dialog");
   if (!dialog.open) dialog.showModal();
-  $("#ai-question-text").textContent = "";
-  $("#ai-question-options").replaceChildren();
-  $("#ai-question-custom-answer").value = "";
-  $("#ai-question-navigation").classList.add("hidden");
-  $("#ai-question-progress").textContent = "正在加载问题";
-  syncAiQuestionAnswerCount();
-  $("#ai-question-expiry").textContent = "正在加载问题……";
+  if (initialQuestion?.id && String(initialQuestion.id) === aiQuestionDialogQuestionId) {
+    currentAiQuestionDialogView = initialQuestion;
+    resetAiQuestionDialogState(initialQuestion);
+    renderAiUserQuestionOptions(initialQuestion);
+  } else {
+    currentAiQuestionDialogView = null;
+    $("#ai-question-text").textContent = "";
+    $("#ai-question-options").replaceChildren();
+    $("#ai-question-custom-answer").value = "";
+    $("#ai-question-navigation").classList.add("hidden");
+    $("#ai-question-progress").textContent = "正在加载问题";
+    syncAiQuestionAnswerCount();
+    $("#ai-question-expiry").textContent = "正在加载问题……";
+    syncAiQuestionDismissState();
+  }
   try {
     return await refreshAiQuestionDialog();
   } catch (error) {
@@ -5906,6 +5958,15 @@ function formatAiFailureMessage(error) {
   if (callId) lines.push(`调用 ID：${callId}`);
   if (failure && failure !== message) lines.push(`详细原因：${failure}`);
   return lines.join("\n");
+}
+
+function aiFailureMessageMetadata(error) {
+  const details = error?.details && typeof error.details === "object" && !Array.isArray(error.details) ? error.details : {};
+  return {
+    ...(typeof error?.code === "string" ? { errorCode: error.code.slice(0, 100) } : {}),
+    ...(Number.isInteger(error?.status) ? { errorStatus: error.status } : {}),
+    ...(typeof details.questionId === "string" ? { pendingQuestionId: details.questionId } : {})
+  };
 }
 
 function isAgentToolCallLimitFailure(text) {
@@ -18290,6 +18351,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
       return;
     }
     const failureMessage = formatAiFailureMessage(error);
+    const failureMetadata = aiFailureMessageMetadata(error);
     let persistedFailureMessage = null;
     try {
       persistedFailureMessage = await persistAiConversationMessage(
@@ -18297,13 +18359,13 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
         "assistant",
         failureMessage,
         [],
-        {},
+        failureMetadata,
         { requestId: aiAssistantRequestId(request) }
       );
       updateAiConversationSummaryFromMessage(persistedFailureMessage);
     } catch { /* 主请求错误已显示，历史记录保存失败不覆盖原始错误 */ }
     if (aiRequestTargetsCurrentState(request)) {
-      appendMessage("assistant", failureMessage, [], persistedFailureMessage?.createdAt, {}, persistedFailureMessage?.id, { tab });
+      appendMessage("assistant", failureMessage, [], persistedFailureMessage?.createdAt, failureMetadata, persistedFailureMessage?.id, { tab });
     }
   } finally {
     aiRequestManager.finish(requestHolder.snapshot);
@@ -18686,6 +18748,9 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   const isInterrupted = role === "assistant" && metadata?.interrupted === true;
   const interruptionCode = typeof metadata?.interruptionCode === "string" ? metadata.interruptionCode : "AI_STREAM_FAILED";
   message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure || isInterrupted ? " is-error" : ""}`;
+  const errorCode = isFailure ? aiFailureCode(text, metadata) : "";
+  if (errorCode) message.dataset.errorCode = errorCode;
+  if (isFailure && typeof metadata?.pendingQuestionId === "string") message.dataset.pendingQuestionId = metadata.pendingQuestionId;
   const parsedUserTurn = role === "user" ? parseRoleplayUserTurn(text) : null;
   const messageBody = isFailure
     ? `<p class="ai-error-text">${esc(text)}</p>${aiToolCallSettingsLinkMarkup(text)}`
@@ -21317,7 +21382,15 @@ $("#ai-write-plan-undo").addEventListener("click", () => {
   if (!aiWritePlanDialogPlanId) return;
   undoAiWritePlan(aiWritePlanDialogPlanId);
 });
-$("#ai-question-close").addEventListener("click", () => $("#ai-question-dialog").close());
+$("#ai-question-close").addEventListener("click", () => {
+  if (!aiQuestionDialogCanClose(currentAiQuestionDialogView)) return;
+  $("#ai-question-dialog").close();
+});
+$("#ai-question-dialog").addEventListener("cancel", (event) => {
+  if (aiQuestionDialogCanClose(currentAiQuestionDialogView)) return;
+  event.preventDefault();
+  toast("请先提交全部回答，或选择“暂不回答”让 AI 继续", "warning");
+});
 
 function syncAiQuestionSubmitState() {
   const submit = $("#ai-question-submit");
