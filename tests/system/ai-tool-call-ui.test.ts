@@ -144,7 +144,7 @@ describe("AI 工具调用记录界面", () => {
     expect(page).toContain("feature=ai-question-answer-limit-v1");
     expect(page).toContain("feature=ai-question-batch-v1");
     expect(page).toContain("feature=ai-question-submit-guidance-v1");
-    expect(page).toContain("feature=ai-question-render-recovery-v1");
+    expect(page).toContain("feature=ai-question-render-recovery-v2");
     expect(styles).toContain(".ai-question-navigation { display: grid;");
     expect(styles).not.toContain("padding: 30px 12px 12px;");
     expect(styles).not.toContain("ai-stream-cursor");
