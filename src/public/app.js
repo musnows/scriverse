@@ -1,5 +1,6 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1";
 import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
+import { countProseWords } from "/text-count.js?v=20260906-chapter-word-count-consistency-v1";
 import { renderMarkdown } from "/markdown.js?v=20260830-adjacent-blockquotes-v1";
 import { createImWorkspace } from "/im.js?v=20260904-im-judge-outcomes-v106";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
@@ -9305,8 +9306,8 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
 function updateChapterStats() {
   if (!state.chapter) return;
   const text = $("#chapter-content").value;
-  const count = Array.from(text.replace(/\s/g, "")).length;
-  $("#chapter-stats").textContent = `${count} 字 · v${state.chapter.versionNo}`;
+  const count = countProseWords(text);
+  $("#chapter-stats").textContent = `${count.toLocaleString("zh-CN")} 字 · v${state.chapter.versionNo}`;
 }
 
 function readReadingStorage(key) {
