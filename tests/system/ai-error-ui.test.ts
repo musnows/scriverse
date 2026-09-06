@@ -7,14 +7,14 @@ describe("AI 错误详情界面", () => {
     const application = await readFile(join(process.cwd(), "src", "public", "app.js"), "utf8");
     const sendAiSource = application.slice(
       application.indexOf("async function sendAi()"),
-      application.indexOf("async function streamChat(requestHolder, body, idempotencyKey)")
+      application.indexOf("async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null } = {})")
     );
     const sendFailureSource = sendAiSource.slice(
       sendAiSource.lastIndexOf("  } catch (error) {"),
       sendAiSource.lastIndexOf("  } finally {")
     );
     const streamChatSource = application.slice(
-      application.indexOf("async function streamChat(requestHolder, body, idempotencyKey)"),
+      application.indexOf("async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null } = {})"),
       application.indexOf("function appendMessage(role, text")
     );
     const streamFailureSource = streamChatSource.slice(streamChatSource.lastIndexOf("  } catch (error) {"));
@@ -36,7 +36,7 @@ describe("AI 错误详情界面", () => {
     const application = await readFile(join(process.cwd(), "src", "public", "app.js"), "utf8");
     const sendAiSource = application.slice(
       application.indexOf("async function sendAi()"),
-      application.indexOf("async function streamChat(requestHolder, body, idempotencyKey)")
+      application.indexOf("async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null } = {})")
     );
 
     expect(application).toContain("function createClientError(payload, fallbackMessage, fallbackStatus = null)");

@@ -3092,6 +3092,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .writing-suggestion-ui { display: contents; }
 .guard-card.warning { border-left-color: #c07b31; }.guard-card.failed { border-left-color: var(--accent); }
 .guard-card strong { display: block; margin-bottom: 5px; font-size: 10px; }.guard-card p { margin: 4px 0; color: var(--muted); font-size: 9px; line-height: 1.45; }.guard-card p b { color: var(--ink); }
+.guard-failure-details { margin-top: 6px; }
+.guard-failure-details summary { width: max-content; max-width: 100%; color: var(--accent-dark); font-size: 9px; line-height: 1.45; cursor: pointer; }
+.guard-failure-details p { margin-top: 6px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); white-space: pre-wrap; overflow-wrap: anywhere; }
 .message-actions { display: flex; gap: 7px; margin-top: 10px; }
 .message-actions button { border: 1px solid rgba(139,61,44,.25); background: var(--surface); color: var(--accent-dark); font-size: 10px; padding: 5px 8px; border-radius: 3px; }
 .prompt-box { border-top: 1px solid var(--line); padding-top: 12px; }

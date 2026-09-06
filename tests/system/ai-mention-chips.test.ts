@@ -52,10 +52,10 @@ describe("AI 输入框引用气泡", () => {
     expect(application.text).toContain("function clearAiPromptComposer({ collapseScenePanel = false } = {})");
     const sendAiSource = application.text.slice(
       application.text.indexOf("async function sendAi()"),
-      application.text.indexOf("async function streamChat(requestHolder, body, idempotencyKey)")
+      application.text.indexOf("async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null } = {})")
     );
     const streamChatSource = application.text.slice(
-      application.text.indexOf("async function streamChat(requestHolder, body, idempotencyKey)"),
+      application.text.indexOf("async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null } = {})"),
       application.text.indexOf("function appendAiMessageImageAttachments")
     );
     expect(sendAiSource).toContain("const streamed = await streamChat");

@@ -50,13 +50,17 @@ export function createAiRequestManager() {
     if (!current) return false;
     activeRequests.delete(key);
     current.controller.abort(createAiRequestAbortError(reason));
+    current.resolveFinished();
     return true;
   };
 
   const cancelAll = (reason = "AI 请求已取消") => {
     const requests = [...activeRequests.values()];
     activeRequests.clear();
-    for (const current of requests) current.controller.abort(createAiRequestAbortError(reason));
+    for (const current of requests) {
+      current.controller.abort(createAiRequestAbortError(reason));
+      current.resolveFinished();
+    }
     return requests.length;
   };
 
@@ -67,7 +71,9 @@ export function createAiRequestManager() {
     generation += 1;
     const request = snapshot(input, controller, generation);
     if (!request.workId) throw new Error("AI 请求必须绑定作品");
-    activeRequests.set(key, { controller, snapshot: request });
+    let resolveFinished;
+    const finished = new Promise((resolve) => { resolveFinished = resolve; });
+    activeRequests.set(key, { controller, snapshot: request, finished, resolveFinished });
     return request;
   };
 
@@ -98,6 +104,7 @@ export function createAiRequestManager() {
 
   const finish = (request) => {
     if (!isCurrent(request)) return false;
+    activeRequests.get(request.tabId).resolveFinished();
     activeRequests.delete(request.tabId);
     return true;
   };
@@ -108,6 +115,7 @@ export function createAiRequestManager() {
     cancel,
     cancelAll,
     finish,
+    whenIdle: (tabId) => activeRequests.get(requestKey({ tabId }))?.finished ?? Promise.resolve(),
     hasActive: (tabId = null) => tabId === null
       ? activeRequests.size > 0
       : activeRequests.has(requestKey({ tabId })),

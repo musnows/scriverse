@@ -6538,7 +6538,10 @@ export class AiManager {
     questionView?: Record<string, unknown>;
     round?: number;
     toolMessages?: unknown[];
-  }): Promise<Record<string, unknown>> {
+  }, stream: Pick<GenerateInput, "signal" | "onToolCall" | "onProcessStep" | "onContextCompacted"> & {
+    onDelta?: (delta: string) => void;
+    onStart?: (message: Record<string, unknown>) => void;
+  } = {}): Promise<Record<string, unknown>> {
     const answeredItems = (input.answers ?? []).map((answer) => ({
       question: String(answer.question ?? ""),
       answer: String(answer.answer ?? ""),
@@ -6570,7 +6573,20 @@ export class AiManager {
       round: input.round,
       toolMessages: input.toolMessages
     });
+    stream.onStart?.({
+      conversationId: input.conversationId,
+      messageId: toolContinuation.assistantMessageId,
+      toolCalls: toolContinuation.previousToolCalls.map((toolCall) => toolCall.id === toolCallId ? { ...toolCall, result: toolResult } : toolCall),
+      processSteps: toolContinuation.previousProcessSteps.map((step) => step.type === "tool" && step.toolCall.id === toolCallId
+        ? { ...step, toolCall: { ...step.toolCall, result: toolResult } }
+        : step),
+      processDurationMs: toolContinuation.previousProcessDurationMs
+    });
     return this.createStreamingChat({
+      signal: stream.signal,
+      onToolCall: stream.onToolCall,
+      onProcessStep: stream.onProcessStep,
+      onContextCompacted: stream.onContextCompacted,
       workId: input.workId,
       conversationId: input.conversationId,
       assistantMessageRequestId: toolContinuation.assistantMessageRequestId,
@@ -6579,7 +6595,7 @@ export class AiManager {
       ...(input.modelId ? { modelId: input.modelId } : {}),
       disableTools: input.status !== "answered",
       toolContinuation
-    }, () => undefined);
+    }, stream.onDelta ?? (() => undefined));
   }
 
   private resolveQuestionToolContinuation(input: {
@@ -6745,7 +6761,11 @@ export class AiManager {
         contextRefs
       });
     } catch (error) {
-      const failure = error instanceof Error ? error.message : "一致性检查失败";
+      const errorDetails = error instanceof AppError && error.details && typeof error.details === "object"
+        ? error.details as Record<string, unknown>
+        : null;
+      const detailedFailure = typeof errorDetails?.failure === "string" ? errorDetails.failure.trim() : "";
+      const failure = detailedFailure || (error instanceof Error ? error.message : "一致性检查失败");
       const callId = error instanceof AppError && error.details && typeof error.details === "object" && "callId" in error.details
         ? String((error.details as Record<string, unknown>).callId)
         : null;
@@ -10463,7 +10483,7 @@ export class AiManager {
       let totalCachedInputTokens = 0;
       const processSteps: AiProcessStep[] = [];
       const completionDelivery = new WeakMap<CompletionPayload, "json" | "sse">();
-      let streamingGenerationRound = 0;
+      let streamingGenerationRound = input.toolContinuation?.round ?? 0;
       type CompletionRequestOptions = {
         messages?: CompletionMessage[];
         parameters?: Record<string, unknown>;

@@ -28,4 +28,5 @@ export function createStreamTypewriter<FrameHandle = number>(options: {
   cancelFrame?: (handle: FrameHandle) => void;
   reducedMotion?: boolean;
   speedController?: StreamTypewriterSpeedController | null;
+  visibilitySource?: Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener"> | null;
 }): StreamTypewriter;

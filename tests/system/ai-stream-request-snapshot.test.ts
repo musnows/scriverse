@@ -10,8 +10,8 @@ describe("AI 流式请求快照", () => {
       readFile(join(publicPath, "index.html"), "utf8")
     ]);
 
-    expect(application).toContain('/ai-request-manager.js?v=20260816-ai-chat-tabs-v1');
-    expect(application).toContain('fetch(`/api/works/${encodeURIComponent(request.workId)}/chat/stream`');
+    expect(application).toContain('/ai-request-manager.js?v=20260905-question-stream-v2');
+    expect(application).toContain('fetch(endpoint ?? `/api/works/${encodeURIComponent(request.workId)}/chat/stream`');
     expect(application).toContain("signal: request.signal");
     expect(application).toContain("request.conversationId,\n          \"assistant\"");
     expect(application).toContain("requestHolder.snapshot = aiRequestManager.bind(requestHolder.snapshot, { userMessageId: persistedUserMessage.id })");

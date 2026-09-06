@@ -48,6 +48,8 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain("window.cancelAnimationFrame(currentFrame);");
     expect(application).toContain("const processStepTypewriters = new Map();");
     expect(application).toContain("processStepTypewriter(targetStep).append(step.content)");
+    expect(application).toContain('/stream-typewriter.js?v=20260906-background-stream-v2');
+    expect(page).toContain("feature=ai-background-stream-v1");
     expect(application).toContain('step.type === "intermediate" && typeof step.content === "string"');
     expect(application).toContain("typewriter.replace(streamedText)");
     expect(application).toContain('step.type === "thinking") {');
@@ -94,7 +96,7 @@ describe("AI 工具调用记录界面", () => {
     expect(page).toContain("feature=ai-question-actions-footer-v1");
     expect(page).toContain("feature=ai-question-option-supplement-v1");
     expect(page).toContain("feature=ai-question-selection-highlight-v1");
-    expect(page).toContain("feature=ai-question-continuation-ui-v1");
+    expect(page).toContain("feature=ai-question-continuation-ui-v3");
     expect(page).toContain('class="card-actions ai-question-actions"');
     expect(page).toContain("自定义回答 / 补充信息");
     expect(page).toContain('id="ai-question-answer-count"');

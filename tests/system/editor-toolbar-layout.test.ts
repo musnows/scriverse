@@ -39,6 +39,7 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('&feature=stable-line-ids-v1');
     expect(page.text).toContain('&feature=live-annotation-anchors-v1');
     expect(page.text).toContain('&feature=chapter-save-shortcut-v2');
+    expect(page.text).toContain('&feature=chapter-word-count-consistency-v1');
     expect(page.text).toMatch(/styles\.css\?[^"\n]*feature=markdown-word-count-five-digit-v2/u);
     expect(page.text).toMatch(/styles\.css\?[^"\n]*feature=annotation-marker-offset-v1/u);
     expect(application.text).toContain("async function createSelectedLineAnnotation(");
@@ -187,6 +188,8 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain('function updateVditorLineNumbers(editor, markdown)');
     expect(application.text).toContain('data-markdown-word-count-value');
     expect(application.text).toContain('unit.textContent = " 字";');
+    expect(application.text).toContain('import { countProseWords } from "/text-count.js?v=20260906-chapter-word-count-consistency-v1";');
+    expect(application.text).toContain('`${count.toLocaleString("zh-CN")} 字 · v${state.chapter.versionNo}`');
     expect(application.text).toContain('function collectVditorVisualLineRects(surface)');
     expect(application.text).toContain('buildVditorLineNumberRows');
     expect(styles.text).toContain('.chapter-stats { display: none; }');
