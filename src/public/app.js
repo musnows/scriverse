@@ -2953,6 +2953,7 @@ function renderMessageCardActions(message) {
         return;
       }
       fork.disabled = true;
+      const dismissForkingToast = persistentToast("正在创建分支对话…");
       try {
         const sourceTab = aiChatTabManager.get(message.closest(".ai-feed")?.dataset.aiTabId);
         if (!sourceTab?.conversationId) throw new Error("无法确定消息所属对话");
@@ -2966,6 +2967,8 @@ function renderMessageCardActions(message) {
       } catch (error) {
         fork.disabled = false;
         toast(error.message, "error");
+      } finally {
+        dismissForkingToast();
       }
     });
     actions.append(fork);
