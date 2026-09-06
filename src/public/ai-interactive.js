@@ -51,6 +51,11 @@ export function aiQuestionStatusLabel(status) {
   return QUESTION_STATUS_LABELS[String(status)] ?? String(status);
 }
 
+/** 待回答或尚未加载完成时不允许静默关闭提问窗口。 */
+export function aiQuestionDialogCanClose(question) {
+  return ["answered", "rejected", "expired"].includes(String(question?.status ?? ""));
+}
+
 /** 状态徽章色调：CSS 里按 data-tone 展示统一配色。 */
 export function statusTone(status) {
   switch (String(status)) {

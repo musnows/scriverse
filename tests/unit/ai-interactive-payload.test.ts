@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { normalizeAiQuestionItems, parseInteractiveToolPayload } from "../../src/public/ai-interactive.js";
+import { aiQuestionDialogCanClose, normalizeAiQuestionItems, parseInteractiveToolPayload } from "../../src/public/ai-interactive.js";
 
 describe("AI 提问工具前端载荷", () => {
   const questions = [
@@ -53,5 +53,13 @@ describe("AI 提问工具前端载荷", () => {
       question: "选择方案",
       options: [{ index: 3, label: "方案甲", recommended: false }]
     }]);
+  });
+
+  it("只允许静默关闭已经处理的提问窗口", () => {
+    expect(aiQuestionDialogCanClose(null)).toBe(false);
+    expect(aiQuestionDialogCanClose({ status: "pending" })).toBe(false);
+    expect(aiQuestionDialogCanClose({ status: "answered" })).toBe(true);
+    expect(aiQuestionDialogCanClose({ status: "rejected" })).toBe(true);
+    expect(aiQuestionDialogCanClose({ status: "expired" })).toBe(true);
   });
 });

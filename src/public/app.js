@@ -41,6 +41,7 @@ import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import {
   AI_WRITE_TOOLS_META,
+  aiQuestionDialogCanClose,
   cacheAiQuestionView,
   cacheAiWritePlanDetail,
   createInteractiveToolCard,
@@ -50,7 +51,7 @@ import {
   renderWritePlanDetailMarkup,
   isInteractiveToolPending,
   aiFormatDateTime
-} from "/ai-interactive.js?v=20260906-question-render-v1";
+} from "/ai-interactive.js?v=20260906-question-dialog-lock-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
@@ -3434,6 +3435,14 @@ function syncAiQuestionAnswerCount() {
   $("#ai-question-answer-count").textContent = `已填写 ${input.value.length} / ${maximum}`;
 }
 
+function syncAiQuestionDismissState() {
+  const closeButton = $("#ai-question-close");
+  const canClose = aiQuestionDialogCanClose(currentAiQuestionDialogView);
+  closeButton.disabled = !canClose;
+  closeButton.classList.toggle("hidden", !canClose);
+  $("#ai-question-dialog").dataset.dismissLocked = String(!canClose);
+}
+
 function renderAiUserQuestionOptions(question) {
   const host = $("#ai-question-options");
   const customInput = $("#ai-question-custom-answer");
@@ -3488,6 +3497,7 @@ function renderAiUserQuestionOptions(question) {
   // 提交按钮由选择状态驱动：待回答且已选择（或输入）时才可提交。
   if (isPending) syncAiQuestionSubmitState();
   else $("#ai-question-submit").disabled = true;
+  syncAiQuestionDismissState();
   $("#ai-question-submit").textContent = items.length > 1 ? "提交全部回答" : "提交回答";
   $("#ai-question-skip").disabled = !isPending;
   $("#ai-question-expiry").textContent = isPending
@@ -3512,6 +3522,7 @@ async function openAiUserQuestionDialog(questionId, initialQuestion = null) {
     resetAiQuestionDialogState(initialQuestion);
     renderAiUserQuestionOptions(initialQuestion);
   } else {
+    currentAiQuestionDialogView = null;
     $("#ai-question-text").textContent = "";
     $("#ai-question-options").replaceChildren();
     $("#ai-question-custom-answer").value = "";
@@ -3519,6 +3530,7 @@ async function openAiUserQuestionDialog(questionId, initialQuestion = null) {
     $("#ai-question-progress").textContent = "正在加载问题";
     syncAiQuestionAnswerCount();
     $("#ai-question-expiry").textContent = "正在加载问题……";
+    syncAiQuestionDismissState();
   }
   try {
     return await refreshAiQuestionDialog();
@@ -21309,7 +21321,15 @@ $("#ai-write-plan-undo").addEventListener("click", () => {
   if (!aiWritePlanDialogPlanId) return;
   undoAiWritePlan(aiWritePlanDialogPlanId);
 });
-$("#ai-question-close").addEventListener("click", () => $("#ai-question-dialog").close());
+$("#ai-question-close").addEventListener("click", () => {
+  if (!aiQuestionDialogCanClose(currentAiQuestionDialogView)) return;
+  $("#ai-question-dialog").close();
+});
+$("#ai-question-dialog").addEventListener("cancel", (event) => {
+  if (aiQuestionDialogCanClose(currentAiQuestionDialogView)) return;
+  event.preventDefault();
+  toast("请先提交全部回答，或选择“暂不回答”让 AI 继续", "warning");
+});
 
 function syncAiQuestionSubmitState() {
   const submit = $("#ai-question-submit");

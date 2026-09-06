@@ -122,12 +122,15 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('submit.title = unansweredCount > 0 ? `还有 ${unansweredCount} 个问题未回答` : "";');
     expect(application).toContain('$("#ai-question-progress").textContent = `问题 ${aiQuestionDialogIndex + 1} / ${questionCount} · 已回答 ${answeredCount} / ${questionCount}`;');
     expect(application).toContain("请回答全部 ${items.length} 个问题后一次提交。有效期至");
+    expect(application).toContain('$("#ai-question-dialog").addEventListener("cancel", (event) => {');
+    expect(application).toContain("if (aiQuestionDialogCanClose(currentAiQuestionDialogView)) return;");
+    expect(application).toContain('closeButton.classList.toggle("hidden", !canClose);');
     expect(application).toContain("function beginAiQuestionContinuationUi(conversationId)");
     expect(application).not.toContain("ai-question-continuation-message");
     expect(application).toContain("if (questionDialog.open) questionDialog.close();");
     expect(application).toContain("if (approvalCenterDialog.open) approvalCenterDialog.close();");
     expect(application).toContain("await reloadAiQuestionConversation(question.conversationId ?? conversationId);");
-    expect(application).toContain('from "/ai-interactive.js?v=20260906-question-render-v1"');
+    expect(application).toContain('from "/ai-interactive.js?v=20260906-question-dialog-lock-v1"');
     expect(page).toContain("feature=ai-question-tool-result-v1");
     expect(page).toContain("feature=ai-question-tool-summary-v1");
     expect(await readFile(join(publicPath, "ai-interactive.js"), "utf8")).toContain("作者回答已作为 ask_user_question 的工具结果返回");
