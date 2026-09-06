@@ -1,5 +1,6 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1";
 import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
+import { countProseWords } from "/text-count.js?v=20260906-chapter-word-count-consistency-v1";
 import { renderMarkdown } from "/markdown.js?v=20260830-adjacent-blockquotes-v1";
 import { createImWorkspace } from "/im.js?v=20260904-im-judge-outcomes-v106";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
@@ -31,7 +32,7 @@ import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260822-private-ai-endpoint-hint-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
-import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260818-ai-agent-turn-process-v1";
+import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260906-background-stream-v2";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount, usageCalendarYears } from "/ai-usage.js?v=20260830-ai-usage-year-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
@@ -2952,6 +2953,7 @@ function renderMessageCardActions(message) {
         return;
       }
       fork.disabled = true;
+      const dismissForkingToast = persistentToast("正在创建分支对话…");
       try {
         const sourceTab = aiChatTabManager.get(message.closest(".ai-feed")?.dataset.aiTabId);
         if (!sourceTab?.conversationId) throw new Error("无法确定消息所属对话");
@@ -2965,6 +2967,8 @@ function renderMessageCardActions(message) {
       } catch (error) {
         fork.disabled = false;
         toast(error.message, "error");
+      } finally {
+        dismissForkingToast();
       }
     });
     actions.append(fork);
@@ -9302,8 +9306,8 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
 function updateChapterStats() {
   if (!state.chapter) return;
   const text = $("#chapter-content").value;
-  const count = Array.from(text.replace(/\s/g, "")).length;
-  $("#chapter-stats").textContent = `${count} 字 · v${state.chapter.versionNo}`;
+  const count = countProseWords(text);
+  $("#chapter-stats").textContent = `${count.toLocaleString("zh-CN")} 字 · v${state.chapter.versionNo}`;
 }
 
 function readReadingStorage(key) {
