@@ -56,6 +56,12 @@ export function aiQuestionDialogCanClose(question) {
   return ["answered", "rejected", "expired"].includes(String(question?.status ?? ""));
 }
 
+/** 优先读取结构化错误码，并兼容修复前只保存了错误正文的历史消息。 */
+export function aiFailureCode(text, metadata = {}) {
+  if (typeof metadata?.errorCode === "string" && metadata.errorCode) return metadata.errorCode;
+  return String(text ?? "").match(/(?:^|\n)错误码：([^\n]+)(?:\n|$)/u)?.[1]?.trim() ?? "";
+}
+
 /** 状态徽章色调：CSS 里按 data-tone 展示统一配色。 */
 export function statusTone(status) {
   switch (String(status)) {

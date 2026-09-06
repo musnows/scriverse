@@ -58,6 +58,7 @@ describe("AI 错误详情界面", () => {
     expect(application).toContain("前往本书 AI 设置调整工具调用上限");
     expect(application).toContain("async function openAiToolCallSettings()");
     expect(sendAiSource).toContain("const failureMessage = formatAiFailureMessage(error);");
+    expect(sendAiSource).toContain("const failureMetadata = aiFailureMessageMetadata(error);");
     expect(application).toContain('streamError = createClientError(payload, "AI 流式调用失败", response.status);');
     expect(application).toContain('const isFailure = role === "assistant" && text.startsWith("调用失败：");');
     expect(application).toContain('message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure || isInterrupted ? " is-error" : ""}`;');
@@ -66,6 +67,10 @@ describe("AI 错误详情界面", () => {
     expect(application).toContain('failureBadge.className = "ai-message-status is-error";');
     expect(application).toContain('failureBadge.textContent = isInterrupted ? "中断" : "失败";');
     expect(application).toContain('failureBadge.setAttribute("aria-label", `消息状态：${isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : "失败"}`);');
+    expect(application).toContain('message.dataset.errorCode === "AI_QUESTION_PENDING"');
+    expect(application).toContain("async function discardPendingAiQuestion(message, button)");
+    expect(application).toContain("作废提问并继续");
+    expect(application).toContain('await respondAiUserQuestion(questionId, { action: "reject" });');
   });
 
   it("突出失败卡片并让错误正文继承正常助手消息的字体和字号", async () => {

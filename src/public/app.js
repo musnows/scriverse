@@ -41,6 +41,7 @@ import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import {
   AI_WRITE_TOOLS_META,
+  aiFailureCode,
   aiQuestionDialogCanClose,
   cacheAiQuestionView,
   cacheAiWritePlanDetail,
@@ -51,7 +52,7 @@ import {
   renderWritePlanDetailMarkup,
   isInteractiveToolPending,
   aiFormatDateTime
-} from "/ai-interactive.js?v=20260906-question-dialog-lock-v1";
+} from "/ai-interactive.js?v=20260906-question-recovery-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
@@ -2900,6 +2901,37 @@ function aiRetryStreamRequestBody(body, retry) {
     : body;
 }
 
+async function discardPendingAiQuestion(message, button) {
+  const feed = message.closest(".ai-feed");
+  const tab = aiChatTabManager.get(feed?.dataset.aiTabId);
+  if (!tab?.conversationId || !tab.workId || String(tab.workId) !== String(state.work?.id ?? "")) {
+    throw new Error("无法确定待回答问题所属的当前对话");
+  }
+  const label = button.querySelector("span");
+  button.disabled = true;
+  if (label) label.textContent = "正在作废提问";
+  try {
+    let questionId = String(message.dataset.pendingQuestionId ?? "");
+    if (!questionId) {
+      const parameters = new URLSearchParams({ conversationId: tab.conversationId, status: "pending", limit: "1" });
+      const payload = await api(`/api/works/${encodeURIComponent(tab.workId)}/ai/questions?${parameters}`);
+      const questions = Array.isArray(payload) ? payload : (Array.isArray(payload?.questions) ? payload.questions : []);
+      questionId = String(questions[0]?.id ?? "");
+    }
+    if (!questionId) {
+      if (label) label.textContent = "提问已处理";
+      toast("当前对话已经没有待回答问题，可以重新发送消息");
+      return;
+    }
+    await respondAiUserQuestion(questionId, { action: "reject" });
+    if (label?.isConnected) label.textContent = "提问已作废";
+  } catch (error) {
+    button.disabled = false;
+    if (label) label.textContent = "作废提问并继续";
+    throw error;
+  }
+}
+
 function renderMessageCardActions(message) {
   let actions = message.querySelector(".message-card-actions");
   if (!actions) {
@@ -2929,18 +2961,30 @@ function renderMessageCardActions(message) {
     actions.append(copy);
   }
   if (message.dataset.status === "failed" && message.classList.contains("assistant-message")) {
-    const retry = document.createElement("button");
-    retry.type = "button";
-    retry.className = "message-retry-button";
-    retry.setAttribute("aria-label", "重试");
-    retry.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.7-4L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.7 4L20 15"/><path d="M20 20v-5h-5"/></svg><span>重试</span>';
-    retry.addEventListener("click", () => {
-      retry.disabled = true;
-      void retryAiMessage(message).finally(() => {
-        if (retry.isConnected) retry.disabled = false;
+    if (message.dataset.errorCode === "AI_QUESTION_PENDING") {
+      const discard = document.createElement("button");
+      discard.type = "button";
+      discard.className = "message-retry-button ai-question-discard-button";
+      discard.setAttribute("aria-label", "作废待回答提问并让 AI 继续");
+      discard.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/><path d="M15 12h6M18 9l3 3-3 3"/></svg><span>作废提问并继续</span>';
+      discard.addEventListener("click", () => {
+        void discardPendingAiQuestion(message, discard).catch((error) => toast(`作废提问失败：${error.message}`, "error"));
       });
-    });
-    actions.append(retry);
+      actions.append(discard);
+    } else {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "message-retry-button";
+      retry.setAttribute("aria-label", "重试");
+      retry.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.7-4L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.7 4L20 15"/><path d="M20 20v-5h-5"/></svg><span>重试</span>';
+      retry.addEventListener("click", () => {
+        retry.disabled = true;
+        void retryAiMessage(message).finally(() => {
+          if (retry.isConnected) retry.disabled = false;
+        });
+      });
+      actions.append(retry);
+    }
   } else if (message.dataset.messageId && message.classList.contains("assistant-message")) {
     const fork = document.createElement("button");
     fork.type = "button";
@@ -5910,6 +5954,15 @@ function formatAiFailureMessage(error) {
   if (callId) lines.push(`调用 ID：${callId}`);
   if (failure && failure !== message) lines.push(`详细原因：${failure}`);
   return lines.join("\n");
+}
+
+function aiFailureMessageMetadata(error) {
+  const details = error?.details && typeof error.details === "object" && !Array.isArray(error.details) ? error.details : {};
+  return {
+    ...(typeof error?.code === "string" ? { errorCode: error.code.slice(0, 100) } : {}),
+    ...(Number.isInteger(error?.status) ? { errorStatus: error.status } : {}),
+    ...(typeof details.questionId === "string" ? { pendingQuestionId: details.questionId } : {})
+  };
 }
 
 function isAgentToolCallLimitFailure(text) {
@@ -18294,6 +18347,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
       return;
     }
     const failureMessage = formatAiFailureMessage(error);
+    const failureMetadata = aiFailureMessageMetadata(error);
     let persistedFailureMessage = null;
     try {
       persistedFailureMessage = await persistAiConversationMessage(
@@ -18301,13 +18355,13 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
         "assistant",
         failureMessage,
         [],
-        {},
+        failureMetadata,
         { requestId: aiAssistantRequestId(request) }
       );
       updateAiConversationSummaryFromMessage(persistedFailureMessage);
     } catch { /* 主请求错误已显示，历史记录保存失败不覆盖原始错误 */ }
     if (aiRequestTargetsCurrentState(request)) {
-      appendMessage("assistant", failureMessage, [], persistedFailureMessage?.createdAt, {}, persistedFailureMessage?.id, { tab });
+      appendMessage("assistant", failureMessage, [], persistedFailureMessage?.createdAt, failureMetadata, persistedFailureMessage?.id, { tab });
     }
   } finally {
     aiRequestManager.finish(requestHolder.snapshot);
@@ -18690,6 +18744,9 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   const isInterrupted = role === "assistant" && metadata?.interrupted === true;
   const interruptionCode = typeof metadata?.interruptionCode === "string" ? metadata.interruptionCode : "AI_STREAM_FAILED";
   message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure || isInterrupted ? " is-error" : ""}`;
+  const errorCode = isFailure ? aiFailureCode(text, metadata) : "";
+  if (errorCode) message.dataset.errorCode = errorCode;
+  if (isFailure && typeof metadata?.pendingQuestionId === "string") message.dataset.pendingQuestionId = metadata.pendingQuestionId;
   const parsedUserTurn = role === "user" ? parseRoleplayUserTurn(text) : null;
   const messageBody = isFailure
     ? `<p class="ai-error-text">${esc(text)}</p>${aiToolCallSettingsLinkMarkup(text)}`

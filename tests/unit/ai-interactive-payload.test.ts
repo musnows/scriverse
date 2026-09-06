@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { aiQuestionDialogCanClose, normalizeAiQuestionItems, parseInteractiveToolPayload } from "../../src/public/ai-interactive.js";
+import { aiFailureCode, aiQuestionDialogCanClose, normalizeAiQuestionItems, parseInteractiveToolPayload } from "../../src/public/ai-interactive.js";
 
 describe("AI 提问工具前端载荷", () => {
   const questions = [
@@ -61,5 +61,11 @@ describe("AI 提问工具前端载荷", () => {
     expect(aiQuestionDialogCanClose({ status: "answered" })).toBe(true);
     expect(aiQuestionDialogCanClose({ status: "rejected" })).toBe(true);
     expect(aiQuestionDialogCanClose({ status: "expired" })).toBe(true);
+  });
+
+  it("从结构化元数据或旧错误正文识别待回答错误", () => {
+    expect(aiFailureCode("调用失败", { errorCode: "AI_QUESTION_PENDING" })).toBe("AI_QUESTION_PENDING");
+    expect(aiFailureCode("调用失败：请先回答\n错误码：AI_QUESTION_PENDING\n服务端状态：HTTP 409")).toBe("AI_QUESTION_PENDING");
+    expect(aiFailureCode("调用失败：网络错误")).toBe("");
   });
 });
