@@ -337,6 +337,8 @@ describe("作者完整创作流程", () => {
     const icon = await request(runtime.app).get("/icon.svg").expect(200).expect("Content-Type", /svg/u);
     const manifest = await request(runtime.app).get("/site.webmanifest").expect(200);
     expect(page.text).toContain('id="shelf-view"');
+    expect(page.text).toMatch(/<link[^>]+href="\/styles\.css\?[^"]*feature=continuation-guard-failure-details-v1"/u);
+    expect(page.text).toMatch(/<script[^>]+src="\/app\.js\?[^"]*feature=continuation-guard-failure-details-v1"/u);
     expect(page.text).toContain('id="platform-ai-view"');
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('id="platform-usage-view"');
@@ -1087,6 +1089,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('addEventListener("contextmenu"');
     expect(application.text).toContain("collapsedVolumeIds");
     expect(application.text).toContain('data-testid="continuation-guard"');
+    expect(application.text).toContain('<details class="guard-failure-details"><summary>查看失败原因</summary>');
+    expect(application.text).not.toContain('<details class="guard-failure-details" open>');
+    expect(styles.text).toContain(".guard-failure-details summary");
+    expect(styles.text).toContain("overflow-wrap: anywhere");
     expect(graph.text).toContain("export function buildRelationshipGraph");
     expect(graph.text).toContain("export function formatRelationshipLabel");
     expect(graph.text).toContain("export function groupRelationshipDetailsByCharacterName");
