@@ -2918,12 +2918,14 @@ async function discardPendingAiQuestion(message, button) {
     const questionId = String(questions.find((question) => String(question?.id ?? "") === expectedQuestionId)?.id ?? questions[0]?.id ?? "");
     if (!questionId) {
       if (label) label.textContent = "提问已处理";
+      button.setAttribute("aria-label", "待回答提问已处理");
       toast("当前对话已经没有待回答问题，可以重新发送消息");
       return;
     }
     await respondAiUserQuestion(questionId, { action: "reject" });
     for (const action of tab.feed.querySelectorAll(".ai-question-discard-button")) {
       action.disabled = true;
+      action.setAttribute("aria-label", "待回答提问已作废");
       const actionLabel = action.querySelector("span");
       if (actionLabel) actionLabel.textContent = "提问已作废";
     }

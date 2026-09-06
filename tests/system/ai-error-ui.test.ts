@@ -72,6 +72,7 @@ describe("AI 错误详情界面", () => {
     expect(application).toContain("作废提问并继续");
     expect(application).toContain('await respondAiUserQuestion(questionId, { action: "reject" });');
     expect(application).toContain('for (const action of tab.feed.querySelectorAll(".ai-question-discard-button"))');
+    expect(application).toContain('action.setAttribute("aria-label", "待回答提问已作废");');
   });
 
   it("突出失败卡片并让错误正文继承正常助手消息的字体和字号", async () => {
