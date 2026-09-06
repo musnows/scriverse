@@ -3860,6 +3860,59 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(runtime.store.getAiConversationInjectedEntities(roleplayConversationId, workId).characters).toEqual([]);
   });
 
+  it("流式用户消息持久化所有主动 @ 引用", async () => {
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "闻笙" }).expect(201);
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "月港通行想法",
+      category: "创作想法",
+      content: "月港只允许持有银色通行证的人进入。"
+    }).expect(201);
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      return new Response('data: {"choices":[{"delta":{"content":"已读取全部主动引用。"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      });
+    });
+
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "请检查这些主动引用。",
+      scope: {
+        type: "none",
+        characterIds: [character.body.data.id],
+        settingIds: [setting.body.data.id],
+        chapterIds: [chapterId],
+        includeSettingInfo: true
+      },
+      modelId,
+      conversationId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    const userMessagePayload = JSON.parse(streamed.text.match(/event: user_message\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      message?: { metadata?: Record<string, unknown> };
+    };
+    expect(userMessagePayload.message?.metadata).toMatchObject({
+      mentionCharacterIds: [character.body.data.id],
+      mentionSettingIds: [setting.body.data.id],
+      mentionChapterIds: [chapterId],
+      mentionContextSettingIds: ["include-setting-info"]
+    });
+
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(reloaded.body.data.messages[0].metadata).toMatchObject({
+      mentionCharacterIds: [character.body.data.id],
+      mentionSettingIds: [setting.body.data.id],
+      mentionChapterIds: [chapterId],
+      mentionContextSettingIds: ["include-setting-info"]
+    });
+  });
+
   it("同一角色跨消息再次出现时仍写入本条用户消息 metadata", async () => {
     const manualCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
     const automaticCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
@@ -5101,6 +5154,54 @@ describe("AI 供应商、模型与建议 API", () => {
       ] } } }
     ]);
     await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`).send({ selectedOption: 0 }).expect(409);
+    expect(completionCount).toBe(2);
+  });
+
+  it("待回答错误公开恢复标识并可作废提问继续原工作流", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({ tools: { ask_user_questions: true } }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async () => {
+      completionCount += 1;
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "ask-recovery",
+          type: "function",
+          function: { name: "ask_user_question", arguments: { questions: [{ question: "是否继续？", options: ["继续", "停止"] }] } }
+        }] } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已作废旧提问并继续处理。" } }] }), { status: 200 });
+    });
+
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "先询问再继续",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      conversationId
+    }).expect(200);
+    const pending = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}&status=pending`).expect(200);
+    const questionId = String(pending.body.data.questions[0].id);
+
+    const blocked = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "continue",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      conversationId
+    }).expect(200);
+    expect(blocked.text).toContain('"code":"AI_QUESTION_PENDING"');
+    expect(blocked.text).toContain(`"details":{"questionId":"${questionId}"}`);
+    expect(completionCount).toBe(1);
+
+    const recovered = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/reject`)
+      .set("Accept", "text/event-stream")
+      .send({})
+      .expect(200);
+    expect(recovered.text).toContain("已作废旧提问并继续处理。");
+    const resolved = await request(runtime.app).get(`/api/works/${workId}/ai/questions/${questionId}`).expect(200);
+    expect(resolved.body.data).toMatchObject({ status: "rejected", resumeState: "completed" });
     expect(completionCount).toBe(2);
   });
 });
