@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("AI 用户消息引用横幅", () => {
-  it("透传流式消息 metadata 并渲染可换行的三类引用标签", async () => {
+  it("透传流式消息 metadata 并渲染所有 @ 引用标签", async () => {
     const [page, application, styles] = await Promise.all([
       readFile(join(process.cwd(), "src", "public", "index.html"), "utf8"),
       readFile(join(process.cwd(), "src", "public", "app.js"), "utf8"),
@@ -13,11 +13,16 @@ describe("AI 用户消息引用横幅", () => {
     expect(page).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
     expect(page).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(page).toContain('feature=ai-roleplay-message-reference-v1');
+    expect(page).toContain('feature=ai-all-message-references-v2');
     expect(application).toContain('/ai-mentions.js?v=20260811-user-message-mentions-v1');
     expect(application).toContain("persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id");
     expect(application).toContain('["角色", metadata?.mentionCharacterIds, state.characters]');
     expect(application).toContain('["种族", metadata?.mentionRaceIds, state.races]');
     expect(application).toContain('["组织", metadata?.mentionOrganizationIds, state.organizations]');
+    expect(application).toContain('const settingReferences = state.settings.map((setting) => ({ id: setting.id, name: setting.title }));');
+    expect(application).toContain('["设定", metadata?.mentionSettingIds, settingReferences]');
+    expect(application).toContain('["章节", metadata?.mentionChapterIds, chapterReferences]');
+    expect(application).toContain('["能力", metadata?.mentionContextSettingIds, contextSettingReferences]');
     expect(application).toContain('label.textContent = "引用";');
     expect(application).toContain('reference.setAttribute("aria-label", `${kind}：${name}`);');
     expect(application).toContain('canReadModule("races") ? api(`/api/works/${workId}/races`)');

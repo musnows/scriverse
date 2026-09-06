@@ -654,6 +654,9 @@ type AiConversationMessageInput = {
     mentionCharacterIds?: string[];
     mentionRaceIds?: string[];
     mentionOrganizationIds?: string[];
+    mentionSettingIds?: string[];
+    mentionChapterIds?: string[];
+    mentionContextSettingIds?: string[];
     modelId?: string;
     modelDisplayName?: string;
     outputTokens?: number;
@@ -689,7 +692,7 @@ type BeginAiConversationStreamRequestInput = {
   userMessage: {
     content: string;
     citations?: unknown[];
-    metadata?: { mentionCharacterIds?: string[]; mentionRaceIds?: string[]; mentionOrganizationIds?: string[]; modelId?: string; chatImageAttachmentIds?: string[] };
+    metadata?: { mentionCharacterIds?: string[]; mentionRaceIds?: string[]; mentionOrganizationIds?: string[]; mentionSettingIds?: string[]; mentionChapterIds?: string[]; mentionContextSettingIds?: string[]; modelId?: string; chatImageAttachmentIds?: string[] };
     existingMessageId?: string;
   };
 };

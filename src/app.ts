@@ -1247,7 +1247,7 @@ function redactAiCallContext(record: Record<string, unknown>, permissions: WorkM
   const redactedScope = { ...scope };
   let restricted = false;
   if (permissions.prose === "none") {
-    for (const field of ["selection", "selectionStart", "selectionEnd", "writingChapterVersion", "chapterId", "volumeId", "chapterIds", "includeBookSummary"] as const) {
+    for (const field of ["selection", "selectionStart", "selectionEnd", "writingChapterVersion", "chapterId", "volumeId", "chapterIds", "volumeIds", "includeBookSummary"] as const) {
       if (field in redactedScope) {
         delete redactedScope[field];
         restricted = true;
@@ -1314,6 +1314,8 @@ function redactAiConversationMessage(item: unknown, permissions: WorkModulePermi
     if (permissions.characters === "none") delete readableMetadata.mentionCharacterIds;
     if (permissions.races === "none") delete readableMetadata.mentionRaceIds;
     if (permissions.organizations === "none") delete readableMetadata.mentionOrganizationIds;
+    if (permissions.settings === "none") delete readableMetadata.mentionSettingIds;
+    if (permissions.settings === "none") delete readableMetadata.mentionContextSettingIds;
     if (Object.keys(readableMetadata).length === Object.keys(metadata).length) return item;
     return { ...message, metadata: readableMetadata };
   }
@@ -4271,6 +4273,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       ])];
       const mentionRaceIds = [...new Set(resolvedScope.raceIds ?? [])];
       const mentionOrganizationIds = [...new Set(resolvedScope.organizationIds ?? [])];
+      const mentionSettingIds = [...new Set(resolvedScope.settingIds ?? [])];
+      const mentionChapterIds = [...new Set(resolvedScope.chapterIds ?? [])];
+      const mentionContextSettingIds = resolvedScope.includeSettingInfo === true ? ["include-setting-info"] : [];
       const begun = store.beginAiConversationStreamRequest({
         workId: request.params.workId,
         conversationId,
@@ -4281,11 +4286,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           content: storedUserContent,
           citations,
           ...(input.currentMessageId ? { existingMessageId: input.currentMessageId } : {}),
-          ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length || input.imageAttachmentIds?.length || input.scope.semanticSnapshotId) ? { metadata: {
+          ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length || mentionSettingIds.length || mentionChapterIds.length || mentionContextSettingIds.length || input.imageAttachmentIds?.length || input.scope.semanticSnapshotId) ? { metadata: {
             ...(modelId ? { modelId } : {}),
             ...(mentionCharacterIds.length ? { mentionCharacterIds } : {}),
             ...(mentionRaceIds.length ? { mentionRaceIds } : {}),
             ...(mentionOrganizationIds.length ? { mentionOrganizationIds } : {}),
+            ...(mentionSettingIds.length ? { mentionSettingIds } : {}),
+            ...(mentionChapterIds.length ? { mentionChapterIds } : {}),
+            ...(mentionContextSettingIds.length ? { mentionContextSettingIds } : {}),
             ...(input.scope.semanticSnapshotId ? { semanticSnapshotId: input.scope.semanticSnapshotId } : {}),
             ...(input.imageAttachmentIds?.length ? { chatImageAttachmentIds: [...new Set(input.imageAttachmentIds)] } : {})
           } } : {})

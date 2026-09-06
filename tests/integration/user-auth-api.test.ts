@@ -3309,6 +3309,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         chapterId: "chapter_secret",
         volumeId: "volume_secret",
         chapterIds: ["chapter_secret"],
+        volumeIds: ["volume_collection_secret"],
         characterIds: ["character_secret"],
         settingIds: ["setting_secret"],
         includeBookSummary: true
@@ -3320,6 +3321,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(response.body.data[0].contextScope).toEqual({ type: "selection", restricted: true });
     expect(JSON.stringify(response.body.data)).not.toContain("TOP_SECRET_SELECTION_CONTEXT");
     expect(JSON.stringify(response.body.data)).not.toContain("chapter_secret");
+    expect(JSON.stringify(response.body.data)).not.toContain("volume_collection_secret");
     expect(JSON.stringify(response.body.data)).not.toContain("character_secret");
     expect(JSON.stringify(response.body.data)).not.toContain("setting_secret");
   });
@@ -3369,6 +3371,9 @@ describe("用户、作品权限与操作者追踪 API", () => {
         mentionCharacterIds: [String(character.body.data.id)],
         mentionRaceIds: ["secret-race-id"],
         mentionOrganizationIds: ["secret-organization-id"],
+        mentionChapterIds: ["readable-chapter-id"],
+        mentionSettingIds: ["secret-setting-id"],
+        mentionContextSettingIds: ["include-setting-info"],
         modelDisplayName: "保留的模型信息"
       }
     });
@@ -3379,14 +3384,19 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const collaboratorView = await collaborator.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(collaboratorView.body.data.messages[0]).toMatchObject({
       content: "可读取的对话正文",
-      metadata: { modelDisplayName: "保留的模型信息" }
+      metadata: { mentionChapterIds: ["readable-chapter-id"], modelDisplayName: "保留的模型信息" }
     });
     expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionCharacterIds");
     expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionRaceIds");
     expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionOrganizationIds");
+    expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionSettingIds");
+    expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionContextSettingIds");
 
     const pagedView = await collaborator.agent.get(`/api/ai-conversations/${conversationId}?page=1&limit=20`).expect(200);
-    expect(pagedView.body.data.messagesPage.items[0].metadata).toEqual({ modelDisplayName: "保留的模型信息" });
+    expect(pagedView.body.data.messagesPage.items[0].metadata).toEqual({
+      mentionChapterIds: ["readable-chapter-id"],
+      modelDisplayName: "保留的模型信息"
+    });
   });
 
   it("AI 建议与对话按成员正文权限脱敏", async () => {
