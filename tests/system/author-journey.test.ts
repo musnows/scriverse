@@ -337,8 +337,8 @@ describe("作者完整创作流程", () => {
     const icon = await request(runtime.app).get("/icon.svg").expect(200).expect("Content-Type", /svg/u);
     const manifest = await request(runtime.app).get("/site.webmanifest").expect(200);
     expect(page.text).toContain('id="shelf-view"');
-    expect(page.text).toMatch(/<link[^>]+href="\/styles\.css\?[^"]*feature=continuation-guard-failure-details-v1"/u);
-    expect(page.text).toMatch(/<script[^>]+src="\/app\.js\?[^"]*feature=continuation-guard-failure-details-v1"/u);
+    expect(page.text).toMatch(/<link[^>]+href="\/styles\.css\?[^"]*feature=continuation-guard-failure-details-v1[^"]*"/u);
+    expect(page.text).toMatch(/<script[^>]+src="\/app\.js\?[^"]*feature=continuation-guard-failure-details-v1[^"]*"/u);
     expect(page.text).toContain('id="platform-ai-view"');
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('id="platform-usage-view"');
