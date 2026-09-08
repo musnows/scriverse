@@ -88,6 +88,27 @@ describe("角色头像 API", () => {
     expect(runtime.database.get("SELECT character_id FROM character_avatars WHERE character_id = ?", String(character.id))).toBeUndefined();
   });
 
+  it("允许跨角色和作品复用头像，移除一个引用不会删除其他角色的文件", async () => {
+    runtime = createTestRuntime();
+    const work = await createWork(runtime);
+    const otherWork = await createWork(runtime, "共享头像的另一部作品");
+    const first = runtime.store.createCharacter(String(work.id), { name: "First" });
+    const second = runtime.store.createCharacter(String(otherWork.id), { name: "Second" });
+    for (const character of [first, second]) {
+      await request(runtime.app).put(`/api/characters/${character.id}/avatar`).attach("file", onePixelPng, { filename: "shared.png", contentType: "image/png" }).expect(200);
+    }
+    const firstAvatar = runtime.store.getCharacterAvatar(String(first.id));
+    expect(firstAvatar).not.toBeNull();
+    const storageKey = firstAvatar!.storageKey;
+    expect(runtime.store.getCharacterAvatar(String(second.id))?.storageKey).toBe(storageKey);
+    await request(runtime.app).delete(`/api/characters/${first.id}/avatar`).expect(200);
+    expect(existsSync(runtime.characterAvatarStorage.path(storageKey))).toBe(true);
+    const content = await request(runtime.app).get(`/api/characters/${second.id}/avatar`).expect(200);
+    expect(content.body).toEqual(onePixelPng);
+    await request(runtime.app).delete(`/api/characters/${second.id}/avatar`).expect(200);
+    expect(existsSync(runtime.characterAvatarStorage.path(storageKey))).toBe(false);
+  });
+
   it("彻底删除作品时清理角色头像文件", async () => {
     runtime = createTestRuntime();
     const work = await createWork(runtime);
