@@ -435,6 +435,8 @@ export class OfflineSyncService {
         replayed: false
       };
     }
+    // Store 的嵌套事务复用当前事务；独立保存点保证拒绝结果不会提交部分写入。
+    this.database.raw.exec("SAVEPOINT offline_sync_mutation");
     try {
       const updated = mutation.entityType === "chapter"
         ? this.store.saveChapter(
@@ -453,6 +455,7 @@ export class OfflineSyncService {
           mutation.changeNote,
           mutation.baseVersionNo
         );
+      this.database.raw.exec("RELEASE SAVEPOINT offline_sync_mutation");
       return {
         mutationId: mutation.mutationId,
         entityType: mutation.entityType,
@@ -468,6 +471,8 @@ export class OfflineSyncService {
         replayed: false
       };
     } catch (error) {
+      this.database.raw.exec("ROLLBACK TO SAVEPOINT offline_sync_mutation");
+      this.database.raw.exec("RELEASE SAVEPOINT offline_sync_mutation");
       if (!(error instanceof AppError)) throw error;
       const latest = this.currentMutationEntityState(mutation.entityType, mutation.entityId);
       if (error.code === "VERSION_CONFLICT" && latest) {
