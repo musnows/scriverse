@@ -18906,15 +18906,30 @@ function continuationGuardMarkup(guard) {
 }
 
 async function applyAcceptedWritingSuggestion(message, suggestion) {
+  if (state.work?.id === suggestion.workId && state.chapter?.id === suggestion.chapterId
+    && (state.dirty || chapterSaveInFlight || chapterSaveGuardInFlight)) {
+    throw new Error("当前章节有未保存修改或正在保存，请先完成保存，再重新生成正文建议");
+  }
   const result = await api(`/api/suggestions/${encodeURIComponent(suggestion.id)}/accept`, { method: "POST", body: {} });
-  state.chapter = result.chapter;
-  resetChapterDraftLineIds(state.chapter);
-  lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
-  $("#chapter-content").value = state.chapter.content;
-  scheduleChapterLineNumbers();
-  updateChapterStats();
-  state.work = await api(`/api/works/${state.work.id}`);
-  renderTree();
+  const workId = result.chapter.workId;
+  if (state.work?.id === workId && state.chapter?.id === result.chapter.id
+    && !state.dirty && !chapterSaveInFlight && !chapterSaveGuardInFlight) {
+    cancelChapterAutoSave();
+    state.chapter = result.chapter;
+    resetChapterDraftLineIds(state.chapter);
+    lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
+    $("#chapter-title").value = state.chapter.title;
+    $("#chapter-content").value = state.chapter.content;
+    scheduleChapterLineNumbers();
+    updateChapterStats();
+  }
+  if (state.work?.id === workId) {
+    const work = await api(`/api/works/${workId}`);
+    if (state.work?.id === workId) {
+      state.work = work;
+      renderTree();
+    }
+  }
   message.querySelector("[data-writing-suggestion-actions]").innerHTML = "<span>已采纳并生成新版本</span>";
   toast("AI 建议已采纳，正文已生成新版本");
 }
