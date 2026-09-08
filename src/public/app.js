@@ -15454,6 +15454,20 @@ function syncSettingEditorDirty(markdown = null) {
   entityEditorDirty = settingEditorDirtyTracker.isDirty(settingEditorSnapshot(currentMarkdown));
 }
 
+function setSettingEditorCategory(category) {
+  const select = $("#setting-editor-category");
+  select.querySelectorAll("option[data-custom-category]").forEach((option) => option.remove());
+  const value = category ?? "世界规则";
+  if (![...select.options].some((option) => option.value === value)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    option.dataset.customCategory = "true";
+    select.append(option);
+  }
+  select.value = value;
+}
+
 async function openSettingEditor(item = null, { readOnly = false } = {}) {
   if (!(await loadVditorResources())) return;
   entityEditorReadOnly = readOnly;
@@ -15461,7 +15475,7 @@ async function openSettingEditor(item = null, { readOnly = false } = {}) {
   settingEditorVditor = null;
   settingEditorItem = item;
   $("#setting-editor-name").value = item?.title ?? "";
-  $("#setting-editor-category").value = item?.category ?? "世界规则";
+  setSettingEditorCategory(item?.category);
   $("#setting-editor-locked").checked = Boolean(item?.locked);
   $("#setting-editor-body").value = item?.content ?? "";
   const viewOnly = readOnly || !canEditModule("settings");
@@ -15550,7 +15564,7 @@ async function openSettingEditor(item = null, { readOnly = false } = {}) {
           currentItem,
           body: {
             title,
-            category: String(form.get("category") ?? "世界规则"),
+            category: String(form.get("category") ?? currentItem?.category ?? "世界规则"),
             content,
             locked,
             status: locked ? "confirmed" : (currentItem?.status ?? "draft"),
