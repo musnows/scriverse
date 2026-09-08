@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +25,7 @@ class FakeS3Client implements S3ObjectClient {
   failure: Error | null = null;
   failureKeyIncludes: string | null = null;
   onObjectExists: ((key: string) => void) | null = null;
+  onPutObject: ((key: string) => void | Promise<void>) | null = null;
 
   async objectExists(_bucket: string, key: string): Promise<boolean> {
     this.events.push(`head:${key}`);
@@ -41,6 +42,7 @@ class FakeS3Client implements S3ObjectClient {
       metadata: input.metadata,
       lastModified: new Date("2026-08-04T03:04:05.678Z")
     });
+    await this.onPutObject?.(input.key);
   }
 
   async listObjects(_bucket: string, prefix: string): Promise<S3ListedObject[]> {
@@ -95,6 +97,50 @@ describe("S3 数据库与图片备份执行", () => {
   afterEach(async () => {
     for (const runtime of runtimes.splice(0)) await runtime.close();
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each([false, true])("快照生成后更换头像仍备份原头像，原文件不可用时明确失败（删除原文件：%s）", async (removeOriginal) => {
+    mkdirSync(join(process.cwd(), ".tmp"), { recursive: true });
+    const root = mkdtempSync(join(process.cwd(), ".tmp", "s3-snapshot-"));
+    roots.push(root);
+    const client = new FakeS3Client();
+    const runtime = createRuntime({ databasePath: join(root, "live.db"), masterSecret: "snapshot-race-test-secret-with-enough-length", serveUi: false, backupOptions: { clientFactory: () => client } });
+    runtimes.push(runtime);
+    const work = runtime.store.createWork({ title: "Snapshot avatar" });
+    const characterId = String(runtime.store.createCharacter(String(work.id), { name: "Avatar subject" }).id);
+    const avatar = (content: string) => {
+      const bytes = Buffer.from(content);
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      const storageKey = `${sha256.slice(0, 2)}/${sha256}.png`;
+      mkdirSync(join(runtime.characterAvatarStorage.rootDirectory, sha256.slice(0, 2)), { recursive: true });
+      writeFileSync(runtime.characterAvatarStorage.path(storageKey), bytes);
+      return { mimeType: "image/png", byteLength: bytes.length, sha256, storageKey, width: 1, height: 1 };
+    };
+    const oldAvatar = avatar("old avatar");
+    const nextAvatar = avatar("new avatar");
+    runtime.store.setCharacterAvatar(characterId, oldAvatar);
+    client.onPutObject = async (key) => {
+      if (!key.endsWith("/master.key")) return;
+      runtime.store.setCharacterAvatar(characterId, nextAvatar);
+      if (removeOriginal) await runtime.characterAvatarStorage.remove(oldAvatar.storageKey);
+    };
+    const target = runtime.backups.createTarget({ name: "Snapshot target", endpoint: "https://snapshot.example.com", bucket: "backup", accessKeyId: "test-access", secretAccessKey: "test-secret", enabled: true, backupImages: true });
+    const result = await runtime.backups.runTarget(target.id, "manual");
+    expect(result.status).toBe(removeOriginal ? "failed" : "succeeded");
+    const snapshot = client.objects.get(String(result.databaseKey));
+    expect(snapshot).toBeDefined();
+    const snapshotPath = join(root, "captured.db");
+    writeFileSync(snapshotPath, snapshot!.body);
+    const captured = new DatabaseSync(snapshotPath, { readOnly: true });
+    try {
+      expect(captured.prepare("SELECT storage_key FROM character_avatars WHERE character_id = ?").get(characterId)?.storage_key).toBe(oldAvatar.storageKey);
+      expect(captured.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+      expect(captured.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally { captured.close(); }
+    const prefix = `${target.rootPrefix}/img/character-avatars/`;
+    expect(client.objects.has(prefix + nextAvatar.storageKey)).toBe(false);
+    expect(client.objects.has(prefix + oldAvatar.storageKey)).toBe(!removeOriginal);
+    if (!removeOriginal) expect(client.objects.get(prefix + oldAvatar.storageKey)?.body).toEqual(Buffer.from("old avatar"));
   });
 
   it("上传时间戳数据库、跳过已有图片并只清理最老数据库", async () => {
