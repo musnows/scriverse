@@ -114,7 +114,7 @@ describe("S3 数据库与图片备份执行", () => {
       const storageKey = `${sha256.slice(0, 2)}/${sha256}.png`;
       mkdirSync(join(runtime.characterAvatarStorage.rootDirectory, sha256.slice(0, 2)), { recursive: true });
       writeFileSync(runtime.characterAvatarStorage.path(storageKey), bytes);
-      return { mimeType: "image/png", byteLength: bytes.length, sha256, storageKey, width: 1, height: 1 };
+      return { mimeType: "image/png" as const, byteLength: bytes.length, sha256, storageKey, width: 1, height: 1 };
     };
     const oldAvatar = avatar("old avatar");
     const nextAvatar = avatar("new avatar");
