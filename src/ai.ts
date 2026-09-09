@@ -53,6 +53,7 @@ import {
   clampAgentToolCallGlobalMultiplier,
   paginateToolResultRecords,
   resolveMaxAgentToolCallLimit,
+  restoreAgentToolCallQuotaUsed,
   shouldRejectAgentToolCalls,
   shouldRejectGlobalToolCalls,
   structuralToolResultRecords,
@@ -10798,7 +10799,11 @@ export class AiManager {
         this.store.getWorkAiSettings(input.workId).agentToolCallGlobalMultiplier ?? DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER
       );
       const globalToolCallLimit = agentToolCallGlobalLimit(agentToolCallLimit, agentToolCallGlobalMultiplier);
-      let toolCallQuotaUsed = input.toolContinuation?.previousToolCalls.length ?? 0;
+      let toolCallQuotaUsed = restoreAgentToolCallQuotaUsed(
+        input.toolContinuation?.previousToolCalls.length ?? 0,
+        input.toolContinuation?.previousProcessSteps ?? [],
+        agentToolCallLimit
+      );
       let globalToolCallUsed = input.toolContinuation?.previousToolCalls.length ?? 0;
       let toolContextCompactCount = 0;
       // 配额与全局熔断只控制循环是否继续，不得改写 tools 定义、tool_choice 或系统前缀（否则破坏 prompt cache）。

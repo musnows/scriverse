@@ -4911,6 +4911,61 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(captured[2]?.toolNames).not.toContain("ask_user_question");
   });
 
+  it("continues tools after answering a question in round 31 with compacted history", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ rpmLimit: 10_000 }).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({ tools: { ask_user_questions: true } }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallLimit: 12, agentToolCallGlobalMultiplier: 6
+    }).expect(200);
+    setLegacyModelContextWindow(modelId, 30_000);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    let generationCount = 0;
+    let compactCount = 0;
+    fetchMock.mockImplementation(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; tool_call_id?: string; content?: string }> };
+      if (body.messages[0]?.content?.includes("压缩已完成的 AI 工具调用上下文")) {
+        compactCount += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: "Retain the chapter index and continue the task." } }] }), { status: 200 });
+      }
+      generationCount += 1;
+      if (generationCount === 32) {
+        const answer = body.messages.find((message) => message.tool_call_id === "long-ask-31");
+        expect(JSON.parse(answer?.content ?? "{}")).toMatchObject({ result: { status: "answered", answer: "A" } });
+      }
+      const tool = generationCount === 31
+        ? { name: "ask_user_question", arguments: { question: "Choose a direction?", options: ["A", "B"] } }
+        : { name: "story_index", arguments: { limit: 1 } };
+      return new Response(JSON.stringify({ choices: [{ message: {
+        content: generationCount === 33 ? "Continued after round 31." : null,
+        ...(generationCount < 33 ? { tool_calls: [{
+          id: generationCount === 31 ? "long-ask-31" : `long-index-${generationCount}`,
+          type: "function", function: tool
+        }] } : {})
+      } }] }), { status: 200 });
+    });
+    const suspended = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "Read the index, ask, and continue reading", scope: { type: "chapter", chapterId }, modelId, conversationId
+    }).expect(200);
+    expect(suspended.text).not.toContain("event: error");
+    expect(generationCount).toBe(31);
+    expect(compactCount).toBeGreaterThan(0);
+    const questions = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}&status=pending`).expect(200);
+    const questionId = String(questions.body.data.questions[0].id);
+    const resumed = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
+      .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(200);
+    expect(resumed.text).not.toContain("event: error");
+    expect(resumed.text).toContain("Continued after round 31.");
+    expect(resumed.text).toContain('"id":"long-index-32"');
+    const messages = runtime.store.getAiConversation(conversationId).messages as Array<{ content: string; metadata: { toolCalls: unknown[] } }>;
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.content).toBe("Continued after round 31.");
+    expect(messages[1]?.metadata.toolCalls).toHaveLength(32);
+    expect(generationCount).toBe(33);
+  });
+
   it.each(["answer", "reject"])("streams question continuation before generation completes (%s)", async (action) => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

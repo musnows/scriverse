@@ -35,6 +35,18 @@ export function agentToolCallQuotaUsedAfterCompact(limit: number): number {
   return Math.floor(limit * 0.2);
 }
 
+/** 按最后一次压缩恢复轮内配额；历史工具总数仍单独用于全局熔断。 */
+export function restoreAgentToolCallQuotaUsed(
+  executedCount: number,
+  processSteps: readonly { type: string }[],
+  limit: number
+): number {
+  const lastCompactIndex = processSteps.findLastIndex((step) => step.type === "context_compaction");
+  if (lastCompactIndex < 0) return executedCount;
+  return agentToolCallQuotaUsedAfterCompact(limit)
+    + processSteps.slice(lastCompactIndex + 1).filter((step) => step.type === "tool").length;
+}
+
 export function clampAgentToolCallGlobalMultiplier(value: unknown): number {
   const numeric = Math.round(Number(value));
   if (!Number.isFinite(numeric)) return DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER;
