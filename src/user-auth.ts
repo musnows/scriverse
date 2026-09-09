@@ -1433,7 +1433,7 @@ export function createWorkAuthorizationMiddleware(auth: UserAuthService, disable
     }
     if (!workId) return next();
     const write = !["GET", "HEAD", "OPTIONS"].includes(request.method);
-    const annotationMatch = request.path.match(/^\/api\/chapter-annotations\/([^/]+)$/iu);
+    const annotationMatch = request.path.replace(/\/+$/u, "").match(/^\/api\/chapter-annotations\/([^/]+)$/iu);
     const annotationId = annotationMatch?.[1];
     const annotationAccess = annotationId
       ? auth.chapterAnnotationAccess(decodeURIComponent(annotationId))

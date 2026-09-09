@@ -421,6 +421,28 @@ describe("Desktop 离线同步快照 API", () => {
     expect(replayed.body.data.summary).toEqual({ applied: 1, conflict: 1, rejected: 1, replayed: 3 });
   });
 
+  it("同批失败设定完整回滚而有效章节继续提交，重放不会产生隐藏写入", async () => {
+    const owner = await register(runtime, "rollback_owner");
+    const fixture = await createOfflineFixture(runtime, owner);
+    const original = runtime.store.getSetting(fixture.settingId);
+    const body = {
+      clientId: "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      mutations: [
+        { mutationId: "22222222-aaaa-4aaa-8aaa-aaaaaaaaaaaa", entityType: "setting", entityId: fixture.settingId, operation: "update", baseVersionNo: 1, localSnapshot: { title: "不能写入", category: "不能写入", content: "![missing](attachment://missing-attachment)" } },
+        { mutationId: "33333333-aaaa-4aaa-8aaa-aaaaaaaaaaaa", entityType: "chapter", entityId: fixture.chapterId, operation: "update", baseVersionNo: 1, localSnapshot: { title: "第一章", content: "同批有效正文", chapterType: "正文" } }
+      ]
+    };
+    for (const replayed of [0, 2]) {
+      const response = await owner.agent.post(`/api/sync/works/${fixture.workId}/push`).set("X-CSRF-Token", owner.csrfToken).send(body).expect(200);
+      expect(response.body.data.summary).toEqual({ applied: 1, conflict: 0, rejected: 1, replayed });
+      expect(response.body.data.results[0]).toMatchObject({ status: "rejected", errorCode: "NOT_FOUND", serverSnapshot: { content: "快照旧设定", versionNo: 1 } });
+      expect(runtime.store.getSetting(fixture.settingId)).toEqual(original);
+      expect(runtime.store.getChapter(fixture.chapterId)).toMatchObject({ content: "同批有效正文", versionNo: 2 });
+    }
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?", fixture.settingId)).toEqual({ count: 1 });
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM audit_logs WHERE entity_id = ? AND action = 'setting.updated'", fixture.settingId)).toEqual({ count: 0 });
+  });
+
   it("在解析后拒绝超过 2500000 bytes 的同步批次", async () => {
     const owner = await register(runtime, "size_owner");
     const fixture = await createOfflineFixture(runtime, owner);

@@ -35,9 +35,10 @@ const maximumRateEntries = 10_000;
 /**
  * Express 默认路由大小写不敏感，但 request.path 保留原始大小写。
  * 安全中间件统一用小写路径做匹配，避免 /API/... 一类变体绕过鉴权与限速。
+ * Express 默认也接受末尾斜杠，权限规则必须使用同一个规范路径。
  */
 export function normalizeApiPath(pathname: string): string {
-  return pathname.toLocaleLowerCase("en-US");
+  return pathname.replace(/\/+$/u, "").toLocaleLowerCase("en-US") || "/";
 }
 
 /** 强制保持大小写不敏感路由，并拒绝后续改成大小写敏感。 */

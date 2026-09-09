@@ -799,6 +799,8 @@ export class S3BackupManager {
         forcePathStyle: target.forcePathStyle,
         ...(resolvedAddresses?.length ? { resolvedAddresses } : {})
       });
+      // 在数据库快照的同步捕获点冻结图片清单，避免上传期间的编辑改变备份范围。
+      const imageSources = target.backupImages ? this.backupImageSources(target.rootPrefix) : [];
       const databaseSnapshot = await this.snapshotDatabase();
       databaseKey = `${target.rootPrefix}/db/scriverse-${this.snapshotTimestamp(started)}-${runId.replaceAll("-", "").slice(0, 8)}.db`;
       if (!this.masterKey) throw new AppError(500, "BACKUP_MASTER_KEY_UNAVAILABLE", "S3 备份缺少 CredentialVault 恢复密钥");
@@ -818,7 +820,7 @@ export class S3BackupManager {
       }), "上传数据库快照");
 
       if (target.backupImages) {
-        for (const source of this.backupImageSources(target.rootPrefix)) {
+        for (const source of imageSources) {
           if (await this.withRequestTimeout(client.objectExists(target.bucket, source.objectKey), "检查远端图片")) {
             imagesSkipped += 1;
             continue;

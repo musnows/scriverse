@@ -128,6 +128,7 @@ import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncry
 import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";
 import { normalizeUploadProgress, uploadProgressText } from "/upload-progress.js?v=20260812-upload-progress-v1";
 import { resolveToastRegionHost } from "/toast-layer.js?v=20260822-toast-modal-host-v1";
+import { createToastStack } from "/toast-stack.js?v=20260909-toast-stack-v2";
 import { buildGlobalReplaceRefreshPlan, resolveGlobalReplaceChapterCount } from "/global-replace-refresh.js?v=20260812-global-replace-tree-v2";
 import {
   clampCropRect,
@@ -6268,6 +6269,7 @@ async function refreshAuthCaptcha(target = "login") {
 
 function clearAuthenticationOverlays() {
   const toastRegion = $("#toast-region");
+  notificationToastStack?.clear();
   toastRegion.replaceChildren();
   document.querySelectorAll("[popover]").forEach((popover) => {
     if (typeof popover.hidePopover === "function" && popover.matches(":popover-open")) popover.hidePopover();
@@ -6426,7 +6428,10 @@ function raiseToastRegion() {
   region.showPopover();
 }
 
+let notificationToastStack = null;
+
 function dismissToastElement(element) {
+  if (notificationToastStack?.dismiss(element)) return;
   element.remove();
   const region = $("#toast-region");
   if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
@@ -6443,8 +6448,7 @@ function dismissDeleteToasts() {
 }
 
 function deleteToast(message) {
-  toast(message);
-  $("#toast-region").lastElementChild?.classList.add("delete-toast");
+  toast(message, "info", "delete-toast");
 }
 
 function dismissChapterInsightToast() {
@@ -6467,10 +6471,17 @@ function toast(message, type = "info", extraClass = "") {
   const messageContent = document.createElement("span");
   messageContent.textContent = message;
   element.append(messageContent);
-  element.addEventListener("click", () => dismissToastElement(element), { once: true });
-  region.append(element);
+  if (element.classList.contains("delete-toast")) {
+    element.addEventListener("click", () => dismissToastElement(element), { once: true });
+    region.append(element);
+    setTimeout(() => dismissToastElement(element), 3600);
+  } else {
+    notificationToastStack ??= createToastStack(region, {
+      onEmpty: () => dismissToastElement(notificationToastStack.element)
+    });
+    notificationToastStack.add(element);
+  }
   raiseToastRegion();
-  setTimeout(() => dismissToastElement(element), 3600);
 }
 
 async function runEntityEditorSave({ busyTarget, button, prepare, save }) {
@@ -15454,6 +15465,20 @@ function syncSettingEditorDirty(markdown = null) {
   entityEditorDirty = settingEditorDirtyTracker.isDirty(settingEditorSnapshot(currentMarkdown));
 }
 
+function setSettingEditorCategory(category) {
+  const select = $("#setting-editor-category");
+  select.querySelectorAll("option[data-custom-category]").forEach((option) => option.remove());
+  const value = category ?? "世界规则";
+  if (![...select.options].some((option) => option.value === value)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    option.dataset.customCategory = "true";
+    select.append(option);
+  }
+  select.value = value;
+}
+
 async function openSettingEditor(item = null, { readOnly = false } = {}) {
   if (!(await loadVditorResources())) return;
   entityEditorReadOnly = readOnly;
@@ -15461,7 +15486,7 @@ async function openSettingEditor(item = null, { readOnly = false } = {}) {
   settingEditorVditor = null;
   settingEditorItem = item;
   $("#setting-editor-name").value = item?.title ?? "";
-  $("#setting-editor-category").value = item?.category ?? "世界规则";
+  setSettingEditorCategory(item?.category);
   $("#setting-editor-locked").checked = Boolean(item?.locked);
   $("#setting-editor-body").value = item?.content ?? "";
   const viewOnly = readOnly || !canEditModule("settings");
@@ -15550,7 +15575,7 @@ async function openSettingEditor(item = null, { readOnly = false } = {}) {
           currentItem,
           body: {
             title,
-            category: String(form.get("category") ?? "世界规则"),
+            category: String(form.get("category") ?? currentItem?.category ?? "世界规则"),
             content,
             locked,
             status: locked ? "confirmed" : (currentItem?.status ?? "draft"),
@@ -18906,15 +18931,30 @@ function continuationGuardMarkup(guard) {
 }
 
 async function applyAcceptedWritingSuggestion(message, suggestion) {
+  if (state.work?.id === suggestion.workId && state.chapter?.id === suggestion.chapterId
+    && (state.dirty || chapterSaveInFlight || chapterSaveGuardInFlight)) {
+    throw new Error("当前章节有未保存修改或正在保存，请先完成保存，再重新生成正文建议");
+  }
   const result = await api(`/api/suggestions/${encodeURIComponent(suggestion.id)}/accept`, { method: "POST", body: {} });
-  state.chapter = result.chapter;
-  resetChapterDraftLineIds(state.chapter);
-  lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
-  $("#chapter-content").value = state.chapter.content;
-  scheduleChapterLineNumbers();
-  updateChapterStats();
-  state.work = await api(`/api/works/${state.work.id}`);
-  renderTree();
+  const workId = result.chapter.workId;
+  if (state.work?.id === workId && state.chapter?.id === result.chapter.id
+    && !state.dirty && !chapterSaveInFlight && !chapterSaveGuardInFlight) {
+    cancelChapterAutoSave();
+    state.chapter = result.chapter;
+    resetChapterDraftLineIds(state.chapter);
+    lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
+    $("#chapter-title").value = state.chapter.title;
+    $("#chapter-content").value = state.chapter.content;
+    scheduleChapterLineNumbers();
+    updateChapterStats();
+  }
+  if (state.work?.id === workId) {
+    const work = await api(`/api/works/${workId}`);
+    if (state.work?.id === workId) {
+      state.work = work;
+      renderTree();
+    }
+  }
   message.querySelector("[data-writing-suggestion-actions]").innerHTML = "<span>已采纳并生成新版本</span>";
   toast("AI 建议已采纳，正文已生成新版本");
 }

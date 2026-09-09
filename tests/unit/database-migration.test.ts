@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DATABASE_SCHEMA_VERSION, Database, PLATFORM_AI_WORK_ID, SYSTEM_USER_ID } from "../../src/database.js";
 import { Store } from "../../src/store.js";
 import { chapterAnnotationLineHashes } from "../../src/chapter-annotation-anchor.js";
@@ -2622,6 +2622,55 @@ describe("数据库版本化迁移", () => {
     expect(database.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(database.all("PRAGMA foreign_key_check")).toEqual([]);
     database.close();
+  });
+
+  it.each(["normal", "orphan", "interrupted"])("迁移 138 保留头像记录并安全处理异常或中断：%s", (scenario) => {
+    const root = mkdtempSync(join(tmpdir(), "avatar-sharing-migration-"));
+    roots.push(root);
+    const filename = join(root, "novel.db");
+    const current = new Database(filename);
+    const store = new Store(current);
+    const workId = String(store.createWork({ title: "Avatar migration" }).id);
+    const first = String(store.createCharacter(workId, { name: "First" }).id);
+    const second = String(store.createCharacter(workId, { name: "Second" }).id);
+    const avatar = { mimeType: "image/png" as const, byteLength: 12, sha256: "a".repeat(64), storageKey: `aa/${"a".repeat(64)}.png`, width: 2, height: 3 };
+    store.setCharacterAvatar(first, avatar);
+    current.run("CREATE UNIQUE INDEX legacy_avatar_storage_key ON character_avatars(storage_key)");
+    current.run("DELETE FROM schema_migrations WHERE version = 138");
+    if (scenario === "orphan") {
+      current.raw.exec("PRAGMA foreign_keys = OFF");
+      current.run("UPDATE character_avatars SET character_id = 'orphan-avatar'");
+    }
+    const before = current.all("SELECT * FROM character_avatars");
+    current.close();
+    if (scenario !== "normal") {
+      const originalRun = Database.prototype.run;
+      const spy = scenario === "interrupted" ? vi.spyOn(Database.prototype, "run").mockImplementation(function (this: Database, sql, ...params) {
+        if (sql === "ALTER TABLE character_avatars_shared RENAME TO character_avatars") throw new Error("Simulated migration interruption");
+        return originalRun.call(this, sql, ...params);
+      }) : null;
+      try {
+        expect(() => new Database(filename)).toThrow(scenario === "orphan" ? /FOREIGN KEY/u : /Simulated migration interruption/u);
+      } finally { spy?.mockRestore(); }
+      const check = new DatabaseSync(filename);
+      try {
+        expect(check.prepare("SELECT * FROM character_avatars").all()).toEqual(before);
+        expect(check.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 138").get()).toEqual({ count: 0 });
+        expect(check.prepare("SELECT name FROM sqlite_master WHERE name = 'character_avatars_shared'").all()).toEqual([]);
+        if (scenario === "orphan") check.prepare("UPDATE character_avatars SET character_id = ?").run(first);
+      } finally { check.close(); }
+    }
+    for (let pass = 0; pass < 2; pass += 1) {
+      const migrated = new Database(filename);
+      try {
+        const migratedStore = new Store(migrated);
+        expect(migratedStore.getCharacterAvatar(first)).toMatchObject(avatar);
+        migratedStore.setCharacterAvatar(second, avatar);
+        expect(migrated.get("SELECT COUNT(*) AS count FROM character_avatars WHERE storage_key = ?", avatar.storageKey)).toEqual({ count: 2 });
+        expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+        expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+      } finally { migrated.close(); }
+    }
   });
 
   it("迁移 137 为平台与作品系统提示词增加默认关闭的覆写开关", () => {
