@@ -2,9 +2,29 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
   paginateToolResultRecords,
+  restoreAgentToolCallQuotaUsed,
   serializedToolResultChars,
   structuralToolResultRecords
 } from "../../src/ai-tool-results.js";
+
+describe("AI tool continuation quota", () => {
+  it("preserves used quota when no compaction occurred, including legacy metadata", () => {
+    expect(restoreAgentToolCallQuotaUsed(11, [], 12)).toBe(11);
+    expect(restoreAgentToolCallQuotaUsed(2, [{ type: "tool" }, { type: "thinking" }, { type: "tool" }], 12)).toBe(2);
+  });
+
+  it("counts only tool executions after the latest compaction", () => {
+    expect(restoreAgentToolCallQuotaUsed(31, [
+      { type: "tool" }, { type: "context_compaction" }, { type: "tool" },
+      { type: "context_compaction" }, { type: "thinking" }, { type: "tool" },
+      { type: "intermediate" }, { type: "tool" }
+    ], 12)).toBe(4);
+  });
+
+  it("preserves the reset when compaction happened after the question result", () => {
+    expect(restoreAgentToolCallQuotaUsed(31, [{ type: "tool" }, { type: "context_compaction" }], 12)).toBe(2);
+  });
+});
 
 describe("AI 工具结果分页", () => {
   it("在完整列表元素边界内限制单页字符数并通过游标续读", () => {

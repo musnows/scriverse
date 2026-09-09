@@ -1,6 +1,7 @@
 export const AGENT_TOOL_RESULT_MAX_CHARS = 10_000;
-export const MIN_AGENT_TOOL_CALL_LIMIT = 5;
-export const DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT = 80;
+export const MIN_AGENT_TOOL_CALL_LIMIT = 10;
+export const DEFAULT_AGENT_TOOL_CALL_LIMIT = 20;
+export const DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT = 300;
 export const MAX_AGENT_TOOL_CALL_LIMIT = DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT;
 export const MAX_AGENT_TOOL_CALL_LIMIT_ENV = "SCRIVERSE_MAX_AGENT_TOOL_CALL_LIMIT";
 export const MAX_AGENT_TOOL_CALL_LIMIT_HARD_CAP = 1_000;
@@ -35,6 +36,18 @@ export function agentToolCallQuotaUsedAfterCompact(limit: number): number {
   return Math.floor(limit * 0.2);
 }
 
+/** 按最后一次压缩恢复轮内配额；历史工具总数仍单独用于全局熔断。 */
+export function restoreAgentToolCallQuotaUsed(
+  executedCount: number,
+  processSteps: readonly { type: string }[],
+  limit: number
+): number {
+  const lastCompactIndex = processSteps.findLastIndex((step) => step.type === "context_compaction");
+  if (lastCompactIndex < 0) return executedCount;
+  return agentToolCallQuotaUsedAfterCompact(limit)
+    + processSteps.slice(lastCompactIndex + 1).filter((step) => step.type === "tool").length;
+}
+
 export function clampAgentToolCallGlobalMultiplier(value: unknown): number {
   const numeric = Math.round(Number(value));
   if (!Number.isFinite(numeric)) return DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER;
@@ -58,9 +71,9 @@ export function shouldRejectGlobalToolCalls(globalUsed: number, requestedCount: 
 }
 
 export function buildAgentToolCallQuotaNotice(remaining: number, limit: number): AgentToolCallQuotaNotice | null {
-  if (!Number.isFinite(remaining) || remaining <= 0) return null;
-  if (remaining === 1) {
-    return "[critical] 重要提示：现在没有可用的工具调用次数了。请立即根据已有工具结果直接总结作答，不得再请求任何工具。若继续发起工具调用，系统将拒绝并报错。";
+  if (!Number.isFinite(remaining) || remaining < 0) return null;
+  if (remaining === 0) {
+    return "[critical] 重要提示：现在没有可用的工具调用次数了。请立即根据已有工具结果直接总结作答，不得再请求任何工具。若继续发起工具调用，系统将显示额度不足提示并结束本次回答。";
   }
   if (remaining <= agentToolCallSoftWarningThreshold(limit)) {
     return `[warning] 提醒：本轮工具调用配额即将用尽，当前剩余 ${remaining} 次。请尽快收敛并准备最终答案，避免继续大规模检索。`;
@@ -89,8 +102,6 @@ export function shouldRejectAgentToolCalls(executedCount: number, requestedCount
   if (!Number.isFinite(executedCount) || !Number.isFinite(requestedCount) || !Number.isFinite(limit)) return true;
   if (requestedCount <= 0) return false;
   if (executedCount + requestedCount > limit) return true;
-  // 最后一档配额保留给硬拒绝：在倒数第一次配额注入 critical 后，再请求工具即失败。
-  if (executedCount >= limit - 1) return true;
   return false;
 }
 

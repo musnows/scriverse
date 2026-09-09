@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT,
+  DEFAULT_AGENT_TOOL_CALL_LIMIT,
+  MIN_AGENT_TOOL_CALL_LIMIT,
   MAX_AGENT_TOOL_CALL_LIMIT_ENV,
   agentToolCallGlobalLimit,
   agentToolCallQuotaNoticeBudgetChars,
@@ -15,12 +17,14 @@ import {
 } from "../../src/ai-tool-results.js";
 
 describe("AI 工具调用配额提醒", () => {
-  it("默认上限为 80 且支持通过环境变量调整", () => {
-    expect(DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT).toBe(80);
-    expect(resolveMaxAgentToolCallLimit({})).toBe(80);
+  it("默认调用次数 20，最低 10，默认最大值 300，并支持部署覆盖", () => {
+    expect(DEFAULT_AGENT_TOOL_CALL_LIMIT).toBe(20);
+    expect(MIN_AGENT_TOOL_CALL_LIMIT).toBe(10);
+    expect(DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT).toBe(300);
+    expect(resolveMaxAgentToolCallLimit({})).toBe(300);
     expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "120" })).toBe(120);
-    expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "not-a-number" })).toBe(80);
-    expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "2" })).toBe(5);
+    expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "not-a-number" })).toBe(300);
+    expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "2" })).toBe(10);
   });
 
   it("按上限的 20% + 1 计算软提醒阈值，并保证下限为 3", () => {
@@ -51,16 +55,16 @@ describe("AI 工具调用配额提醒", () => {
   it("配额提醒字段的额外字符会计入 compact 体积预算估算", () => {
     expect(agentToolCallQuotaNoticeBudgetChars(4, 12)).toBe(0);
     const warningBudget = agentToolCallQuotaNoticeBudgetChars(3, 12);
-    const criticalBudget = agentToolCallQuotaNoticeBudgetChars(1, 12);
+    const criticalBudget = agentToolCallQuotaNoticeBudgetChars(0, 12);
     expect(warningBudget).toBeGreaterThan(0);
     expect(criticalBudget).toBeGreaterThan(warningBudget);
-    expect(criticalBudget).toBeGreaterThan(buildAgentToolCallQuotaNotice(1, 12)?.length ?? 0);
+    expect(criticalBudget).toBeGreaterThan(buildAgentToolCallQuotaNotice(0, 12)?.length ?? 0);
   });
 
-  it("默认上限 12 时仅在剩余不超过 3 次时注入提醒字符串", () => {
+  it("上限 12 时仅在剩余不超过 3 次时注入提醒字符串", () => {
     expect(buildAgentToolCallQuotaNotice(4, 12)).toBeNull();
     expect(withAgentToolCallQuotaNotice({ ok: true }, 4, 12)).toEqual({ ok: true });
-    for (const remaining of [3, 2]) {
+    for (const remaining of [3, 2, 1]) {
       const notice = buildAgentToolCallQuotaNotice(remaining, 12);
       expect(notice?.startsWith("[warning] ")).toBe(true);
       expect(notice).toContain(`当前剩余 ${remaining} 次`);
@@ -80,25 +84,26 @@ describe("AI 工具调用配额提醒", () => {
     expect(withAgentToolCallQuotaNotice({ ok: true }, 10, 48).toolCallQuotaNotice).toBe(notice);
   });
 
-  it("剩余 1 次时注入 critical 文案并告知没有可用次数", () => {
-    const notice = buildAgentToolCallQuotaNotice(1, 12);
+  it("剩余 0 次时注入 critical 文案并告知没有可用次数", () => {
+    const notice = buildAgentToolCallQuotaNotice(0, 12);
     expect(notice?.startsWith("[critical] ")).toBe(true);
     expect(notice).toContain("现在没有可用的工具调用次数了");
     expect(notice).toContain("直接总结作答");
-    expect(withAgentToolCallQuotaNotice({ ok: true }, 1, 12).toolCallQuotaNotice).toBe(notice);
+    expect(withAgentToolCallQuotaNotice({ ok: true }, 0, 12).toolCallQuotaNotice).toBe(notice);
   });
 
-  it("在倒数第一次配额之后再请求工具时拒绝，最后一档保留给硬错误", () => {
+  it("允许用满配置次数，仅拒绝超过剩余额度的工具批次", () => {
     expect(shouldRejectAgentToolCalls(10, 1, 12)).toBe(false);
-    expect(shouldRejectAgentToolCalls(11, 1, 12)).toBe(true);
+    expect(shouldRejectAgentToolCalls(11, 1, 12)).toBe(false);
     expect(shouldRejectAgentToolCalls(11, 2, 12)).toBe(true);
     expect(shouldRejectAgentToolCalls(12, 1, 12)).toBe(true);
     expect(shouldRejectAgentToolCalls(0, 12, 12)).toBe(false);
     expect(shouldRejectAgentToolCalls(0, 13, 12)).toBe(true);
   });
 
-  it("最低上限 5 时仍保留最后一档硬拒绝", () => {
+  it("较低上限时也允许用完最后一次调用", () => {
     expect(shouldRejectAgentToolCalls(3, 1, 5)).toBe(false);
-    expect(shouldRejectAgentToolCalls(4, 1, 5)).toBe(true);
+    expect(shouldRejectAgentToolCalls(4, 1, 5)).toBe(false);
+    expect(shouldRejectAgentToolCalls(5, 1, 5)).toBe(true);
   });
 });

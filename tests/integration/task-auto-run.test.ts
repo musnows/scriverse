@@ -104,6 +104,24 @@ describe("分析任务自动运行", () => {
     while (runtimes.length) await runtimes.pop()?.close();
   });
 
+  it("keeps the new tool default when saving semantic settings and preserves valid existing values", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const workId = String(runtime.store.createWork({ title: "Tool defaults" }).id);
+    expect(runtime.store.getWorkAiSettings(workId).agentToolCallLimit).toBe(20);
+    runtime.store.updateWorkSemanticSearchSettings(workId, { enabled: false });
+    expect(runtime.database.get("SELECT agent_tool_call_limit FROM work_ai_settings WHERE work_id = ?", workId)).toEqual({ agent_tool_call_limit: 20 });
+    runtime.store.updateWorkAiSettings(workId, { agentToolCallLimit: 12 });
+    runtime.store.updateWorkSemanticSearchSettings(workId, { enabled: false });
+    expect(runtime.store.getWorkAiSettings(workId).agentToolCallLimit).toBe(12);
+    runtime.database.run("UPDATE work_ai_settings SET agent_tool_call_limit = 5 WHERE work_id = ?", workId);
+    expect(runtime.store.getWorkAiSettings(workId).agentToolCallLimit).toBe(10);
+    runtime.store.updateWorkAiSettings(workId, { autoRunConcurrency: 3 });
+    expect(runtime.database.get("SELECT agent_tool_call_limit FROM work_ai_settings WHERE work_id = ?", workId)).toEqual({ agent_tool_call_limit: 10 });
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentToolCallLimit: 10 }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentToolCallLimit: 10.5 }).expect(400);
+  });
+
   it("校验自动运行设置并返回任务范围摘要", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       choices: [{ message: { content: JSON.stringify({ summary: "测试摘要", events: [], characters: [], settings: [], evidence: [], uncertainties: [] }) } }]
@@ -126,8 +144,8 @@ describe("分析任务自动运行", () => {
       autoRunConsecutiveFailures: 0,
       bookSummaryContextPercent: 50,
       contextCompactThreshold: 85,
-      agentToolCallLimit: 12,
-      agentToolCallLimitMaximum: 80,
+      agentToolCallLimit: 20,
+      agentToolCallLimitMaximum: 300,
       agentToolCallGlobalMultiplier: 3,
       alwaysIncludeSettingInfo: false,
       agentTools: ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"]
@@ -162,14 +180,14 @@ describe("分析任务自动运行", () => {
       contextCompactThreshold: 91
     }).expect(400);
     const tooManyToolCalls = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
-      agentToolCallLimit: 81
+      agentToolCallLimit: 301
     }).expect(400);
     expect(tooManyToolCalls.body.error).toMatchObject({
       code: "AGENT_TOOL_CALL_LIMIT_TOO_HIGH",
-      message: "Agent 工具调用上限不能超过 80 次"
+      message: "Agent 工具调用上限不能超过 300 次"
     });
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
-      agentToolCallLimit: 4
+      agentToolCallLimit: 9
     }).expect(400);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       agentToolCallLimit: 0
@@ -188,7 +206,7 @@ describe("分析任务自动运行", () => {
       autoRunStabilityDelayMinutes: 1,
       bookSummaryContextPercent: 35,
       contextCompactThreshold: 90,
-      agentToolCallLimit: 80,
+      agentToolCallLimit: 300,
       agentToolCallGlobalMultiplier: 4,
       alwaysIncludeSettingInfo: true
     }).expect(200);
@@ -196,7 +214,7 @@ describe("分析任务自动运行", () => {
     expect(updated.body.data.autoRunStabilityDelayMinutes).toBe(1);
     expect(updated.body.data.bookSummaryContextPercent).toBe(35);
     expect(updated.body.data.contextCompactThreshold).toBe(90);
-    expect(updated.body.data.agentToolCallLimit).toBe(80);
+    expect(updated.body.data.agentToolCallLimit).toBe(300);
     expect(updated.body.data.agentToolCallGlobalMultiplier).toBe(4);
     expect(updated.body.data.alwaysIncludeSettingInfo).toBe(true);
 

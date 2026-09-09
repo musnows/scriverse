@@ -25,7 +25,7 @@ import { AttachmentStorage } from "./attachment-storage.js";
 import { attachmentDownloadFileName, inlineContentDisposition } from "./attachment-download.js";
 import { AI_MODEL_KINDS, AiManager } from "./ai.js";
 import { LiteLlmPriceCache } from "./ai-model-pricing.js";
-import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
+import { MIN_AGENT_TOOL_CALL_LIMIT, resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import { SEMANTIC_SOURCE_TYPES, type SemanticSourceType } from "./semantic-search.js";
 import {
   CHARACTER_EXTRACTION_MAX_ALIASES,
@@ -755,7 +755,7 @@ const workAiSettingsSchema = z.object({
   autoRunStabilityDelayMinutes: z.number().int().min(1).max(120).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
-  agentToolCallLimit: z.number().int().min(5).optional(),
+  agentToolCallLimit: z.number().int().min(MIN_AGENT_TOOL_CALL_LIMIT).optional(),
   agentToolCallGlobalMultiplier: z.number().int().min(1).max(6).optional(),
   agentTools: z.array(z.enum(WORK_AGENT_TOOL_IDS)).max(WORK_AGENT_TOOL_IDS.length).optional(),
   alwaysIncludeSettingInfo: z.boolean().optional(),

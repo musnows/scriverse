@@ -45,6 +45,7 @@ import {
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
   DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER,
+  DEFAULT_AGENT_TOOL_CALL_LIMIT,
   MIN_AGENT_TOOL_CALL_LIMIT,
   agentToolCallGlobalLimit,
   agentToolCallQuotaNoticeBudgetChars,
@@ -53,6 +54,7 @@ import {
   clampAgentToolCallGlobalMultiplier,
   paginateToolResultRecords,
   resolveMaxAgentToolCallLimit,
+  restoreAgentToolCallQuotaUsed,
   shouldRejectAgentToolCalls,
   shouldRejectGlobalToolCalls,
   structuralToolResultRecords,
@@ -573,6 +575,7 @@ type GenerateResult = {
   processSteps: AiProcessStep[];
   contextUsage: Record<string, unknown>;
   suspendedQuestionId?: string;
+  toolCallLimit?: { scope: "cycle" | "global"; used: number; limit: number; requested: number };
   roleplayMemoryCandidates: RoleplayMemoryCandidate[];
 };
 
@@ -1517,7 +1520,6 @@ function resolvedQuestionToolMessages(continuation: QuestionToolContinuation): C
   ));
 }
 
-const MAX_AGENT_TOOL_CALLS = 12;
 const SEMANTIC_EMBEDDING_BATCH_SIZE = 16;
 const SEMANTIC_RERANK_CANDIDATE_LIMIT = 8;
 const SEMANTIC_FAILURE_PAUSE_THRESHOLD = 3;
@@ -6393,6 +6395,7 @@ export class AiManager {
       ...(modelDisplayName ? { modelDisplayName } : {}),
       outputTokens: generated.outputTokens + (input.toolContinuation?.previousOutputTokens ?? 0),
       processDurationMs: processDurationMs + (input.toolContinuation?.previousProcessDurationMs ?? 0),
+      ...(generated.toolCallLimit ? { toolCallLimit: generated.toolCallLimit } : {}),
       ...(generated.reasoningContent === undefined ? {} : { reasoningContent: generated.reasoningContent }),
       ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
       toolCalls: [...continuedToolCalls, ...generated.toolCalls],
@@ -6429,10 +6432,10 @@ export class AiManager {
     }
     const chapter = effectiveInput.scope.chapterId ? this.store.getChapter(effectiveInput.scope.chapterId) : null;
     const suggestionId = id("suggestion");
-    const suggestionTaskType = activeWritingSkillName === "continue-writing"
+    const suggestionTaskType = generated.toolCallLimit ? "chat" : activeWritingSkillName === "continue-writing"
       ? "continue"
       : activeWritingSkillName === "polish-writing" ? "polish" : "chat";
-    const suggestionAction = activeWritingSkillName === "continue-writing"
+    const suggestionAction = generated.toolCallLimit ? "note" : activeWritingSkillName === "continue-writing"
       ? "append"
       : activeWritingSkillName === "polish-writing" ? "replace-selection" : "note";
     this.store.db.run(
@@ -6461,7 +6464,7 @@ export class AiManager {
         generated.content,
         {
           ...generatedMessageMetadata,
-          ...(activeWritingSkillName ? {
+          ...(activeWritingSkillName && !generated.toolCallLimit ? {
             activeSkills: [activeWritingSkillName],
             writingSuggestionId: suggestionId
           } : {}),
@@ -6593,7 +6596,6 @@ export class AiManager {
       instruction: "",
       scope: input.scope,
       ...(input.modelId ? { modelId: input.modelId } : {}),
-      disableTools: input.status !== "answered",
       toolContinuation
     }, stream.onDelta ?? (() => undefined));
   }
@@ -7881,7 +7883,7 @@ export class AiManager {
     const askUserQuestionGuidance = enabledToolIds.includes("ask_user_question")
       ? [
           "当前对话已启用 ask_user_question。只要你需要向作者提出任何问题，包括澄清需求、索取缺失信息、确认方案、命名、事实或下一步，就必须调用 ask_user_question；禁止在普通回复正文中直接写出问题、要求作者回答，或使用“请告诉我”“请提供”“请选择”等措辞绕过工具。只有完全不需要作者回答时，才可以直接给出普通回复。",
-          "每次 ask_user_question 调用可在 questions 中提出 1-5 个彼此相关的问题，每题给出 2-6 个互斥选项，并把该题最推荐的选项放在第一位。能一次确认的相关决策应合并到同一次调用，避免连续弹窗；提出后停止生成等待作者一次提交全部回答。作者未回答、拒绝或提问过期时绝不允许编造答案，也不能把提问当作任何写入授权。"
+          "每次 ask_user_question 调用可在 questions 中提出 1-5 个彼此相关的问题，每题给出 2-6 个互斥选项，并把该题最推荐的选项放在第一位。能一次确认的相关决策应合并到同一次调用，避免连续弹窗；工具会等待作者一次提交全部回答，再将结果返回。收到工具结果后继续原任务，无需作者额外发送继续指令。作者未回答、拒绝或提问过期时绝不允许编造答案，也不能把提问当作任何写入授权；根据真实状态继续处理不依赖该选择的工作。"
         ]
       : [];
     const coreRules = [
@@ -10791,14 +10793,18 @@ export class AiManager {
       const maximumConfiguredToolCalls = resolveMaxAgentToolCallLimit();
       const configuredToolCallLimit = Math.min(
         maximumConfiguredToolCalls,
-        Math.max(MIN_AGENT_TOOL_CALL_LIMIT, Number(this.store.getWorkAiSettings(input.workId).agentToolCallLimit) || MAX_AGENT_TOOL_CALLS)
+        Math.max(MIN_AGENT_TOOL_CALL_LIMIT, Number(this.store.getWorkAiSettings(input.workId).agentToolCallLimit) || DEFAULT_AGENT_TOOL_CALL_LIMIT)
       );
       const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? configuredToolCallLimit, MIN_AGENT_TOOL_CALL_LIMIT, maximumConfiguredToolCalls));
       const agentToolCallGlobalMultiplier = clampAgentToolCallGlobalMultiplier(
         this.store.getWorkAiSettings(input.workId).agentToolCallGlobalMultiplier ?? DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER
       );
       const globalToolCallLimit = agentToolCallGlobalLimit(agentToolCallLimit, agentToolCallGlobalMultiplier);
-      let toolCallQuotaUsed = input.toolContinuation?.previousToolCalls.length ?? 0;
+      let toolCallQuotaUsed = restoreAgentToolCallQuotaUsed(
+        input.toolContinuation?.previousToolCalls.length ?? 0,
+        input.toolContinuation?.previousProcessSteps ?? [],
+        agentToolCallLimit
+      );
       let globalToolCallUsed = input.toolContinuation?.previousToolCalls.length ?? 0;
       let toolContextCompactCount = 0;
       // 配额与全局熔断只控制循环是否继续，不得改写 tools 定义、tool_choice 或系统前缀（否则破坏 prompt cache）。
@@ -10904,7 +10910,7 @@ export class AiManager {
           + estimateAiTokens(JSON.stringify(tools));
         // 新工具结果可能附带 toolCallQuotaNotice，预估体积时一并计入，避免低估后触发上下文溢出。
         const noticeBudgetChars = Math.max(
-          agentToolCallQuotaNoticeBudgetChars(1, agentToolCallLimit),
+          agentToolCallQuotaNoticeBudgetChars(0, agentToolCallLimit),
           agentToolCallQuotaNoticeBudgetChars(agentToolCallSoftWarningThreshold(agentToolCallLimit), agentToolCallLimit)
         );
         const maximumNewToolTokens = Math.ceil((AGENT_TOOL_RESULT_MAX_CHARS + noticeBudgetChars) * 1.1) * Math.max(1, toolCallCount);
@@ -10938,6 +10944,8 @@ export class AiManager {
       };
       let toolRound = input.toolContinuation?.round ?? 0;
       let suspendedQuestionId: string | null = null;
+      let toolCallLimit: GenerateResult["toolCallLimit"];
+      let toolCallLimitMessage = "";
       while (choice?.message?.tool_calls?.length) {
         const round = toolRound + 1;
         recordChoiceProcess(payload, round, true);
@@ -10954,10 +10962,18 @@ export class AiManager {
             turnQuotaUsed: toolCallQuotaUsed,
             toolsCalled: executedToolCalls.map((item) => item.name)
           });
-          throw new Error(`AI exceeded the global tool call limit of ${globalToolCallLimit} in one response cycle.`);
+          toolCallLimit = { scope: "global", used: globalToolCallUsed, limit: globalToolCallLimit, requested: toolCalls.length };
         }
-        if (shouldRejectAgentToolCalls(toolCallQuotaUsed, toolCalls.length, agentToolCallLimit)) {
-          throw new Error(`AI requested more than ${agentToolCallLimit} tool calls in one response cycle.`);
+        if (!toolCallLimit && shouldRejectAgentToolCalls(toolCallQuotaUsed, toolCalls.length, agentToolCallLimit)) {
+          toolCallLimit = { scope: "cycle", used: toolCallQuotaUsed, limit: agentToolCallLimit, requested: toolCalls.length };
+        }
+        if (toolCallLimit) {
+          const limitLabel = toolCallLimit.scope === "global" ? "整次回答的全局上限" : "本轮调用上限";
+          toolCallLimitMessage = `Agent 工具调用额度不足：${limitLabel} ${toolCallLimit.limit} 次，已用 ${toolCallLimit.used} 次，模型还请求 ${toolCallLimit.requested} 次。\n\n已保留此前的回复与执行过程。你可以在本书 AI 设置中调整“Agent 工具调用上限”${toolCallLimit.scope === "global" ? "或全局倍数" : ""}，再发送“继续”完成剩余工作。`;
+          if (input.taskType !== "chat" || input.im) {
+            throw new AppError(409, "AI_TOOL_CALL_LIMIT_REACHED", toolCallLimitMessage, { toolCallLimit });
+          }
+          break;
         }
         const normalizedToolCalls = toolCalls.map((toolCall) => ({
           ...toolCall,
@@ -11068,8 +11084,8 @@ export class AiManager {
         payload = await requestCompletion("auto");
         choice = payload.choices?.[0];
       }
-      if (!suspendedQuestionId) recordChoiceProcess(payload, toolRound + 1, false);
-      const finalContent = suspendedQuestionId ? "" : choice?.message?.content ?? "";
+      if (!suspendedQuestionId && !toolCallLimit) recordChoiceProcess(payload, toolRound + 1, false);
+      const finalContent = suspendedQuestionId ? "" : toolCallLimitMessage || (choice?.message?.content ?? "");
       if (!suspendedQuestionId && !finalContent.trim()) {
         if (requestAttemptLimit !== null) requestFailureCount += 1;
         const reasoningLength = choice?.message?.reasoning_content?.length ?? 0;
@@ -11078,12 +11094,12 @@ export class AiManager {
           : "";
         throw new Error(`${providerProtocolLabelText(protocol)} 响应缺少可用正文，finish_reason=${choice?.finish_reason ?? "unknown"}${suffix}`);
       }
-      if (!suspendedQuestionId && onDelta && completionDelivery.get(payload) !== "sse") {
+      if (!suspendedQuestionId && onDelta && (toolCallLimit || completionDelivery.get(payload) !== "sse")) {
         streamedContent += finalContent;
         onDelta(finalContent);
       }
       const content = suspendedQuestionId ? "" : (onDelta ? streamedContent : finalContent);
-      const outputTokens = suspendedQuestionId ? trackedOutputTokens : resolveOutputTokens(payload.usage, finalContent);
+      const outputTokens = suspendedQuestionId || toolCallLimit ? trackedOutputTokens : resolveOutputTokens(payload.usage, finalContent);
       const cacheHitPercent = cacheUsageComplete && completionRequestCount > 0 && totalInputTokens > 0
         ? Math.round(totalCachedInputTokens / totalInputTokens * 1_000) / 10
         : undefined;
@@ -11114,7 +11130,7 @@ export class AiManager {
         outputTokens,
         toolCallCount: executedToolCalls.length
       });
-      const finalAnthropicContent = choice?.message?.anthropic_content;
+      const finalAnthropicContent = toolCallLimit ? undefined : choice?.message?.anthropic_content;
       const replayAnthropicContent = onDelta && finalAnthropicContent?.length && content !== finalContent
         ? [
           ...finalAnthropicContent.filter((block) => block.type !== "text" && block.type !== "tool_use"),
@@ -11139,6 +11155,7 @@ export class AiManager {
         processSteps,
         contextUsage: this.completionContextUsage(effectiveInput, model, completionMessages, tools, payload.usage, outputTokens),
         ...(suspendedQuestionId ? { suspendedQuestionId } : {}),
+        ...(toolCallLimit ? { toolCallLimit } : {}),
         roleplayMemoryCandidates: stagedRoleplayMemoryCandidates
       };
     } catch (error) {
@@ -11172,6 +11189,7 @@ export class AiManager {
       });
       if (error instanceof AppError && (
         error.code === "CONTEXT_WINDOW_EXCEEDED"
+        || error.code === "AI_TOOL_CALL_LIMIT_REACHED"
         || error.code === "DAILY_TOKEN_QUOTA_EXCEEDED"
         || error.code === "MONTHLY_TOKEN_QUOTA_EXCEEDED"
         || error.code === "PROVIDER_DAILY_TOKEN_QUOTA_EXCEEDED"
