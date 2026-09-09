@@ -4265,6 +4265,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .entity-editor-heading h1, .character-editor-title-row h1, .character-editor-title-input { font-size: 18px; }
   .entity-editor-back { overflow: hidden; width: 40px; min-width: 40px; padding-inline: 11px; white-space: nowrap; }
   .entity-editor-back::before { margin-right: 18px; }
+  #entity-editor-view .entity-editor-back { padding-inline: 0; font-size: 0; }
+  #entity-editor-view .entity-editor-back::before { margin-right: 0; font-size: 14px; }
   .setting-editor-header { min-height: 102px; }
   .setting-editor-header-fields { flex-wrap: wrap; gap: 8px 12px; }
   .setting-editor-title-input { font-size: 16px; }

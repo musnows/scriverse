@@ -11,6 +11,7 @@ describe("AI 消息操作区", () => {
     ]);
 
     expect(page).toContain("feature=ai-message-actions-v1");
+    expect(page).toContain("feature=ai-suggestion-editor-boundary-v1");
     expect(application).toContain("function attachUserCopyAction(message, text)");
     expect(application).toContain('const hasCopyValue = Object.hasOwn(message.dataset, "rawMarkdown") || Object.hasOwn(message.dataset, "copyText");');
     expect(application).toContain('message.dataset.copyText = String(text ?? "");');

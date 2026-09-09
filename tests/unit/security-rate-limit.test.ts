@@ -123,10 +123,10 @@ describe("安全限速器", () => {
     const authAgent = request.agent(authApp);
 
     await authAgent.post("/api/auth/login").expect(200);
-    const blockedLogin = await authAgent.post("/API/AUTH/LOGIN").expect(429);
+    const blockedLogin = await authAgent.post("/API/AUTH/LOGIN/").expect(429);
     expect(blockedLogin.body.error.code).toBe("AUTH_RATE_LIMITED");
     await authAgent.post("/api/desktop/auth/login").expect(200);
-    const blockedDesktopLogin = await authAgent.post("/API/DESKTOP/AUTH/LOGIN").expect(429);
+    const blockedDesktopLogin = await authAgent.post("/API/DESKTOP/AUTH/LOGIN/").expect(429);
     expect(blockedDesktopLogin.body.error.code).toBe("AUTH_RATE_LIMITED");
   });
 });
@@ -135,6 +135,8 @@ describe("API 路径规范化", () => {
   it("将路径规范为小写供安全匹配使用", () => {
     expect(normalizeApiPath("/API/WORKS/abc")).toBe("/api/works/abc");
     expect(normalizeApiPath("/api/Users/Directory")).toBe("/api/users/directory");
+    expect(normalizeApiPath("/API/Chapters/Example/outline/")).toBe("/api/chapters/example/outline");
+    expect(normalizeApiPath("/")).toBe("/");
   });
 
   it("强制保持大小写不敏感路由并拒绝开启", () => {
