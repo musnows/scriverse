@@ -73,7 +73,7 @@ describe("通知收拢堆叠", () => {
     add("章节已发生变化，请刷新后重试");
     add("章节已发生变化，请刷新后重试");
     expect(root.dataset).toMatchObject({ stacked: "true", expanded: "false" });
-    expect(toggle.attributes["aria-label"]).toBe("展开 3 条通知");
+    expect(toggle.attributes["aria-label"]).toBe("点击展开（3）");
     expect(first.inert).toBe(true);
     toggle.click();
     expect(list.children).toHaveLength(3);

@@ -30,7 +30,7 @@ describe("工作台模块图预加载", () => {
     expect(preloadHrefs).toContain("/chapter-line-id-tracker.js?v=20260829-live-annotation-anchors-v1");
     expect(preloadHrefs).toContain("/chapter-editor-behavior.js?v=20260828-centered-scroll-v1");
     expect(preloadHrefs).toContain("/text-count.js?v=20260906-chapter-word-count-consistency-v1");
-    expect(preloadHrefs).toContain("/toast-stack.js?v=20260909-toast-stack-v1");
+    expect(preloadHrefs).toContain("/toast-stack.js?v=20260909-toast-stack-v2");
     expect(preloadHrefs).toContain("/im.js?v=20260904-im-judge-outcomes-v106");
     expect(page.text.indexOf('rel="modulepreload"')).toBeLessThan(page.text.indexOf("</head>"));
   });

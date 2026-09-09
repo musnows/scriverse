@@ -15,7 +15,7 @@ describe("系统 Toast 图层", () => {
     expect(page).toContain('popover="manual"');
     expect(page).toContain("feature=toast-modal-host-v1");
     expect(page.match(/(?:href="\/styles\.css|src="\/app\.js)\?[^"\n]*feature=toast-stack-v1/gu)).toHaveLength(2);
-    expect(application).toContain('/toast-stack.js?v=20260909-toast-stack-v1');
+    expect(application).toContain('/toast-stack.js?v=20260909-toast-stack-v2');
     expect(application).toContain('toast(message, "info", "delete-toast")');
     expect(application).toContain('if (element.classList.contains("delete-toast"))');
     expect(application).toContain('notificationToastStack.add(element)');

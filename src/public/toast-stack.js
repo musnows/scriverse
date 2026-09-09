@@ -35,8 +35,8 @@ export function createToastStack(region, { onEmpty = () => {} } = {}) {
     element.dataset.stacked = String(count > 1);
     toggle.hidden = count < 2;
     toggle.setAttribute("aria-expanded", String(expanded));
-    toggle.setAttribute("aria-label", `${expanded ? "收起" : "展开"} ${count} 条通知`);
-    label.textContent = expanded ? `收起通知（${count}）` : `${count} 条通知 · 点击展开`;
+    toggle.setAttribute("aria-label", expanded ? `收起 ${count} 条通知` : `点击展开（${count}）`);
+    label.textContent = expanded ? `收起通知（${count}）` : `点击展开（${count}）`;
     [...entries].forEach(([toast, entry], index) => {
       const depth = count - index - 1;
       toast.style.setProperty("--toast-depth", String(Math.min(depth, 2)));

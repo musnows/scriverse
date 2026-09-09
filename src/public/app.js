@@ -128,7 +128,7 @@ import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncry
 import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";
 import { normalizeUploadProgress, uploadProgressText } from "/upload-progress.js?v=20260812-upload-progress-v1";
 import { resolveToastRegionHost } from "/toast-layer.js?v=20260822-toast-modal-host-v1";
-import { createToastStack } from "/toast-stack.js?v=20260909-toast-stack-v1";
+import { createToastStack } from "/toast-stack.js?v=20260909-toast-stack-v2";
 import { buildGlobalReplaceRefreshPlan, resolveGlobalReplaceChapterCount } from "/global-replace-refresh.js?v=20260812-global-replace-tree-v2";
 import {
   clampCropRect,
