@@ -2590,6 +2590,58 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(fetchMock).toHaveBeenCalledTimes(11);
   });
 
+  it.each(["cycle", "global"] as const)("persists a visible %s tool limit notice with prior work after an ask answer", async (limitScope) => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ rpmLimit: 10_000 }).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({ tools: { ask_user_questions: true } }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallLimit: 10, agentToolCallGlobalMultiplier: limitScope === "global" ? 1 : 3
+    }).expect(200);
+    if (limitScope === "global") setLegacyModelContextWindow(modelId, 30_000);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    let generationCount = 0;
+    fetchMock.mockImplementation(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content?: string }> };
+      if (body.messages[0]?.content?.includes("压缩已完成的 AI 工具调用上下文")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "Keep the index evidence." } }] }), { status: 200 });
+      }
+      generationCount += 1;
+      const asking = generationCount === 10;
+      const delta = {
+        reasoning_content: `Thinking ${generationCount}.`,
+        tool_calls: [{ index: 0, id: `limit-${generationCount}`, type: "function", function: {
+          name: asking ? "ask_user_question" : "story_index",
+          arguments: JSON.stringify(asking ? { question: "Choose?", options: ["A", "B"] } : { limit: 1 })
+        } }]
+      };
+      return new Response(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`, {
+        status: 200, headers: { "Content-Type": "text/event-stream" }
+      });
+    });
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "/continue-writing\nRead before writing", scope: { type: "chapter", chapterId }, modelId, conversationId
+    }).expect(200);
+    const pending = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}&status=pending`).expect(200);
+    const questionId = String(pending.body.data.questions[0].id);
+    const resumed = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
+      .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(200);
+    expect(resumed.text.includes("event: error")).toBe(false);
+    expect(resumed.text).toContain("event: complete");
+    expect(resumed.text).toContain("Agent 工具调用额度不足");
+    expect(resumed.text).toContain("已用 10 次");
+    expect(resumed.text).toContain(limitScope === "global" ? "整次回答的全局上限" : "本轮调用上限");
+    const messages = runtime.store.getAiConversation(conversationId).messages as Array<{ content: string; metadata: Record<string, unknown> }>;
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.content).toContain("已保留此前的回复与执行过程");
+    expect(messages[1]?.metadata).toMatchObject({ toolCallLimit: { scope: limitScope, used: 10, limit: 10, requested: 1 } });
+    expect(messages[1]?.metadata.toolCalls).toHaveLength(10);
+    expect(messages[1]?.metadata).not.toHaveProperty("activeSkills");
+    expect(generationCount).toBe(11);
+    expect(runtime.store.getChapter(chapterId).content).toBe("林舟启动了飞船。");
+  });
+
   it("工具配额限制不改动 prompt cache 前缀的 tools 定义与系统消息", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
@@ -2645,11 +2697,11 @@ describe("AI 供应商、模型与建议 API", () => {
       instruction: "反复查询目录直到得出结论。",
       scope: { type: "chapter", chapterId },
       modelId
-    }).expect(502);
+    }).expect(201);
 
-    expect(response.body.error).toMatchObject({ code: "AI_CALL_FAILED", message: "AI 调用失败" });
-    const failureText = JSON.stringify(response.body.error);
-    expect(failureText).toMatch(/more than 5 tool calls|global tool call limit/iu);
+    expect(response.body.data.content).toContain("Agent 工具调用额度不足");
+    expect(response.body.data.content).toContain("已用 5 次");
+    expect(response.body.data.toolCalls).toHaveLength(5);
     expect(generationCount).toBeGreaterThan(1);
     expect(new Set(generationToolSnapshots).size).toBe(1);
     expect(new Set(generationSystemSnapshots).size).toBe(1);
