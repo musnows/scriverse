@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT,
+  DEFAULT_AGENT_TOOL_CALL_LIMIT,
+  MIN_AGENT_TOOL_CALL_LIMIT,
   MAX_AGENT_TOOL_CALL_LIMIT_ENV,
   agentToolCallGlobalLimit,
   agentToolCallQuotaNoticeBudgetChars,
@@ -15,12 +17,14 @@ import {
 } from "../../src/ai-tool-results.js";
 
 describe("AI 工具调用配额提醒", () => {
-  it("默认上限为 80 且支持通过环境变量调整", () => {
-    expect(DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT).toBe(80);
-    expect(resolveMaxAgentToolCallLimit({})).toBe(80);
+  it("默认调用次数 20，最低 10，默认最大值 300，并支持部署覆盖", () => {
+    expect(DEFAULT_AGENT_TOOL_CALL_LIMIT).toBe(20);
+    expect(MIN_AGENT_TOOL_CALL_LIMIT).toBe(10);
+    expect(DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT).toBe(300);
+    expect(resolveMaxAgentToolCallLimit({})).toBe(300);
     expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "120" })).toBe(120);
-    expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "not-a-number" })).toBe(80);
-    expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "2" })).toBe(5);
+    expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "not-a-number" })).toBe(300);
+    expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "2" })).toBe(10);
   });
 
   it("按上限的 20% + 1 计算软提醒阈值，并保证下限为 3", () => {
@@ -57,7 +61,7 @@ describe("AI 工具调用配额提醒", () => {
     expect(criticalBudget).toBeGreaterThan(buildAgentToolCallQuotaNotice(0, 12)?.length ?? 0);
   });
 
-  it("默认上限 12 时仅在剩余不超过 3 次时注入提醒字符串", () => {
+  it("上限 12 时仅在剩余不超过 3 次时注入提醒字符串", () => {
     expect(buildAgentToolCallQuotaNotice(4, 12)).toBeNull();
     expect(withAgentToolCallQuotaNotice({ ok: true }, 4, 12)).toEqual({ ok: true });
     for (const remaining of [3, 2, 1]) {

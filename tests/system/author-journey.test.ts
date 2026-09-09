@@ -1072,6 +1072,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('async function renderBookAiSettings()');
     expect(application.text).toContain('id="agent-tool-call-limit"');
     expect(application.text).toContain("settings.agentToolCallLimitMaximum");
+    expect(application.text).toContain('调用上限 10–${maximumAgentToolCallLimit}（默认 20）');
+    expect(application.text).toContain('min="10" max="${maximumAgentToolCallLimit}"');
+    expect(application.text).toContain('settings.agentToolCallLimit ?? 20');
     expect(application.text).toContain("Agent 工具调用上限不能超过 ${maximum} 次");
     expect(styles.text).toContain(".config-inline-save .book-summary-context-percent-field,");
     expect(styles.text).toContain("grid-template-columns: minmax(110px, 130px) 88px");

@@ -45,6 +45,7 @@ import {
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
   DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER,
+  DEFAULT_AGENT_TOOL_CALL_LIMIT,
   MIN_AGENT_TOOL_CALL_LIMIT,
   agentToolCallGlobalLimit,
   agentToolCallQuotaNoticeBudgetChars,
@@ -1519,7 +1520,6 @@ function resolvedQuestionToolMessages(continuation: QuestionToolContinuation): C
   ));
 }
 
-const MAX_AGENT_TOOL_CALLS = 12;
 const SEMANTIC_EMBEDDING_BATCH_SIZE = 16;
 const SEMANTIC_RERANK_CANDIDATE_LIMIT = 8;
 const SEMANTIC_FAILURE_PAUSE_THRESHOLD = 3;
@@ -10793,7 +10793,7 @@ export class AiManager {
       const maximumConfiguredToolCalls = resolveMaxAgentToolCallLimit();
       const configuredToolCallLimit = Math.min(
         maximumConfiguredToolCalls,
-        Math.max(MIN_AGENT_TOOL_CALL_LIMIT, Number(this.store.getWorkAiSettings(input.workId).agentToolCallLimit) || MAX_AGENT_TOOL_CALLS)
+        Math.max(MIN_AGENT_TOOL_CALL_LIMIT, Number(this.store.getWorkAiSettings(input.workId).agentToolCallLimit) || DEFAULT_AGENT_TOOL_CALL_LIMIT)
       );
       const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? configuredToolCallLimit, MIN_AGENT_TOOL_CALL_LIMIT, maximumConfiguredToolCalls));
       const agentToolCallGlobalMultiplier = clampAgentToolCallGlobalMultiplier(

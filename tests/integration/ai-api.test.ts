@@ -2645,8 +2645,9 @@ describe("AI 供应商、模型与建议 API", () => {
   it("工具配额限制不改动 prompt cache 前缀的 tools 定义与系统消息", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ rpmLimit: 10_000 }).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
-      agentToolCallLimit: 5,
+      agentToolCallLimit: 10,
       agentToolCallGlobalMultiplier: 1
     }).expect(200);
 
@@ -2700,8 +2701,8 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
 
     expect(response.body.data.content).toContain("Agent 工具调用额度不足");
-    expect(response.body.data.content).toContain("已用 5 次");
-    expect(response.body.data.toolCalls).toHaveLength(5);
+    expect(response.body.data.content).toContain("已用 10 次");
+    expect(response.body.data.toolCalls).toHaveLength(10);
     expect(generationCount).toBeGreaterThan(1);
     expect(new Set(generationToolSnapshots).size).toBe(1);
     expect(new Set(generationSystemSnapshots).size).toBe(1);
