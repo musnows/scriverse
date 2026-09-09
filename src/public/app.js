@@ -6074,6 +6074,12 @@ function invalidateModuleRequestsAfterMutation(path, method) {
 function applyProductHealthMetadata(health) {
   const version = String(health?.version ?? "").trim();
   const versionLabel = String(health?.versionLabel ?? "").trim();
+  const iconPath = health?.development === true ? "/icon-dev.svg?v=20260910" : "/icon.svg?v=20260712";
+  document.querySelectorAll(".brand-mark").forEach((element) => {
+    element.src = iconPath;
+  });
+  const favicon = document.querySelector('link[rel="icon"]');
+  if (favicon) favicon.href = iconPath;
   document.querySelectorAll("[data-product-footer-version]").forEach((element) => {
     element.textContent = versionLabel || (version ? `v${version}` : "v—");
   });
