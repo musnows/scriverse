@@ -5040,18 +5040,29 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completionCount).toBe(2);
   });
 
-  it("streams later tools and repeated questions into the original assistant message", async () => {
+  it.each(["answer", "reject"])("streams later tools and repeated questions into the original assistant message (%s)", async (action) => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({ tools: { ask_user_questions: true } }).expect(200);
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = String(conversation.body.data.id);
     let completionCount = 0;
-    fetchMock.mockImplementation(async () => {
+    fetchMock.mockImplementation(async (_input, init) => {
       completionCount += 1;
       const tool = completionCount === 2
         ? { id: "read-after-answer", name: "story_index", arguments: { limit: 1 } }
         : { id: `ask-${completionCount}`, name: "ask_user_question", arguments: { question: "Choose a direction?", options: ["A", "B"] } };
+      const body = JSON.parse(String(init?.body)) as {
+        tools?: Array<{ function: { name: string } }>;
+        messages: Array<{ role: string; tool_call_id?: string; content?: string }>;
+      };
+      expect(body.tools?.map((definition) => definition.function.name)).toEqual(expect.arrayContaining(["story_index", "ask_user_question"]));
+      if (completionCount === 2) {
+        const result = body.messages.find((message) => message.tool_call_id === "ask-1");
+        expect(JSON.parse(result?.content ?? "{}")).toMatchObject({ result: {
+          status: action === "answer" ? "answered" : "rejected", answer: action === "answer" ? "A" : null
+        } });
+      }
       return new Response(JSON.stringify({ choices: [{ message: {
         reasoning_content: `Thinking round ${completionCount}.`,
         content: completionCount === 4 ? "Finished after both answers." : null,
@@ -5068,8 +5079,9 @@ describe("AI 供应商、模型与建议 API", () => {
       const otherWork = await createWork(runtime, "Other work");
       await request(runtime.app).post(`/api/works/${otherWork.id}/ai/questions/${questionId}/answer`)
         .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(404);
-      const resumed = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
-        .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(200);
+      const questionAction = round === 1 ? action : "answer";
+      const resumed = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/${questionAction}`)
+        .set("Accept", "text/event-stream").send(questionAction === "answer" ? { selectedOption: 0 } : {}).expect(200);
       expect(resumed.text).toContain(`Thinking round ${round + 1}.`);
       if (round === 1) {
         expect(resumed.text).toContain('event: tool_call\ndata: {"id":"read-after-answer"');

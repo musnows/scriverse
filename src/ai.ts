@@ -6594,7 +6594,6 @@ export class AiManager {
       instruction: "",
       scope: input.scope,
       ...(input.modelId ? { modelId: input.modelId } : {}),
-      disableTools: input.status !== "answered",
       toolContinuation
     }, stream.onDelta ?? (() => undefined));
   }
@@ -7882,7 +7881,7 @@ export class AiManager {
     const askUserQuestionGuidance = enabledToolIds.includes("ask_user_question")
       ? [
           "当前对话已启用 ask_user_question。只要你需要向作者提出任何问题，包括澄清需求、索取缺失信息、确认方案、命名、事实或下一步，就必须调用 ask_user_question；禁止在普通回复正文中直接写出问题、要求作者回答，或使用“请告诉我”“请提供”“请选择”等措辞绕过工具。只有完全不需要作者回答时，才可以直接给出普通回复。",
-          "每次 ask_user_question 调用可在 questions 中提出 1-5 个彼此相关的问题，每题给出 2-6 个互斥选项，并把该题最推荐的选项放在第一位。能一次确认的相关决策应合并到同一次调用，避免连续弹窗；提出后停止生成等待作者一次提交全部回答。作者未回答、拒绝或提问过期时绝不允许编造答案，也不能把提问当作任何写入授权。"
+          "每次 ask_user_question 调用可在 questions 中提出 1-5 个彼此相关的问题，每题给出 2-6 个互斥选项，并把该题最推荐的选项放在第一位。能一次确认的相关决策应合并到同一次调用，避免连续弹窗；工具会等待作者一次提交全部回答，再将结果返回。收到工具结果后继续原任务，无需作者额外发送继续指令。作者未回答、拒绝或提问过期时绝不允许编造答案，也不能把提问当作任何写入授权；根据真实状态继续处理不依赖该选择的工作。"
         ]
       : [];
     const coreRules = [
