@@ -128,6 +128,7 @@ import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncry
 import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";
 import { normalizeUploadProgress, uploadProgressText } from "/upload-progress.js?v=20260812-upload-progress-v1";
 import { resolveToastRegionHost } from "/toast-layer.js?v=20260822-toast-modal-host-v1";
+import { createToastStack } from "/toast-stack.js?v=20260909-toast-stack-v2";
 import { buildGlobalReplaceRefreshPlan, resolveGlobalReplaceChapterCount } from "/global-replace-refresh.js?v=20260812-global-replace-tree-v2";
 import {
   clampCropRect,
@@ -6268,6 +6269,7 @@ async function refreshAuthCaptcha(target = "login") {
 
 function clearAuthenticationOverlays() {
   const toastRegion = $("#toast-region");
+  notificationToastStack?.clear();
   toastRegion.replaceChildren();
   document.querySelectorAll("[popover]").forEach((popover) => {
     if (typeof popover.hidePopover === "function" && popover.matches(":popover-open")) popover.hidePopover();
@@ -6426,7 +6428,10 @@ function raiseToastRegion() {
   region.showPopover();
 }
 
+let notificationToastStack = null;
+
 function dismissToastElement(element) {
+  if (notificationToastStack?.dismiss(element)) return;
   element.remove();
   const region = $("#toast-region");
   if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
@@ -6443,8 +6448,7 @@ function dismissDeleteToasts() {
 }
 
 function deleteToast(message) {
-  toast(message);
-  $("#toast-region").lastElementChild?.classList.add("delete-toast");
+  toast(message, "info", "delete-toast");
 }
 
 function dismissChapterInsightToast() {
@@ -6467,10 +6471,17 @@ function toast(message, type = "info", extraClass = "") {
   const messageContent = document.createElement("span");
   messageContent.textContent = message;
   element.append(messageContent);
-  element.addEventListener("click", () => dismissToastElement(element), { once: true });
-  region.append(element);
+  if (element.classList.contains("delete-toast")) {
+    element.addEventListener("click", () => dismissToastElement(element), { once: true });
+    region.append(element);
+    setTimeout(() => dismissToastElement(element), 3600);
+  } else {
+    notificationToastStack ??= createToastStack(region, {
+      onEmpty: () => dismissToastElement(notificationToastStack.element)
+    });
+    notificationToastStack.add(element);
+  }
   raiseToastRegion();
-  setTimeout(() => dismissToastElement(element), 3600);
 }
 
 async function runEntityEditorSave({ busyTarget, button, prepare, save }) {
