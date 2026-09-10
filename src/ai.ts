@@ -358,7 +358,7 @@ function completionSkillsTokens(messages: CompletionMessage[]): number {
 // payload, while keeping the request cheap and avoiding any user data in the probe.
 const MULTIMODAL_TEST_IMAGE_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAACXBIWXMAAAPoAAAD6AG1e1JrAAACfklEQVR4nO2cwY3EQBACJ8LOglRJyw4DJOpR/xOUuF17Zp91H9xsBi/9B8AhABIcC4AEx78AJDg+AyDB8SEQCY5vAUhwfA1EguM5ABIcD4KQ4HgSiATHo2AkON4FIMHxMggJjreBSHC8DkaC4zwAEhwHQpDgOBGEBMeRMCQ4zgQiwXEoFAmOU8FIcBwLR4LjXgASHBdDkOC4GYQEx9UwJDjuBiLBcTkUCY7bwUhwXA8319P5fQCPS8APRChfAgIUBOFRWADlS0CAgiA8CgugfAkIUBCER2EBlC8BAQqC8CgsgPIlIEBBEB6FBVC+BAQoCMKjsADKl4AABUF4FBZA+RIQoCAIj8ICKF8CAhQE4VFYAOVLQICCIDwKC6B8CQhQEIRHYQGULwEBCoLwKCyA8iUgQEEQHoUFUL4EBCgIwqOwAMqXgAAFQXgUFkD5EhCgIAiPwgIoXwICFAThUVgA5UtAgIIgPAoLoHwJCFAQhEdhAZQvAQEKgvAoLIDyJSBAQRAehQVQvgQEKAjCo7AAypeAAAVBeBQWQPkSEKAgCI/CAihfAgIUBOFRWADlS0CAgiA8CgugfAkIUBCER2EBlC8BAQqC8CgsgPIlIEBBEB6FBVC+BAQoCMKjsADKl4AABUF4FBZA+RIQoCAIj8ICKF8CAhQE4VFYAOVLQICCIDwKC6B8CQhQEIRHYQGULwEBCoLwKCyA8iUgQEEQHoUFUL4EBCgIwqOwAMqXgAAFQXgUFkD5EhCgIAiPwgIoXwICFAThUVgA5UtAgIIgPAoLoHwJCFAQhEdhAZQvAQEKgvAoLIDyJSBAQRAehQVQvgQEKAjCo7AAypeAAAVBeJQfFY4JQ620WGEAAAAASUVORK5CYII=";
 /** 出站 AI 响应体上限，防止恶意或故障供应商推送超大响应拖垮进程。 */
-export const AI_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+export const AI_RESPONSE_MAX_BYTES = 20 * 1024 * 1024;
 
 export async function readResponseTextLimited(
   response: Response,
@@ -11190,6 +11190,7 @@ export class AiManager {
       if (error instanceof AppError && (
         error.code === "CONTEXT_WINDOW_EXCEEDED"
         || error.code === "AI_TOOL_CALL_LIMIT_REACHED"
+        || error.code === "AI_RESPONSE_TOO_LARGE"
         || error.code === "DAILY_TOKEN_QUOTA_EXCEEDED"
         || error.code === "MONTHLY_TOKEN_QUOTA_EXCEEDED"
         || error.code === "PROVIDER_DAILY_TOKEN_QUOTA_EXCEEDED"
@@ -11206,6 +11207,7 @@ export class AiManager {
           attemptCount: totalAttemptCount,
           failureCount: requestFailureCount,
           ...(error.details && typeof error.details === "object" ? error.details : {}),
+          failureOrigin: "platform",
           ...failureTarget
         });
       }
@@ -11213,6 +11215,7 @@ export class AiManager {
         callId,
         attemptCount: totalAttemptCount,
         failureCount: requestFailureCount,
+        failureOrigin: "provider",
         failure: message,
         ...failureTarget
       });

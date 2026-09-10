@@ -5929,6 +5929,7 @@ function createClientError(payload, fallbackMessage, fallbackStatus = null) {
   const error = new Error(typeof source.message === "string" ? source.message : fallbackMessage);
   error.code = typeof source.code === "string" ? source.code : undefined;
   error.status = Number.isInteger(source.status) ? source.status : fallbackStatus;
+  error.failureOrigin = source.failureOrigin === "platform" || source.failureOrigin === "provider" ? source.failureOrigin : undefined;
   error.details = source.details;
   error.failure = typeof source.failure === "string" ? source.failure : undefined;
   error.callId = typeof source.callId === "string" ? source.callId : undefined;
@@ -5966,19 +5967,29 @@ function formatAiFailureMessage(error) {
   const providerName = typeof error?.providerName === "string" ? error.providerName : typeof details.providerName === "string" ? details.providerName : "";
   const providerId = typeof error?.providerId === "string" ? error.providerId : typeof details.providerId === "string" ? details.providerId : "";
   const modelId = typeof error?.modelId === "string" ? error.modelId : typeof details.modelId === "string" ? details.modelId : "";
+  const failureOrigin = aiFailureOrigin(error, details);
+  const providerLabel = providerName || providerId;
   if (code) lines.push(`错误码：${code}`);
-  if (status) lines.push(`服务端状态：HTTP ${status}`);
+  lines.push(`错误来源：${failureOrigin === "provider" ? `LLM 供应商${providerLabel ? `（${providerLabel}）` : ""}` : "叙界平台"}`);
+  if (status) lines.push(`叙界响应状态：HTTP ${status}`);
   if (details.platformLimited === true) {
     const limitSource = details.limitScope === "provider"
       ? `配置的供应商额度${providerName ? `（${providerName}）` : ""}`
       : "单个小说额度";
     lines.push(`叙界平台限制来源：${limitSource}`);
   }
-  if (providerName || providerId) lines.push(`模型供应商：${providerName || providerId}`);
-  if (modelId) lines.push(`模型 ID：${modelId}`);
+  if (failureOrigin === "platform" && providerLabel) lines.push(`请求模型供应商：${providerLabel}`);
+  if (modelId) lines.push(`请求模型 ID：${modelId}`);
   if (callId) lines.push(`调用 ID：${callId}`);
-  if (failure && failure !== message) lines.push(`详细原因：${failure}`);
+  if (failure && failure !== message) lines.push(`${failureOrigin === "provider" ? "LLM 供应商详情" : "平台详情"}：${failure}`);
   return lines.join("\n");
+}
+
+function aiFailureOrigin(error, details) {
+  if (error?.failureOrigin === "platform" || error?.failureOrigin === "provider") return error.failureOrigin;
+  if (details.failureOrigin === "platform" || details.failureOrigin === "provider") return details.failureOrigin;
+  if (details.platformLimited === true || error?.code !== "AI_CALL_FAILED") return "platform";
+  return "provider";
 }
 
 function aiFailureMessageMetadata(error) {

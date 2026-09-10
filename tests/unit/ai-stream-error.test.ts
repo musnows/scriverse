@@ -33,6 +33,7 @@ describe("publicAiStreamError", () => {
 
   it("向客户端透传已脱敏的 AI 上游失败详情", () => {
     expect(publicAiStreamError(new AppError(502, "AI_CALL_FAILED", "AI 调用失败", {
+      failureOrigin: "provider",
       failure: "ENOENT: /secret/path.sql failed at https://provider.example/v1",
       callId: "call_secret",
       providerId: "provider_1"
@@ -40,9 +41,29 @@ describe("publicAiStreamError", () => {
       code: "AI_CALL_FAILED",
       message: "AI 调用失败",
       status: 502,
+      failureOrigin: "provider",
       failure: "ENOENT: /secret/path.sql failed at https://provider.example/v1",
       callId: "call_secret",
       providerId: "provider_1"
+    });
+  });
+
+  it("向客户端公开叙界平台响应保护来源", () => {
+    expect(publicAiStreamError(new AppError(502, "AI_RESPONSE_TOO_LARGE", "AI 供应商响应超过 20971520 字节上限", {
+      failureOrigin: "platform",
+      callId: "call_limit",
+      providerName: "demo",
+      providerId: "provider_1",
+      modelId: "gpt-test"
+    }))).toEqual({
+      code: "AI_RESPONSE_TOO_LARGE",
+      message: "AI 供应商响应超过 20971520 字节上限",
+      status: 502,
+      failureOrigin: "platform",
+      callId: "call_limit",
+      providerName: "demo",
+      providerId: "provider_1",
+      modelId: "gpt-test"
     });
   });
 
