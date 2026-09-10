@@ -33,7 +33,10 @@ describe("AI 错误详情界面", () => {
   });
 
   it("将模型目标和上游失败详情写入带状态标识的助手消息", async () => {
-    const application = await readFile(join(process.cwd(), "src", "public", "app.js"), "utf8");
+    const [application, page] = await Promise.all([
+      readFile(join(process.cwd(), "src", "public", "app.js"), "utf8"),
+      readFile(join(process.cwd(), "src", "public", "index.html"), "utf8")
+    ]);
     const sendAiSource = application.slice(
       application.indexOf("async function sendAi()"),
       application.indexOf("async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null } = {})")
@@ -42,15 +45,20 @@ describe("AI 错误详情界面", () => {
     expect(application).toContain("function createClientError(payload, fallbackMessage, fallbackStatus = null)");
     expect(application).toContain("function formatAiFailureMessage(error)");
     expect(application).toContain("error.failure = typeof source.failure === \"string\" ? source.failure : undefined;");
+    expect(application).toContain('error.failureOrigin = source.failureOrigin === "platform" || source.failureOrigin === "provider" ? source.failureOrigin : undefined;');
     expect(application).toContain("error.callId = typeof source.callId === \"string\" ? source.callId : undefined;");
     expect(application).toContain("error.providerName = typeof source.providerName === \"string\" ? source.providerName : undefined;");
     expect(application).toContain("error.modelId = typeof source.modelId === \"string\" ? source.modelId : undefined;");
-    expect(application).toContain("lines.push(`模型供应商：${providerName || providerId}`)");
-    expect(application).toContain("lines.push(`模型 ID：${modelId}`)");
+    expect(application).toContain("function aiFailureOrigin(error, details)");
+    expect(application).toContain('错误来源：${failureOrigin === "provider"');
+    expect(application).toContain("LLM 供应商详情");
+    expect(application).toContain("请求模型供应商：${providerLabel}");
+    expect(application).toContain("请求模型 ID：${modelId}");
     expect(application).toContain("lines.push(`调用 ID：${callId}`)");
-    expect(application).toContain("lines.push(`详细原因：${failure}`)");
+    expect(application).toContain("叙界响应状态：HTTP ${status}");
     expect(application).toContain("叙界平台限制来源：${limitSource}");
     expect(application).toContain("details.platformLimited === true");
+    expect(page).toContain("feature=ai-error-origin-v1");
     expect(application).toContain('return lines.join("\\n");');
     expect(application).not.toContain('return lines.join("\\n\\n");');
     expect(application).toContain("function isAgentToolCallLimitFailure(text)");

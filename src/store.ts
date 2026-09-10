@@ -36,7 +36,7 @@ import {
   splitDocumentParagraphs
 } from "./utils.js";
 import { buildWritingCalendar, writingDateKey } from "./writing-progress-time.js";
-import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
+import { DEFAULT_AGENT_TOOL_CALL_LIMIT, MIN_AGENT_TOOL_CALL_LIMIT, resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_SECONDS, normalizeAiStreamIdleTimeoutSeconds } from "./ai-stream-timeout.js";
 import {
   normalizeRoleplayScenePin,
@@ -1943,7 +1943,7 @@ export class Store {
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
       agentToolCallLimitMaximum: maximumAgentToolCallLimit,
-      agentToolCallLimit: Math.min(maximumAgentToolCallLimit, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
+      agentToolCallLimit: Math.min(maximumAgentToolCallLimit, Math.max(MIN_AGENT_TOOL_CALL_LIMIT, Number(row?.agent_tool_call_limit ?? DEFAULT_AGENT_TOOL_CALL_LIMIT) || DEFAULT_AGENT_TOOL_CALL_LIMIT)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
       agentTools: normalizeWorkAgentTools(row?.agent_tools_json),
       imageToolModelId: row?.image_tool_model_id === null || row?.image_tool_model_id === undefined
@@ -2068,7 +2068,7 @@ export class Store {
       Math.max(0, Number(current.autoRunConsecutiveFailures) || 0),
       Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       Math.min(90, Math.max(50, nextContextCompactThreshold)),
-      Math.min(maximumAgentToolCallLimit, Math.max(5, nextAgentToolCallLimit)),
+      Math.min(maximumAgentToolCallLimit, Math.max(MIN_AGENT_TOOL_CALL_LIMIT, nextAgentToolCallLimit)),
       Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       JSON.stringify(nextAgentTools),
       nextTitleGenerationModelId,
@@ -2089,7 +2089,7 @@ export class Store {
       autoRunStabilityDelayMinutes: Math.min(120, Math.max(1, nextStabilityDelayMinutes)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
-      agentToolCallLimit: Math.min(maximumAgentToolCallLimit, Math.max(5, nextAgentToolCallLimit)),
+      agentToolCallLimit: Math.min(maximumAgentToolCallLimit, Math.max(MIN_AGENT_TOOL_CALL_LIMIT, nextAgentToolCallLimit)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       agentTools: nextAgentTools,
       imageToolModelId: nextImageToolModelId,
@@ -2129,8 +2129,8 @@ export class Store {
         `INSERT INTO work_ai_settings (
            work_id, semantic_search_enabled, semantic_embedding_model_id, semantic_rerank_model_id,
            semantic_vector_dimension, semantic_recall_limit, semantic_result_limit,
-           semantic_budget_tokens, semantic_channel_weight, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           semantic_budget_tokens, semantic_channel_weight, updated_at, agent_tool_call_limit
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(work_id) DO UPDATE SET
            semantic_search_enabled = excluded.semantic_search_enabled,
            semantic_embedding_model_id = excluded.semantic_embedding_model_id,
@@ -2150,7 +2150,8 @@ export class Store {
         resultLimit,
         budgetTokens,
         channelWeight,
-        timestamp
+        timestamp,
+        Number(current.agentToolCallLimit)
       );
       this.audit(workId, "semantic.settings.updated", "work-ai-settings", workId, {
         enabled,

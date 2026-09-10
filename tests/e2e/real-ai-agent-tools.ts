@@ -358,8 +358,8 @@ try {
 
   const maximumThreshold = await api<JsonObject>("PATCH", `/works/${workId}/ai-settings`, { contextCompactThreshold: 90 });
   assert.equal(maximumThreshold.contextCompactThreshold, 90);
-  const maximumToolCalls = await api<JsonObject>("PATCH", `/works/${workId}/ai-settings`, { agentToolCallLimit: 80 });
-  assert.equal(maximumToolCalls.agentToolCallLimit, 80);
+  const maximumToolCalls = await api<JsonObject>("PATCH", `/works/${workId}/ai-settings`, { agentToolCallLimit: 300 });
+  assert.equal(maximumToolCalls.agentToolCallLimit, 300);
   const rejectedThreshold = await fetch(`${baseUrl}/api/works/${workId}/ai-settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -369,15 +369,15 @@ try {
   const rejectedToolCalls = await fetch(`${baseUrl}/api/works/${workId}/ai-settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agentToolCallLimit: 81 })
+    body: JSON.stringify({ agentToolCallLimit: 301 })
   });
   assert.equal(rejectedToolCalls.status, 400);
   const rejectedToolCallsPayload = object(await rejectedToolCalls.json());
-  assert.equal(object(rejectedToolCallsPayload.error).message, "Agent 工具调用上限不能超过 80 次");
+  assert.equal(object(rejectedToolCallsPayload.error).message, "Agent 工具调用上限不能超过 300 次");
   const rejectedLowToolCalls = await fetch(`${baseUrl}/api/works/${workId}/ai-settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agentToolCallLimit: 4 })
+    body: JSON.stringify({ agentToolCallLimit: 9 })
   });
   assert.equal(rejectedLowToolCalls.status, 400);
   const rejectedMultiplier = await fetch(`${baseUrl}/api/works/${workId}/ai-settings`, {
@@ -397,7 +397,7 @@ try {
   const maximumMultiplier = await api<JsonObject>("PATCH", `/works/${workId}/ai-settings`, { agentToolCallGlobalMultiplier: 6 });
   assert.equal(maximumMultiplier.agentToolCallGlobalMultiplier, 6);
   await api("PATCH", `/works/${workId}/ai-settings`, { contextCompactThreshold: 50 });
-  await api("PATCH", `/works/${workId}/ai-settings`, { agentToolCallLimit: 12, agentToolCallGlobalMultiplier: 3 });
+  await api("PATCH", `/works/${workId}/ai-settings`, { agentToolCallLimit: 20, agentToolCallGlobalMultiplier: 3 });
   const compactConversation = await api<JsonObject>("POST", `/works/${workId}/ai-conversations`, { title: "压缩 E2E" });
   const conversationId = String(compactConversation.id);
   for (const [role, content] of [

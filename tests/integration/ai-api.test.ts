@@ -2590,11 +2590,64 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(fetchMock).toHaveBeenCalledTimes(11);
   });
 
+  it.each(["cycle", "global"] as const)("persists a visible %s tool limit notice with prior work after an ask answer", async (limitScope) => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ rpmLimit: 10_000 }).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({ tools: { ask_user_questions: true } }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallLimit: 10, agentToolCallGlobalMultiplier: limitScope === "global" ? 1 : 3
+    }).expect(200);
+    if (limitScope === "global") setLegacyModelContextWindow(modelId, 30_000);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    let generationCount = 0;
+    fetchMock.mockImplementation(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content?: string }> };
+      if (body.messages[0]?.content?.includes("压缩已完成的 AI 工具调用上下文")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "Keep the index evidence." } }] }), { status: 200 });
+      }
+      generationCount += 1;
+      const asking = generationCount === 10;
+      const delta = {
+        reasoning_content: `Thinking ${generationCount}.`,
+        tool_calls: [{ index: 0, id: `limit-${generationCount}`, type: "function", function: {
+          name: asking ? "ask_user_question" : "story_index",
+          arguments: JSON.stringify(asking ? { question: "Choose?", options: ["A", "B"] } : { limit: 1 })
+        } }]
+      };
+      return new Response(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`, {
+        status: 200, headers: { "Content-Type": "text/event-stream" }
+      });
+    });
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "/continue-writing\nRead before writing", scope: { type: "chapter", chapterId }, modelId, conversationId
+    }).expect(200);
+    const pending = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}&status=pending`).expect(200);
+    const questionId = String(pending.body.data.questions[0].id);
+    const resumed = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
+      .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(200);
+    expect(resumed.text.includes("event: error")).toBe(false);
+    expect(resumed.text).toContain("event: complete");
+    expect(resumed.text).toContain("Agent 工具调用额度不足");
+    expect(resumed.text).toContain("已用 10 次");
+    expect(resumed.text).toContain(limitScope === "global" ? "整次回答的全局上限" : "本轮调用上限");
+    const messages = runtime.store.getAiConversation(conversationId).messages as Array<{ content: string; metadata: Record<string, unknown> }>;
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.content).toContain("已保留此前的回复与执行过程");
+    expect(messages[1]?.metadata).toMatchObject({ toolCallLimit: { scope: limitScope, used: 10, limit: 10, requested: 1 } });
+    expect(messages[1]?.metadata.toolCalls).toHaveLength(10);
+    expect(messages[1]?.metadata).not.toHaveProperty("activeSkills");
+    expect(generationCount).toBe(11);
+    expect(runtime.store.getChapter(chapterId).content).toBe("林舟启动了飞船。");
+  });
+
   it("工具配额限制不改动 prompt cache 前缀的 tools 定义与系统消息", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ rpmLimit: 10_000 }).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
-      agentToolCallLimit: 5,
+      agentToolCallLimit: 10,
       agentToolCallGlobalMultiplier: 1
     }).expect(200);
 
@@ -2645,11 +2698,11 @@ describe("AI 供应商、模型与建议 API", () => {
       instruction: "反复查询目录直到得出结论。",
       scope: { type: "chapter", chapterId },
       modelId
-    }).expect(502);
+    }).expect(201);
 
-    expect(response.body.error).toMatchObject({ code: "AI_CALL_FAILED", message: "AI 调用失败" });
-    const failureText = JSON.stringify(response.body.error);
-    expect(failureText).toMatch(/more than 5 tool calls|global tool call limit/iu);
+    expect(response.body.data.content).toContain("Agent 工具调用额度不足");
+    expect(response.body.data.content).toContain("已用 10 次");
+    expect(response.body.data.toolCalls).toHaveLength(10);
     expect(generationCount).toBeGreaterThan(1);
     expect(new Set(generationToolSnapshots).size).toBe(1);
     expect(new Set(generationSystemSnapshots).size).toBe(1);
@@ -4350,6 +4403,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain("event: error");
     expect(streamed.text).toContain('"code":"AI_CALL_FAILED"');
     expect(streamed.text).toContain('"status":502');
+    expect(streamed.text).toContain('"failureOrigin":"provider"');
     expect(streamed.text).toContain('"providerName":"本地兼容服务"');
     expect(streamed.text).toContain(`"providerId":"${providerId}"`);
     expect(streamed.text).toContain('"modelId":"mock-novel-model"');
@@ -4359,6 +4413,36 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
     const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);
     expect(calls.body.data[0].failure).toContain("上游参数无效：Bearer sk-s*****lue");
+  });
+
+  it("侧栏问答将叙界响应大小保护标记为平台错误", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response("{}", {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": String(AI_RESPONSE_MAX_BYTES + 1)
+        }
+      });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "触发平台响应大小保护",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(streamed.text).toContain("event: error");
+    expect(streamed.text).toContain('"code":"AI_RESPONSE_TOO_LARGE"');
+    expect(streamed.text).toContain('"status":502');
+    expect(streamed.text).toContain('"failureOrigin":"platform"');
+    expect(streamed.text).toContain('"providerName":"本地兼容服务"');
+    expect(streamed.text).toContain(`"providerId":"${providerId}"`);
   });
 
   it("流式成功响应不会向浏览器或记录回显供应商密钥", async () => {
@@ -4911,6 +4995,61 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(captured[2]?.toolNames).not.toContain("ask_user_question");
   });
 
+  it("continues tools after answering a question in round 31 with compacted history", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ rpmLimit: 10_000 }).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({ tools: { ask_user_questions: true } }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallLimit: 12, agentToolCallGlobalMultiplier: 6
+    }).expect(200);
+    setLegacyModelContextWindow(modelId, 30_000);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    let generationCount = 0;
+    let compactCount = 0;
+    fetchMock.mockImplementation(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; tool_call_id?: string; content?: string }> };
+      if (body.messages[0]?.content?.includes("压缩已完成的 AI 工具调用上下文")) {
+        compactCount += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: "Retain the chapter index and continue the task." } }] }), { status: 200 });
+      }
+      generationCount += 1;
+      if (generationCount === 32) {
+        const answer = body.messages.find((message) => message.tool_call_id === "long-ask-31");
+        expect(JSON.parse(answer?.content ?? "{}")).toMatchObject({ result: { status: "answered", answer: "A" } });
+      }
+      const tool = generationCount === 31
+        ? { name: "ask_user_question", arguments: { question: "Choose a direction?", options: ["A", "B"] } }
+        : { name: "story_index", arguments: { limit: 1 } };
+      return new Response(JSON.stringify({ choices: [{ message: {
+        content: generationCount === 33 ? "Continued after round 31." : null,
+        ...(generationCount < 33 ? { tool_calls: [{
+          id: generationCount === 31 ? "long-ask-31" : `long-index-${generationCount}`,
+          type: "function", function: tool
+        }] } : {})
+      } }] }), { status: 200 });
+    });
+    const suspended = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "Read the index, ask, and continue reading", scope: { type: "chapter", chapterId }, modelId, conversationId
+    }).expect(200);
+    expect(suspended.text).not.toContain("event: error");
+    expect(generationCount).toBe(31);
+    expect(compactCount).toBeGreaterThan(0);
+    const questions = await request(runtime.app).get(`/api/works/${workId}/ai/questions?conversationId=${conversationId}&status=pending`).expect(200);
+    const questionId = String(questions.body.data.questions[0].id);
+    const resumed = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
+      .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(200);
+    expect(resumed.text).not.toContain("event: error");
+    expect(resumed.text).toContain("Continued after round 31.");
+    expect(resumed.text).toContain('"id":"long-index-32"');
+    const messages = runtime.store.getAiConversation(conversationId).messages as Array<{ content: string; metadata: { toolCalls: unknown[] } }>;
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.content).toBe("Continued after round 31.");
+    expect(messages[1]?.metadata.toolCalls).toHaveLength(32);
+    expect(generationCount).toBe(33);
+  });
+
   it.each(["answer", "reject"])("streams question continuation before generation completes (%s)", async (action) => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
@@ -4985,18 +5124,29 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completionCount).toBe(2);
   });
 
-  it("streams later tools and repeated questions into the original assistant message", async () => {
+  it.each(["answer", "reject"])("streams later tools and repeated questions into the original assistant message (%s)", async (action) => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).put(`/api/works/${workId}/ai/tools`).send({ tools: { ask_user_questions: true } }).expect(200);
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = String(conversation.body.data.id);
     let completionCount = 0;
-    fetchMock.mockImplementation(async () => {
+    fetchMock.mockImplementation(async (_input, init) => {
       completionCount += 1;
       const tool = completionCount === 2
         ? { id: "read-after-answer", name: "story_index", arguments: { limit: 1 } }
         : { id: `ask-${completionCount}`, name: "ask_user_question", arguments: { question: "Choose a direction?", options: ["A", "B"] } };
+      const body = JSON.parse(String(init?.body)) as {
+        tools?: Array<{ function: { name: string } }>;
+        messages: Array<{ role: string; tool_call_id?: string; content?: string }>;
+      };
+      expect(body.tools?.map((definition) => definition.function.name)).toEqual(expect.arrayContaining(["story_index", "ask_user_question"]));
+      if (completionCount === 2) {
+        const result = body.messages.find((message) => message.tool_call_id === "ask-1");
+        expect(JSON.parse(result?.content ?? "{}")).toMatchObject({ result: {
+          status: action === "answer" ? "answered" : "rejected", answer: action === "answer" ? "A" : null
+        } });
+      }
       return new Response(JSON.stringify({ choices: [{ message: {
         reasoning_content: `Thinking round ${completionCount}.`,
         content: completionCount === 4 ? "Finished after both answers." : null,
@@ -5013,8 +5163,9 @@ describe("AI 供应商、模型与建议 API", () => {
       const otherWork = await createWork(runtime, "Other work");
       await request(runtime.app).post(`/api/works/${otherWork.id}/ai/questions/${questionId}/answer`)
         .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(404);
-      const resumed = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/answer`)
-        .set("Accept", "text/event-stream").send({ selectedOption: 0 }).expect(200);
+      const questionAction = round === 1 ? action : "answer";
+      const resumed = await request(runtime.app).post(`/api/works/${workId}/ai/questions/${questionId}/${questionAction}`)
+        .set("Accept", "text/event-stream").send(questionAction === "answer" ? { selectedOption: 0 } : {}).expect(200);
       expect(resumed.text).toContain(`Thinking round ${round + 1}.`);
       if (round === 1) {
         expect(resumed.text).toContain('event: tool_call\ndata: {"id":"read-after-answer"');
