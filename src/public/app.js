@@ -9108,6 +9108,7 @@ function openChapterTypeMenu(chapterId, clientX, clientY) {
   menu.querySelector("strong").textContent = `操作“${chapter.title}”`;
   menu.querySelectorAll("[data-chapter-type], [data-delete-chapter]").forEach((button) => button.classList.toggle("hidden", !canManageChapter));
   menu.querySelector("[data-add-chapter-ai-reference]")?.classList.toggle("hidden", !canAddAiReference);
+  menu.querySelector("#chapter-type-ai-reference-separator")?.classList.toggle("hidden", !(canManageChapter && canAddAiReference));
   menu.querySelectorAll("[data-chapter-type]").forEach((button) => {
     button.classList.toggle("active", button.dataset.chapterType === (chapter.chapterType || "正文"));
     button.setAttribute("aria-checked", String(button.classList.contains("active")));
