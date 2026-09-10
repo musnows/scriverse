@@ -28,10 +28,16 @@ describe("窄侧栏作品目录", () => {
     expect(application.status).toBe(200);
     expect(styles.status).toBe(200);
     expect(page.text).toContain('feature=compact-sidebar-directory-v5');
+    expect(page.text).toContain('feature=chapter-directory-ai-reference-v2');
     expect(page.text).toContain('class="panel-heading-label-full">作品目录</span><span class="panel-heading-label-compact">目录</span>');
     expect(page.text).toContain('id="chapter-count"><span class="chapter-count-number">0</span><span class="chapter-count-unit"> 章</span>');
     expect(application.text).toContain('$("#chapter-count").querySelector(".chapter-count-number").textContent = String(count);');
     expect(application.text).toContain('class="volume-chapter-count"><span class="volume-chapter-count-number">');
+    expect(page.text).toContain('data-add-chapter-ai-reference>添加到助手引用</button>');
+    expect(application.text).toContain('function addChapterAsAiReference(chapterId)');
+    expect(application.text).toContain('state.aiReferences.push(reference);');
+    expect(application.text).toContain('renderAiReferences();');
+    expect(application.text).toContain('if (!canEditProse() && !canWritePermissionModule(state.work, "ai-chat")) return;');
     expect(styles.text).toContain('container: left-panel-body / inline-size;');
     expect(styles.text).toContain('@container left-panel-body (max-width: 220px)');
     expect(styles.text).toContain('.chapter-count-unit, .volume-chapter-count-unit { display: none; }');
