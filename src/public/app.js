@@ -5393,6 +5393,26 @@ function addSelectedLinesAsCitation() {
   toast(`已引用《${citation.chapterTitle}》第 ${citation.startLine}${citation.startLine === citation.endLine ? "" : `-${citation.endLine}`} 行`);
 }
 
+function addChapterAsAiReference(chapterId) {
+  if (!state.work || !canWritePermissionModule(state.work, "ai-chat")) return toast("当前账户没有创作助手编辑权限", "error");
+  const volume = state.work.volumes.find((item) => item.chapters.some((chapter) => chapter.id === chapterId));
+  const chapter = volume?.chapters.find((item) => item.id === chapterId);
+  if (!volume || !chapter) return toast("章节不存在或已被删除", "error");
+  const reference = { kind: "chapter", id: String(chapter.id), name: `${volume.title} / ${chapter.title}` };
+  if (state.aiReferences.some((item) => aiReferenceKey(item) === aiReferenceKey(reference))) {
+    ensureAiPanelExpanded();
+    renderAiReferences();
+    return toast(`《${chapter.title}》已在助手引用中`);
+  }
+  const chapterReferenceCount = state.aiReferences.filter((item) => item.kind === "chapter").length;
+  if (chapterReferenceCount >= 20) return toast("一次最多添加 20 个章节助手引用", "error");
+  state.aiReferences.push(reference);
+  ensureAiPanelExpanded();
+  renderAiReferences();
+  persistActiveAiChatTab();
+  toast(`已将《${chapter.title}》添加到助手引用`);
+}
+
 async function createSelectedLineAnnotation(kind) {
   const permissionModule = kind === "todo" ? "todos" : "comments";
   if (!state.chapter || !chapterLineSelection || !canWritePermissionModule(state.work, permissionModule)) return;
@@ -8839,9 +8859,16 @@ function renderTree() {
       }
     });
     button.addEventListener("contextmenu", (event) => {
-      if (!canEditProse()) return;
+      if (!canEditProse() && !canWritePermissionModule(state.work, "ai-chat")) return;
       event.preventDefault();
       openChapterTypeMenu(button.dataset.chapterId, event.clientX, event.clientY);
+    });
+    button.addEventListener("keydown", (event) => {
+      if (!canEditProse() && !canWritePermissionModule(state.work, "ai-chat")) return;
+      if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+      event.preventDefault();
+      const rect = button.getBoundingClientRect();
+      openChapterTypeMenu(button.dataset.chapterId, rect.left, rect.bottom);
     });
     if (proseEditable) {
       button.addEventListener("dragstart", (event) => {
@@ -9065,7 +9092,11 @@ function openChapterTypeMenu(chapterId, clientX, clientY) {
   if (!chapter) return;
   state.contextChapterId = chapterId;
   const menu = $("#chapter-type-menu");
-  menu.querySelector("strong").textContent = `标记“${chapter.title}”`;
+  const canManageChapter = canEditProse();
+  const canAddAiReference = canWritePermissionModule(state.work, "ai-chat");
+  menu.querySelector("strong").textContent = `操作“${chapter.title}”`;
+  menu.querySelectorAll("[data-chapter-type], [data-delete-chapter]").forEach((button) => button.classList.toggle("hidden", !canManageChapter));
+  menu.querySelector("[data-add-chapter-ai-reference]")?.classList.toggle("hidden", !canAddAiReference);
   menu.querySelectorAll("[data-chapter-type]").forEach((button) => {
     button.classList.toggle("active", button.dataset.chapterType === (chapter.chapterType || "正文"));
     button.setAttribute("aria-checked", String(button.classList.contains("active")));
@@ -21053,6 +21084,13 @@ $("#cover-file").addEventListener("change", async (event) => {
   }
 });
 $("#chapter-type-menu").addEventListener("click", async (event) => {
+  const aiReferenceButton = event.target.closest("[data-add-chapter-ai-reference]");
+  if (aiReferenceButton) {
+    const chapterId = state.contextChapterId;
+    closeChapterTypeMenu();
+    if (chapterId) addChapterAsAiReference(chapterId);
+    return;
+  }
   const deleteButton = event.target.closest("[data-delete-chapter]");
   if (deleteButton) {
     const chapterId = state.contextChapterId;
