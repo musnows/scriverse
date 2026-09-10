@@ -11190,6 +11190,7 @@ export class AiManager {
       if (error instanceof AppError && (
         error.code === "CONTEXT_WINDOW_EXCEEDED"
         || error.code === "AI_TOOL_CALL_LIMIT_REACHED"
+        || error.code === "AI_RESPONSE_TOO_LARGE"
         || error.code === "DAILY_TOKEN_QUOTA_EXCEEDED"
         || error.code === "MONTHLY_TOKEN_QUOTA_EXCEEDED"
         || error.code === "PROVIDER_DAILY_TOKEN_QUOTA_EXCEEDED"
@@ -11206,6 +11207,7 @@ export class AiManager {
           attemptCount: totalAttemptCount,
           failureCount: requestFailureCount,
           ...(error.details && typeof error.details === "object" ? error.details : {}),
+          failureOrigin: "platform",
           ...failureTarget
         });
       }
@@ -11213,6 +11215,7 @@ export class AiManager {
         callId,
         attemptCount: totalAttemptCount,
         failureCount: requestFailureCount,
+        failureOrigin: "provider",
         failure: message,
         ...failureTarget
       });

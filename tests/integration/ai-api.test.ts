@@ -4403,6 +4403,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain("event: error");
     expect(streamed.text).toContain('"code":"AI_CALL_FAILED"');
     expect(streamed.text).toContain('"status":502');
+    expect(streamed.text).toContain('"failureOrigin":"provider"');
     expect(streamed.text).toContain('"providerName":"本地兼容服务"');
     expect(streamed.text).toContain(`"providerId":"${providerId}"`);
     expect(streamed.text).toContain('"modelId":"mock-novel-model"');
@@ -4412,6 +4413,36 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
     const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);
     expect(calls.body.data[0].failure).toContain("上游参数无效：Bearer sk-s*****lue");
+  });
+
+  it("侧栏问答将叙界响应大小保护标记为平台错误", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response("{}", {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": String(AI_RESPONSE_MAX_BYTES + 1)
+        }
+      });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "触发平台响应大小保护",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(streamed.text).toContain("event: error");
+    expect(streamed.text).toContain('"code":"AI_RESPONSE_TOO_LARGE"');
+    expect(streamed.text).toContain('"status":502');
+    expect(streamed.text).toContain('"failureOrigin":"platform"');
+    expect(streamed.text).toContain('"providerName":"本地兼容服务"');
+    expect(streamed.text).toContain(`"providerId":"${providerId}"`);
   });
 
   it("流式成功响应不会向浏览器或记录回显供应商密钥", async () => {

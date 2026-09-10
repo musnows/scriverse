@@ -1377,6 +1377,7 @@ export function publicAiStreamError(error: unknown): {
   code: string;
   message: string;
   status?: number;
+  failureOrigin?: "platform" | "provider";
   details?: Record<string, unknown>;
   failure?: string;
   callId?: string;
@@ -1417,6 +1418,9 @@ export function publicAiStreamError(error: unknown): {
       code: error.code,
       message: error.message,
       status: error.status,
+      ...((details?.failureOrigin === "platform" || details?.failureOrigin === "provider")
+        ? { failureOrigin: details.failureOrigin }
+        : {}),
       ...(publicQuotaDetails || publicPendingQuestionDetails ? { details: publicQuotaDetails ?? publicPendingQuestionDetails } : {}),
       ...((error.status < 500 || error.code === "AI_CALL_FAILED") && typeof details?.failure === "string" ? { failure: details.failure } : {}),
       ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
