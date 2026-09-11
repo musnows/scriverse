@@ -19,9 +19,9 @@ describe("AI 对话发送与终止按钮", () => {
     expect(application).toContain("button.disabled = switching || continuingQuestion;");
     expect(application).toContain('button.classList.toggle("is-stop", sending);');
     expect(application).toContain('continuingQuestion ? "AI 正在根据回答继续处理" : switching ? "正在切换对话" : "发送消息"');
-    expect(styles).toContain(".ai-send-button-icon { width: 17px; height: 17px;");
-    expect(styles).toContain(".ai-context-meter { --context-usage: 0; --context-meter-color: var(--green); position: relative; display: grid; flex: 0 0 32px; place-items: center; width: 32px; min-height: 32px; height: 32px;");
-    expect(styles).toContain(".ai-send-button { display: grid; flex: 0 0 32px; place-items: center; width: 32px; min-width: 32px; min-height: 32px; height: 32px;");
+    expect(styles).toContain(".ai-send-button-icon { width: 14px; height: 14px;");
+    expect(styles).toContain(".ai-context-meter { --context-usage: 0; --context-meter-color: var(--green); position: relative; display: grid; flex: 0 0 24px; place-items: center; width: 24px; min-height: 24px; height: 24px;");
+    expect(styles).toContain(".ai-send-button { display: grid; flex: 0 0 24px; place-items: center; width: 24px; min-width: 24px; min-height: 24px; height: 24px;");
     expect(styles).toContain(".ai-heading #ai-panel-toggle { flex-basis: 30px; width: 30px; min-width: 30px; min-height: 30px; height: 30px; }");
     expect(application).toContain('import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";');
     expect(application).toContain("const phoneClient = isPhoneClient();");

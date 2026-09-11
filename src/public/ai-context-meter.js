@@ -1,3 +1,25 @@
+export function formatAiContextCacheHitPercent(value) {
+  const rate = Number(value);
+  if (!Number.isFinite(rate)) return "—";
+  const clamped = Math.max(0, Math.min(100, Math.round((rate + Number.EPSILON) * 10) / 10));
+  const label = Number.isInteger(clamped) ? String(clamped) : clamped.toFixed(1);
+  return `${label}%`;
+}
+
+export function formatAiContextPercentSummary(usage) {
+  const distribution = normalizeAiContextTokenDistribution(usage);
+  const contextPercent = formatAiContextUsagePercent(distribution.occupiedTokens, distribution.contextWindow);
+  return `context ${contextPercent} · cache hit ${formatAiContextCacheHitPercent(usage?.cacheHitPercent)}`;
+}
+
+export function formatAiContextPopoverDescription(usage) {
+  if (!usage) return "选择可用模型后显示当前上下文用量";
+  const distribution = normalizeAiContextTokenDistribution(usage);
+  const occupied = distribution.occupiedTokens.toLocaleString("zh-CN");
+  const contextWindow = distribution.contextWindow.toLocaleString("zh-CN");
+  return `已占用 ${occupied} / ${contextWindow} tok · ${formatAiContextPercentSummary(usage)}`;
+}
+
 export function formatAiContextUsageTooltip(usage) {
   if (!usage) return "选择可用模型后显示当前上下文用量";
   const inputTokens = Math.max(0, Math.round(Number(usage.inputTokens) || 0)).toLocaleString("zh-CN");
@@ -6,7 +28,23 @@ export function formatAiContextUsageTooltip(usage) {
   const conversationTokens = Math.max(0, Math.round(Number(usage.conversationTokens) || 0)).toLocaleString("zh-CN");
   const conversationBudget = Math.max(0, Math.round(Number(usage.conversationBudgetTokens) || 0)).toLocaleString("zh-CN");
   const outputTokens = Math.max(0, Math.round(Number(usage.outputTokens) || 0)).toLocaleString("zh-CN");
-  return `总输入 ${inputTokens} / ${contextWindow} tok · 作品上下文 ${contextTokens} tok · 对话历史 ${conversationTokens} / ${conversationBudget} tok · 当前调用实际输出 ${outputTokens} tok`;
+  return `总输入 ${inputTokens} / ${contextWindow} tok · 作品上下文 ${contextTokens} tok · 对话历史 ${conversationTokens} / ${conversationBudget} tok · 当前调用实际输出 ${outputTokens} tok · ${formatAiContextPercentSummary(usage)}`;
+}
+
+export function attachAiContextCacheHitPercent(usage, cacheHitPercent) {
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return usage ?? null;
+  const rate = Number(cacheHitPercent);
+  if (!Number.isFinite(rate)) return usage;
+  return { ...usage, cacheHitPercent: Math.max(0, Math.min(100, rate)) };
+}
+
+function withPreservedCacheHitPercent(previousUsage, nextUsage) {
+  if (!nextUsage || typeof nextUsage !== "object" || Array.isArray(nextUsage)) return nextUsage;
+  const nextCacheHit = Number(nextUsage.cacheHitPercent);
+  if (Number.isFinite(nextCacheHit)) return nextUsage;
+  const previousCacheHit = Number(previousUsage?.cacheHitPercent);
+  if (!Number.isFinite(previousCacheHit)) return nextUsage;
+  return { ...nextUsage, cacheHitPercent: previousCacheHit };
 }
 
 function tokenCount(value) {
@@ -14,7 +52,8 @@ function tokenCount(value) {
 }
 
 export function resolveAiContextUsage(previousUsage, nextUsage) {
-  return nextUsage && typeof nextUsage === "object" ? nextUsage : previousUsage ?? null;
+  if (!nextUsage || typeof nextUsage !== "object") return previousUsage ?? null;
+  return withPreservedCacheHitPercent(previousUsage, nextUsage);
 }
 
 const maximumAiContextUsageFields = [
@@ -28,7 +67,9 @@ const minimumAiContextUsageFields = ["remainingTokens"];
 
 export function mergeAiContextUsage(previousUsage, nextUsage, allowShrink = false) {
   if (!nextUsage || typeof nextUsage !== "object" || Array.isArray(nextUsage)) return previousUsage ?? null;
-  if (!previousUsage || typeof previousUsage !== "object" || Array.isArray(previousUsage) || allowShrink) return nextUsage;
+  if (!previousUsage || typeof previousUsage !== "object" || Array.isArray(previousUsage) || allowShrink) {
+    return withPreservedCacheHitPercent(previousUsage, nextUsage);
+  }
   const mergedUsage = { ...nextUsage };
   for (const field of [...maximumAiContextUsageFields, ...minimumAiContextUsageFields]) {
     const previousValue = Number(previousUsage[field]);
@@ -41,7 +82,7 @@ export function mergeAiContextUsage(previousUsage, nextUsage, allowShrink = fals
     else if (Number.isFinite(previousValue)) mergedUsage[field] = previousValue;
     else if (Number.isFinite(nextValue)) mergedUsage[field] = nextValue;
   }
-  return mergedUsage;
+  return withPreservedCacheHitPercent(previousUsage, mergedUsage);
 }
 
 export function formatAiContextUsagePercent(occupiedTokens, contextWindow) {
