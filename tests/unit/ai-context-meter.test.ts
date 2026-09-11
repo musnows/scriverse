@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "../../src/public/ai-context-meter.js";
+import { attachAiContextCacheHitPercent, formatAiContextCacheHitPercent, formatAiContextPopoverDescription, formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "../../src/public/ai-context-meter.js";
 
 describe("AI 上下文用量提示", () => {
   it("低于 10% 时保留一位小数，其余显示整数", () => {
@@ -21,7 +21,41 @@ describe("AI 上下文用量提示", () => {
       conversationBudgetTokens: 30_000,
       maxOutputTokens: 32_000,
       outputTokens: 18_000
-    })).toBe("总输入 12,345 / 128,000 tok · 作品上下文 6,000 tok · 对话历史 2,500 / 30,000 tok · 当前调用实际输出 18,000 tok");
+    })).toBe("总输入 12,345 / 128,000 tok · 作品上下文 6,000 tok · 对话历史 2,500 / 30,000 tok · 当前调用实际输出 18,000 tok · context 24% · cache hit —");
+  });
+
+  it("弹层说明同时给出 context 占比和 cache hit 百分比", () => {
+    expect(formatAiContextCacheHitPercent(undefined)).toBe("—");
+    expect(formatAiContextCacheHitPercent(75)).toBe("75%");
+    expect(formatAiContextCacheHitPercent(46.7)).toBe("46.7%");
+    expect(formatAiContextPopoverDescription(null)).toBe("选择可用模型后显示当前上下文用量");
+    expect(formatAiContextPopoverDescription({
+      contextWindow: 1_000,
+      cacheHitPercent: 46.7,
+      tokenDistribution: {
+        systemPromptTokens: 120,
+        functionTokens: 80,
+        skillsTokens: 0,
+        contextTokens: 300,
+        outputTokens: 200
+      }
+    })).toBe("已占用 700 / 1,000 tok · context 70% · cache hit 46.7%");
+    expect(formatAiContextUsageTooltip({
+      inputTokens: 700,
+      contextWindow: 1_000,
+      contextTokens: 300,
+      conversationTokens: 100,
+      conversationBudgetTokens: 400,
+      outputTokens: 200,
+      cacheHitPercent: 75,
+      tokenDistribution: {
+        systemPromptTokens: 120,
+        functionTokens: 80,
+        skillsTokens: 0,
+        contextTokens: 300,
+        outputTokens: 200
+      }
+    })).toBe("总输入 700 / 1,000 tok · 作品上下文 300 tok · 对话历史 100 / 400 tok · 当前调用实际输出 200 tok · context 70% · cache hit 75%");
   });
 
   it("下一轮用量返回前保留上一轮结果", () => {
@@ -88,6 +122,24 @@ describe("AI 上下文用量提示", () => {
     const nextUsage = { inputTokens: 8_000, contextWindow: 128_000, usagePercent: 6.3 };
 
     expect(mergeAiContextUsage(previousUsage, nextUsage, true)).toBe(nextUsage);
+  });
+
+  it("后续用量缺少 cache hit 时保留上一轮命中率", () => {
+    const previousUsage = { inputTokens: 12_345, contextWindow: 128_000, cacheHitPercent: 46.7 };
+    const nextUsage = { inputTokens: 18_000, contextWindow: 128_000, usagePercent: 14.1 };
+
+    expect(resolveAiContextUsage(previousUsage, nextUsage)).toEqual({
+      ...nextUsage,
+      cacheHitPercent: 46.7
+    });
+    expect(mergeAiContextUsage(previousUsage, nextUsage, true)).toEqual({
+      ...nextUsage,
+      cacheHitPercent: 46.7
+    });
+    expect(attachAiContextCacheHitPercent(nextUsage, 75)).toEqual({
+      ...nextUsage,
+      cacheHitPercent: 75
+    });
   });
 
   it("按上下文窗口归一化六类 Token 分布并拆分 input 与 output", () => {

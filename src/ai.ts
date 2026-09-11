@@ -11153,7 +11153,10 @@ export class AiManager {
         context,
         toolCalls: executedToolCalls,
         processSteps,
-        contextUsage: this.completionContextUsage(effectiveInput, model, completionMessages, tools, payload.usage, outputTokens),
+        contextUsage: {
+          ...this.completionContextUsage(effectiveInput, model, completionMessages, tools, payload.usage, outputTokens),
+          ...(cacheHitPercent === undefined ? {} : { cacheHitPercent })
+        },
         ...(suspendedQuestionId ? { suspendedQuestionId } : {}),
         ...(toolCallLimit ? { toolCallLimit } : {}),
         roleplayMemoryCandidates: stagedRoleplayMemoryCandidates

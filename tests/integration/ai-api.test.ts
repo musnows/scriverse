@@ -3801,6 +3801,12 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text.indexOf('"飞船"')).toBeLessThan(streamed.text.indexOf('"离港"'));
     expect(streamed.text).toContain("event: complete");
     expect(streamed.text).toContain('"outputTokens":4,"cacheHitPercent":75');
+    const complete = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      cacheHitPercent?: number;
+      contextUsage?: { cacheHitPercent?: number };
+    };
+    expect(complete.cacheHitPercent).toBe(75);
+    expect(complete.contextUsage?.cacheHitPercent).toBe(75);
     expect(streamed.text).toContain('"processSteps":[{"id":"process_');
     expect(streamed.text).toContain('"content":"先读取现有上下文。"');
 
