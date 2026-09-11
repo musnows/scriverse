@@ -60,7 +60,7 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).not.toContain("ai-process-context-compaction");
     expect(application).toContain('writingSuggestion = streamed.writingSuggestion;');
     expect(application).toContain('setAiChatTabContextUsage(tab, payload.contextUsage);');
-    expect(application).toContain('setAiChatTabContextUsage(tab, payload.contextUsage, announcedCompaction);');
+    expect(application).toContain('setAiChatTabContextUsage(tab, attachAiContextCacheHitPercent(payload.contextUsage, payload.cacheHitPercent), announcedCompaction);');
     expect(application).toContain('const announcedCompaction = contextAction === "compacted" || streamContextCompacted;');
     expect(application).toContain("function setAiContextMeter(usage, allowShrink = true)");
     expect(application).not.toContain('meter.querySelector("b")');
@@ -70,9 +70,11 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(applyRoleplayCharacter).not.toContain("resetAiContextMeter()");
     expect(updateRoleplayCharacter).toContain("resetAiContextMeter()");
     expect(application).toContain("normalizeAiContextTokenDistribution");
-    expect(application).toContain("formatAiContextUsagePercent");
-    expect(application).toContain("formatAiContextUsagePercent(distribution.occupiedTokens, distribution.contextWindow)");
-    expect(application).toContain('/ai-context-meter.js?v=20260828-context-output-usage-v1');
+    expect(application).toContain("formatAiContextPopoverDescription");
+    expect(application).toContain("formatAiContextPopoverDescription(usage)");
+    expect(application).toContain("attachAiContextCacheHitPercent(payload.contextUsage, payload.cacheHitPercent)");
+    expect(application).toContain('/ai-context-meter.js?v=20260911-context-cache-hit-v1');
+    expect(page).toContain("&feature=ai-context-cache-hit-v1");
     expect(application).toContain("setAiContextDistributionVisible");
     expect(styles).not.toContain(".ai-context-meter b");
     expect(styles).toContain(".ai-context-popover::after { position: absolute; right: 67px;");

@@ -36,7 +36,7 @@ import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount, usageCalendarYears } from "/ai-usage.js?v=20260830-ai-usage-year-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260828-context-output-usage-v1";
+import { attachAiContextCacheHitPercent, formatAiContextPopoverDescription, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260911-context-cache-hit-v1";
 import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import {
@@ -14633,10 +14633,7 @@ function renderAiContextDistribution(usage) {
   const popover = $("#ai-context-popover");
   const host = $("#ai-context-distribution");
   const distribution = normalizeAiContextTokenDistribution(usage);
-  const contextWindow = distribution.contextWindow.toLocaleString("zh-CN");
-  $("#ai-context-popover-description").textContent = usage
-    ? `已占用 ${distribution.occupiedTokens.toLocaleString("zh-CN")} / ${contextWindow} tok · ${formatAiContextUsagePercent(distribution.occupiedTokens, distribution.contextWindow)}`
-    : "选择可用模型后显示当前上下文用量";
+  $("#ai-context-popover-description").textContent = formatAiContextPopoverDescription(usage);
   host.replaceChildren(...distribution.items.map((item) => {
     const row = document.createElement("div");
     row.className = "ai-context-distribution-row";
@@ -18689,7 +18686,7 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
           || writingSuggestion?.processSteps?.some((step) => step?.toolCall?.status === "failed");
         if (writingSuggestionFailed) setAiChatTabStatus(tab, "error");
         const announcedCompaction = contextAction === "compacted" || streamContextCompacted;
-        setAiChatTabContextUsage(tab, payload.contextUsage, announcedCompaction);
+        setAiChatTabContextUsage(tab, attachAiContextCacheHitPercent(payload.contextUsage, payload.cacheHitPercent), announcedCompaction);
         await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
         assertAiRequestCurrent(requestHolder.snapshot);
         message.classList.remove("is-streaming");
