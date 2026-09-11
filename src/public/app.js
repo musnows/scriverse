@@ -14678,13 +14678,11 @@ function setAiContextMeter(usage, allowShrink = true) {
     : mergeAiContextUsage(latestAiContextUsage, usage, false);
   latestAiContextUsage = displayUsage;
   const meter = $("#ai-context-meter");
-  const value = meter.querySelector("b");
   const distribution = renderAiContextDistribution(displayUsage);
   if (!displayUsage) {
     meter.classList.add("is-empty");
     meter.classList.remove("is-warning", "is-danger");
     meter.style.setProperty("--context-usage", "0");
-    value.textContent = "—";
     const tooltip = formatAiContextUsageTooltip(null);
     meter.dataset.tooltip = tooltip;
     meter.setAttribute("aria-label", tooltip);
@@ -14697,7 +14695,6 @@ function setAiContextMeter(usage, allowShrink = true) {
   meter.classList.toggle("is-warning", percent >= 70 && percent < 90);
   meter.classList.toggle("is-danger", percent >= 90);
   meter.style.setProperty("--context-usage", String(percent));
-  value.textContent = formatAiContextUsagePercent(distribution.occupiedTokens, distribution.contextWindow);
   const tooltip = formatAiContextUsageTooltip(displayUsage);
   meter.dataset.tooltip = tooltip;
   meter.setAttribute("aria-label", `当前上下文用量：${tooltip}`);

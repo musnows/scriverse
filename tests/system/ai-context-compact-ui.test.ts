@@ -20,6 +20,9 @@ describe("AI 对话上下文 compact 界面", () => {
     );
 
     expect(page).toContain('id="ai-context-warning"');
+    expect(page).toContain('id="ai-context-meter" class="ai-context-meter is-empty" type="button"');
+    expect(page).not.toContain("<b>—</b>");
+    expect(page).toContain("&feature=ai-context-meter-ring-only-v1");
     expect(page).toContain('id="ai-context-popover"');
     expect(page).toContain('id="ai-context-distribution"');
     expect(page).toContain('id="ai-context-compact"');
@@ -60,6 +63,7 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain('setAiChatTabContextUsage(tab, payload.contextUsage, announcedCompaction);');
     expect(application).toContain('const announcedCompaction = contextAction === "compacted" || streamContextCompacted;');
     expect(application).toContain("function setAiContextMeter(usage, allowShrink = true)");
+    expect(application).not.toContain('meter.querySelector("b")');
     expect(application).toContain("mergeAiContextUsage(latestAiContextUsage, usage, false)");
     expect(application).toContain("latestAiContextUsage = displayUsage;");
     expect(application).toContain("function resetAiContextMeter()");
@@ -70,7 +74,8 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain("formatAiContextUsagePercent(distribution.occupiedTokens, distribution.contextWindow)");
     expect(application).toContain('/ai-context-meter.js?v=20260828-context-output-usage-v1');
     expect(application).toContain("setAiContextDistributionVisible");
-    expect(styles).toContain(".ai-context-popover::after { position: absolute; right: 87px;");
+    expect(styles).not.toContain(".ai-context-meter b");
+    expect(styles).toContain(".ai-context-popover::after { position: absolute; right: 67px;");
     expect(styles).toContain(".ai-context-popover.hidden { display: none; }");
     expect(styles).toContain(".ai-context-warning.hidden { display: none; }");
     expect(styles).toContain(".ai-context-compaction-divider { display: grid;");

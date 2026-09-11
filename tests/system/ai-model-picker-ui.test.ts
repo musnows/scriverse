@@ -52,10 +52,10 @@ describe("AI 模型选择收纳界面", () => {
     expect(application).toContain("aiModelImageIconMarkup()");
     expect(application).toContain("function syncAiImageAttachmentControl()");
 
-    expect(styles).toContain(".ai-model-picker { display: grid; flex: 0 0 32px;");
-    expect(styles).toContain(".ai-model-picker-icon { width: 18px; height: 18px;");
+    expect(styles).toContain(".ai-model-picker { display: grid; flex: 0 0 24px;");
+    expect(styles).toContain(".ai-model-picker-icon { width: 14px; height: 14px;");
     expect(styles).toContain(".ai-model-popover { position: absolute; right: 0;");
-    expect(styles).toContain(".ai-model-popover::after { position: absolute; right: 49px;");
+    expect(styles).toContain(".ai-model-popover::after { position: absolute; right: 37px;");
     expect(styles).toContain(".ai-model-popover.hidden { display: none; }");
     expect(styles).toContain(".ai-model-options { display: grid;");
     expect(styles).toContain(".ai-model-option-image-icon");
