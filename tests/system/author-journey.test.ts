@@ -660,7 +660,7 @@ describe("作者完整创作流程", () => {
     expect(markdown.text).toContain("renderMarkdownTable");
     expect(vditorCss.text).toContain("Vditor v3.11.2");
     expect(vditorScript.text).toContain("Vditor");
-    expect(application.text).toContain('/markdown.js?v=20260830-adjacent-blockquotes-v1');
+    expect(application.text).toContain('/markdown.js?v=20260912-stream-render-v2');
     expect(page.text).toContain("feature=markdown-adjacent-blockquotes-v1");
     expect(application.text).toContain('/upload-progress.js?v=20260812-upload-progress-v1');
     expect(application.text).toContain('new window.Vditor');
@@ -885,7 +885,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).not.toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
     expect(application.text).toContain("async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null } = {})");
     expect(application.text).toContain("createStreamTypewriter");
-    expect(application.text).toContain("content.innerHTML = renderMarkdown(text)");
+    expect(application.text).toContain("updateAiMarkdown(content, text)");
     expect(application.text).toContain('class="message-body"');
     expect(styles.text).toContain(".message-body h1, .message-body h2");
     expect(styles.text).toContain(".prompt-composer-actions { position: absolute; right: 8px; bottom: 8px;");
