@@ -28,15 +28,15 @@ describe("AI 工具调用记录界面", () => {
     expect(application).not.toContain('if (name === "propose_write_plan" || name === "ask_user_question")');
     expect(application).toContain('ask_user_question: "向作者提问"');
     expect(application).toContain("function renderAiProcessSteps(message, steps, completed, durationMs = null, visibleContents = null)");
-    expect(application).toContain("const previousScrollStates = new Map();");
+    expect(application).toContain("const cached = aiProcessRenderStates.get(message);");
     expect(application).toContain("section.dataset.aiProcessStepId");
-    expect(application).toContain("body.scrollTop = scrollState.nearBottom");
+    expect(application).toContain("updateAiMarkdown(body, content)");
     expect(application).toContain("function scrollAiProcessStepsToBottom(message)");
     expect(application).toContain("if (!completed) scrollAiProcessStepsToBottom(message);");
     expect(application).toContain("function shouldRenderAiProcessStep(step)");
     expect(application).toContain('step.type !== "intermediate" || typeof step.content !== "string" || step.content.trim().length > 0');
     expect(application).toContain("const renderableSteps = (Array.isArray(steps) ? steps : []).filter(shouldRenderAiProcessStep);");
-    expect(application).toContain("if (!renderableSteps.length) return;");
+    expect(application).toContain("if (!renderableSteps.length) {");
     expect(application).toContain("const aiFeedAutoScrollStates = new WeakMap();");
     expect(application).toContain("const aiFeedScrollBindings = new WeakSet();");
     expect(application).toContain("function aiFeedIsNearBottom(feed)");
@@ -48,7 +48,7 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain("window.cancelAnimationFrame(currentFrame);");
     expect(application).toContain("const processStepTypewriters = new Map();");
     expect(application).toContain("processStepTypewriter(targetStep).append(step.content)");
-    expect(application).toContain('/stream-typewriter.js?v=20260906-background-stream-v2');
+    expect(application).toContain('/stream-typewriter.js?v=20260912-stream-render-v2');
     expect(page).toContain("feature=ai-background-stream-v1");
     expect(application).toContain('step.type === "intermediate" && typeof step.content === "string"');
     expect(application).toContain("typewriter.replace(streamedText)");

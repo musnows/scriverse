@@ -142,8 +142,20 @@ function renderMarkdownTable(headers, alignments, rows) {
 }
 
 export function renderMarkdown(value) {
+  return renderMarkdownParts(value).map((part) => part.html).join("");
+}
+
+export function renderMarkdownParts(value) {
   const lines = String(value ?? "").replace(/\r\n?/gu, "\n").split("\n");
   const output = [];
+  const offsets = [];
+  let offset = 0;
+  for (const line of lines) {
+    offsets.push(offset);
+    offset += line.length + 1;
+  }
+  let lineIndex = 0;
+  const emit = (html, endLine = lineIndex) => output.push({ html, end: offsets[endLine] ?? offset - 1 });
   let paragraph = [];
   let list = null;
   let quote = null;
@@ -151,12 +163,12 @@ export function renderMarkdown(value) {
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
-    output.push(`<p>${paragraph.map(renderInlineMarkdown).join("<br>")}</p>`);
+    emit(`<p>${paragraph.map(renderInlineMarkdown).join("<br>")}</p>`);
     paragraph = [];
   };
   const flushList = () => {
     if (!list) return;
-    output.push(`<${list.tag}>${list.items.map((item) => `<li class="markdown-depth-${item.depth}">${renderInlineMarkdown(item.text)}</li>`).join("")}</${list.tag}>`);
+    emit(`<${list.tag}>${list.items.map((item) => `<li class="markdown-depth-${item.depth}">${renderInlineMarkdown(item.text)}</li>`).join("")}</${list.tag}>`);
     list = null;
   };
   const flushQuote = () => {
@@ -166,7 +178,7 @@ export function renderMarkdown(value) {
       const html = content.split(/\n\s*\n/gu)
         .map((part) => part.split("\n").map(renderInlineMarkdown).join("<br>"))
         .join("<br><br>");
-      output.push(`<blockquote>${html}</blockquote>`);
+      emit(`<blockquote>${html}</blockquote>`);
     }
     quote = null;
   };
@@ -176,11 +188,11 @@ export function renderMarkdown(value) {
     flushQuote();
   };
 
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+  for (lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     const line = lines[lineIndex];
     if (codeFence) {
       if (/^\s*```/u.test(line)) {
-        output.push(`<pre><code${codeFence.language ? ` class="language-${codeFence.language}"` : ""}>${escapeHtml(codeFence.lines.join("\n"))}</code></pre>`);
+        emit(`<pre><code${codeFence.language ? ` class="language-${codeFence.language}"` : ""}>${escapeHtml(codeFence.lines.join("\n"))}</code></pre>`, lineIndex + 1);
         codeFence = null;
       } else {
         codeFence.lines.push(line);
@@ -230,12 +242,12 @@ export function renderMarkdown(value) {
     if (heading) {
       flushBlocks();
       const level = heading[1].length;
-      output.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      emit(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`, lineIndex + 1);
       continue;
     }
     if (/^\s*(---+|___+|\*\*\*+)\s*$/u.test(line)) {
       flushBlocks();
-      output.push("<hr>");
+      emit("<hr>", lineIndex + 1);
       continue;
     }
     const tableHeaders = splitMarkdownTableRow(line);
@@ -251,7 +263,7 @@ export function renderMarkdown(value) {
         lineIndex += 1;
       }
       lineIndex -= 1;
-      output.push(renderMarkdownTable(tableHeaders, alignments, rows));
+      emit(renderMarkdownTable(tableHeaders, alignments, rows), lineIndex + 1);
       continue;
     }
     const listItem = line.match(/^(\s*)([-+*]|\d+\.)\s+(.+)$/u);
@@ -266,7 +278,7 @@ export function renderMarkdown(value) {
     if (list) flushList();
     paragraph.push(line);
   }
-  if (codeFence) output.push(`<pre><code${codeFence.language ? ` class="language-${codeFence.language}"` : ""}>${escapeHtml(codeFence.lines.join("\n"))}</code></pre>`);
+  if (codeFence) emit(`<pre><code${codeFence.language ? ` class="language-${codeFence.language}"` : ""}>${escapeHtml(codeFence.lines.join("\n"))}</code></pre>`);
   flushBlocks();
-  return output.join("");
+  return output;
 }

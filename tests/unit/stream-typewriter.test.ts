@@ -40,6 +40,29 @@ class PageVisibility extends EventTarget {
 describe("流式打字机", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("consumes inactive conversation data without scheduling animation frames", async () => {
+    const frames = manualFrames();
+    let rendered = "";
+    const writer = createStreamTypewriter({ onRender: (text) => { rendered = text; }, shouldAnimate: () => false, scheduleFrame: frames.schedule, cancelFrame: frames.cancel });
+    writer.append("hidden conversation");
+    expect(frames.runAll()).toBe(0);
+    await expect(writer.finish()).resolves.toBe("hidden conversation");
+    expect(rendered).toBe("hidden conversation");
+  });
+
+  it("handles large Unicode chunks without argument limits or prolonged animation backlog", async () => {
+    const frames = manualFrames();
+    const source = "𠮷字".repeat(100_000);
+    const writer = createStreamTypewriter({ onRender: () => {}, scheduleFrame: frames.schedule, cancelFrame: frames.cancel, reducedMotion: false });
+    writer.append(source);
+    const completed = writer.finish();
+    expect(frames.runAll(1000)).toBeLessThan(1000);
+    await expect(completed).resolves.toBe(source);
+    expect(writer.replace(source)).toBe(source);
+    writer.append(source);
+    expect(writer.reveal()).toBe(source + source);
+  });
+
   it("renders background chunks and finishes without animation frames", async () => {
     const frames = manualFrames();
     const visibility = new PageVisibility();

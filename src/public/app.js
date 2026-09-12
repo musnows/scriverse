@@ -1,7 +1,9 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1";
 import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { countProseWords } from "/text-count.js?v=20260906-chapter-word-count-consistency-v1";
-import { renderMarkdown } from "/markdown.js?v=20260830-adjacent-blockquotes-v1";
+import { renderMarkdown } from "/markdown.js?v=20260912-stream-render-v2";
+import { createStreamingMarkdownRenderer } from "/stream-markdown.js?v=20260912-stream-render-v2";
+import { createAiRenderScheduler } from "/ai-render-scheduler.js?v=20260912-stream-render-v2";
 import { createImWorkspace } from "/im.js?v=20260904-im-judge-outcomes-v106";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { applyAiSkillCommand, findAiSkillCommand, listAiSkillOptions } from "/ai-skill-menu.js?v=20260830-ai-skill-slash-menu-v1";
@@ -32,7 +34,7 @@ import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260822-private-ai-endpoint-hint-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
-import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260906-background-stream-v2";
+import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260912-stream-render-v2";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount, usageCalendarYears } from "/ai-usage.js?v=20260830-ai-usage-year-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
@@ -2688,6 +2690,7 @@ function activateAiChatTab(tabId, { persistCurrent = true, force = false } = {})
     feed.id = feed === tab.feed ? "ai-feed" : `ai-chat-panel-${feed.dataset.aiTabId}`;
   }
   tab.feed.classList.remove("hidden");
+  aiStreamRenders.refresh();
   applyAiChatTabState(tab);
   renderAiChatTabs();
   return tab;
@@ -2703,6 +2706,7 @@ function closeAiChatTab(tabId) {
   }
   const { active } = aiChatTabManager.close(tab.id);
   tab.feed.remove();
+  aiStreamRenders.refresh();
   if (!wasActive) {
     renderAiChatTabs();
     return;
@@ -3087,6 +3091,42 @@ const aiFeedScrollFrames = new WeakMap();
 const aiFeedAutoScrollStates = new WeakMap();
 const aiFeedScrollBindings = new WeakSet();
 const aiProcessScrollFrames = new WeakMap();
+const aiProcessRenderStates = new WeakMap();
+const aiMarkdownRenderers = new WeakMap();
+function aiStreamTargetVisible(target) {
+  target = target.element ?? target;
+  const feed = target.closest(".ai-feed");
+  const app = $("#app");
+  return document.visibilityState !== "hidden" && Boolean(feed?.isConnected)
+    && !feed.classList.contains("hidden") && !app.classList.contains("shelf-mode")
+    && (!app.classList.contains("ai-panel-collapsed") || app.classList.contains("ai-workspace-mode"));
+}
+const aiStreamRenders = createAiRenderScheduler({
+  isVisible: aiStreamTargetVisible,
+  isConnected: (target) => (target.element ?? target).isConnected
+});
+document.addEventListener("visibilitychange", () => aiStreamRenders.refresh());
+// 只监听面板显隐，不观察正文或消息内容，避免渲染自身触发新的刷新。
+const aiPanelVisibilityObserver = new MutationObserver(() => aiStreamRenders.refresh());
+aiPanelVisibilityObserver.observe($("#app"), { attributes: true, attributeFilter: ["class"] });
+
+function updateAiMarkdown(body, content) {
+  let render = aiMarkdownRenderers.get(body);
+  if (!render) {
+    const target = { element: body };
+    render = createStreamingMarkdownRenderer(body, {
+      enqueue: (callback) => queueMicrotask(() => aiStreamRenders.enqueue(target, callback)),
+      onRender: () => {
+        const message = body.closest(".assistant-message");
+        if (message?.classList.contains("is-streaming")) scrollAiProcessStepsToBottom(message);
+        const feed = body.closest(".ai-feed");
+        if (feed) scrollAiFeedToBottom(feed);
+      }
+    });
+    aiMarkdownRenderers.set(body, render);
+  }
+  return render(content);
+}
 const AI_FEED_BOTTOM_THRESHOLD_PX = 24;
 let markdownTableMenuTarget = null;
 let markdownTableMenuTrigger = null;
@@ -3153,9 +3193,8 @@ function scrollAiFeedToBottom(feed = $("#ai-feed"), { force = false } = {}) {
   bindAiFeedAutoScroll(feed);
   if (force) aiFeedAutoScrollStates.set(feed, true);
   if (!aiFeedAutoScrollStates.get(feed)) return;
-  feed.scrollTop = feed.scrollHeight;
   const currentFrame = aiFeedScrollFrames.get(feed);
-  if (currentFrame !== undefined) window.cancelAnimationFrame(currentFrame);
+  if (currentFrame !== undefined || !aiStreamTargetVisible(feed)) return;
   const nextFrame = window.requestAnimationFrame(() => {
     feed.scrollTop = feed.scrollHeight;
     aiFeedScrollFrames.delete(feed);
@@ -3169,9 +3208,8 @@ function scrollAiProcessStepsToBottom(message) {
       body.scrollTop = body.scrollHeight;
     });
   };
-  scroll();
   const currentFrame = aiProcessScrollFrames.get(message);
-  if (currentFrame !== undefined) window.cancelAnimationFrame(currentFrame);
+  if (currentFrame !== undefined || !aiStreamTargetVisible(message)) return;
   const nextFrame = window.requestAnimationFrame(() => {
     scroll();
     aiProcessScrollFrames.delete(message);
@@ -3724,74 +3762,80 @@ function shouldRenderAiProcessStep(step) {
 }
 
 function renderAiProcessSteps(message, steps, completed, durationMs = null, visibleContents = null) {
-  const previousDetails = message.querySelector(".ai-process-details");
-  const previousScrollStates = new Map();
-  previousDetails?.querySelectorAll(".ai-process-step[data-ai-process-step-id]").forEach((section) => {
-    const body = section.querySelector(".ai-process-step-body");
-    if (!body) return;
-    previousScrollStates.set(section.dataset.aiProcessStepId, {
-      scrollTop: body.scrollTop,
-      nearBottom: body.scrollHeight - body.scrollTop - body.clientHeight < 24
-    });
-  });
-  previousDetails?.remove();
+  const cached = aiProcessRenderStates.get(message);
   const renderableSteps = (Array.isArray(steps) ? steps : []).filter(shouldRenderAiProcessStep);
-  if (!renderableSteps.length) return;
-  const details = document.createElement("details");
+  if (!renderableSteps.length) {
+    cached?.details.remove();
+    aiProcessRenderStates.delete(message);
+    return;
+  }
+  const details = cached?.details ?? document.createElement("details");
   details.className = "ai-process-details";
   // 存在待确认/待回答的交互卡片时保持展开，避免审批入口在历史消息中被折叠。
   details.open = !completed || steps.some((step) => step?.type === "tool" && isInteractiveToolPending(step.toolCall));
-  const summary = document.createElement("summary");
-  const title = document.createElement("span");
+  const summary = cached?.summary ?? document.createElement("summary");
+  const title = cached?.title ?? document.createElement("span");
   title.textContent = completed ? "思考与执行过程" : "正在思考与执行";
-  const status = document.createElement("small");
+  const status = cached?.status ?? document.createElement("small");
   const duration = durationMs === null || durationMs === undefined ? "" : formatAiProcessDuration(durationMs);
   status.textContent = `${renderableSteps.length} 个步骤${duration ? ` · 耗时 ${duration}` : ""}`;
-  summary.append(title, status);
-  const list = document.createElement("div");
+  if (!cached) summary.append(title, status);
+  const list = cached?.list ?? document.createElement("div");
   list.className = "ai-process-list";
-  for (const step of renderableSteps) {
+  const entries = new Map();
+  const nextNodes = [];
+  for (const [index, step] of renderableSteps.entries()) {
+    const key = `${step.type}:${String(step.id ?? index)}`;
+    const previous = cached?.entries.get(key);
     if (step?.type === "context_compaction") {
-      list.append(createAiContextCompactionDivider({
+      const divider = previous?.node ?? createAiContextCompactionDivider({
         kind: "tool",
         ariaLabel: `第 ${Number(step.round) || 1} 轮已压缩上下文`,
         title: `已将 ${Number(step.sourceMessageCount) || 0} 条工具上下文压缩为摘要`
-      }));
+      });
+      entries.set(key, { node: divider });
+      nextNodes.push(divider);
       continue;
     }
     if (step?.type === "tool" && step.toolCall) {
+      if (previous?.value === step.toolCall) {
+        entries.set(key, previous);
+        nextNodes.push(previous.node);
+        continue;
+      }
       const tool = document.createElement("section");
       tool.className = "ai-process-step ai-process-tool-step";
       const label = document.createElement("small");
       label.textContent = `第 ${Number(step.round) || 1} 轮 · 工具调用`;
       tool.append(label, createAiToolCallButton(step.toolCall));
-      list.append(tool);
+      entries.set(key, { node: tool, value: step.toolCall });
+      nextNodes.push(tool);
       continue;
     }
-    const section = document.createElement("section");
+    const section = previous?.node ?? document.createElement("section");
     section.className = `ai-process-step ai-process-${step.type}-step`;
     section.dataset.aiProcessStepId = `${step.type}:${String(step.id ?? step.round ?? "")}`;
-    const label = document.createElement("small");
+    const label = previous?.label ?? document.createElement("small");
     label.textContent = `第 ${Number(step.round) || 1} 轮 · ${step.type === "thinking" ? "Thinking" : "中间输出"}`;
-    const body = document.createElement("div");
+    const body = previous?.body ?? document.createElement("div");
     body.className = "message-body ai-process-step-body";
     const content = visibleContents?.has(step) ? visibleContents.get(step) : step.content;
-    body.innerHTML = renderMarkdown(content);
-    section.append(label, body);
-    list.append(section);
+    updateAiMarkdown(body, content);
+    if (!previous) section.append(label, body);
+    entries.set(key, { node: section, label, body });
+    nextNodes.push(section);
   }
-  details.append(summary, list);
-  list.querySelectorAll(".ai-process-step[data-ai-process-step-id]").forEach((section) => {
-    const scrollState = previousScrollStates.get(section.dataset.aiProcessStepId);
-    const body = section.querySelector(".ai-process-step-body");
-    if (!scrollState || !body) return;
-    body.scrollTop = scrollState.nearBottom
-      ? body.scrollHeight
-      : Math.min(scrollState.scrollTop, body.scrollHeight);
+  if (!cached) details.append(summary, list);
+  nextNodes.forEach((node, index) => {
+    if (list.children[index] !== node) list.insertBefore(node, list.children[index] ?? null);
   });
-  const body = message.querySelector(".message-body");
-  if (body) body.before(details);
-  else message.append(details);
+  while (list.children.length > nextNodes.length) list.lastElementChild.remove();
+  if (!cached) {
+    const body = message.querySelector(".message-body");
+    if (body) body.before(details);
+    else message.append(details);
+  }
+  aiProcessRenderStates.set(message, { details, summary, title, status, list, entries, completed });
   if (!completed) scrollAiProcessStepsToBottom(message);
 }
 
@@ -18489,11 +18533,15 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
   };
   const typewriter = createStreamTypewriter({
     speedController: streamSpeedController,
+    shouldAnimate: () => aiStreamTargetVisible(feed),
     onRender: (text, progress) => {
       if (!aiRequestTargetsCurrentState(requestHolder.snapshot) || !mountAssistantMessage()) return;
-      content.innerHTML = renderMarkdown(text);
-      renderAiStreamingCharacterProgress(meta, progress.visibleCharacters);
-      scrollAiFeedToBottom(feed);
+      aiStreamRenders.enqueue(content, () => {
+        if (!aiRequestTargetsCurrentState(requestHolder.snapshot) && message.classList.contains("is-streaming")) return;
+        updateAiMarkdown(content, text);
+        if (message.classList.contains("is-streaming")) renderAiStreamingCharacterProgress(meta, progress.visibleCharacters);
+        scrollAiFeedToBottom(feed);
+      });
     }
   });
   let streamedText = "";
@@ -18517,7 +18565,10 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
   const processStepVisibleContents = new Map();
   const renderStreamingProcessSteps = (completed, durationMs = elapsedProcessTime()) => {
     if (!aiRequestTargetsCurrentState(requestHolder.snapshot)) return;
-    renderAiProcessSteps(message, processSteps, completed, durationMs, processStepVisibleContents);
+    aiStreamRenders.enqueue(message, () => {
+      renderAiProcessSteps(message, processSteps, completed, durationMs, processStepVisibleContents);
+      scrollAiFeedToBottom(feed);
+    });
   };
   const processStepTypewriter = (step) => {
     const existing = processStepTypewriters.get(step);
@@ -18525,6 +18576,7 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
     processStepVisibleContents.set(step, "");
     const typewriter = createStreamTypewriter({
       speedController: streamSpeedController,
+      shouldAnimate: () => aiStreamTargetVisible(feed),
       onRender: (text) => {
         if (!aiRequestTargetsCurrentState(requestHolder.snapshot)) return;
         processStepVisibleContents.set(step, text);
@@ -18710,7 +18762,7 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
             writingSuggestionId: writingSuggestion.id
           } : {})
         };
-        renderAiProcessSteps(message, processSteps, true, processDurationMs);
+        renderStreamingProcessSteps(true, processDurationMs);
         meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens, payload.cacheHitPercent, "", processDurationMs);
         attachAssistantCopyAction(message, streamedText);
         scrollAiFeedToBottom(feed);
