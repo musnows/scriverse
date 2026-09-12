@@ -75,23 +75,34 @@ export function createStreamTypewriter({
   cancelFrame = (handle) => window.cancelAnimationFrame(handle),
   reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true,
   speedController = null,
+  shouldAnimate = () => true,
   visibilitySource = typeof document === "undefined" ? null : document
 }) {
   if (typeof onRender !== "function") throw new TypeError("onRender must be a function");
 
-  const visibleCharacters = [];
-  const pendingCharacters = [];
+  let visibleText = "";
+  let visibleCharacterCount = 0;
+  let pendingCharacters = [];
+  let pendingOffset = 0;
+  const pendingCount = () => pendingCharacters.length - pendingOffset;
+  const takePending = (count) => {
+    const characters = pendingCharacters.slice(pendingOffset, pendingOffset + count);
+    visibleText += characters.join("");
+    visibleCharacterCount += characters.length;
+    pendingOffset += characters.length;
+    if (pendingOffset === pendingCharacters.length) { pendingCharacters = []; pendingOffset = 0; }
+  };
   const idleResolvers = [];
   let scheduledFrame = null;
   let finishing = false;
   let listeningForVisibility = false;
 
-  const snapshot = () => visibleCharacters.join("");
+  const snapshot = () => visibleText;
   const visibilityChanged = () => {
-    if (pendingCharacters.length) typewriter.reveal();
+    if (pendingCount()) typewriter.reveal();
   };
   const resolveIdle = () => {
-    if (pendingCharacters.length || scheduledFrame !== null) return;
+    if (pendingCount() || scheduledFrame !== null) return;
     if (listeningForVisibility) {
       visibilitySource.removeEventListener("visibilitychange", visibilityChanged);
       listeningForVisibility = false;
@@ -101,32 +112,33 @@ export function createStreamTypewriter({
   };
   const render = () => {
     onRender(snapshot(), {
-      visibleCharacters: visibleCharacters.length,
-      pendingCharacters: pendingCharacters.length
+      visibleCharacters: visibleCharacterCount,
+      pendingCharacters: pendingCount()
     });
   };
   const schedule = () => {
-    if (visibilitySource?.visibilityState === "hidden") {
+    if (visibilitySource?.visibilityState === "hidden" || !shouldAnimate()) {
       typewriter.reveal();
       return;
     }
-    if (scheduledFrame !== null || pendingCharacters.length === 0) return;
+    if (scheduledFrame !== null || pendingCount() === 0) return;
     if (visibilitySource && !listeningForVisibility) {
       visibilitySource.addEventListener("visibilitychange", visibilityChanged);
       listeningForVisibility = true;
     }
     scheduledFrame = scheduleFrame(() => {
       scheduledFrame = null;
-      const batchSize = reducedMotion
-        ? pendingCharacters.length
+      const batchSize = reducedMotion || !shouldAnimate()
+        ? pendingCount()
         : streamTypewriterBatchSize(
-          pendingCharacters.length,
+          pendingCount(),
           finishing,
           speedController?.charactersPerSecond?.()
         );
-      visibleCharacters.push(...pendingCharacters.splice(0, batchSize));
+      const catchUp = pendingCount() > 4096 ? Math.min(2048, Math.ceil(pendingCount() / 8)) : batchSize;
+      takePending(Math.max(batchSize, catchUp));
       render();
-      if (pendingCharacters.length) schedule();
+      if (pendingCount()) schedule();
       else resolveIdle();
     });
   };
@@ -136,7 +148,7 @@ export function createStreamTypewriter({
       const characters = Array.from(String(value ?? ""));
       if (!characters.length) return;
       speedController?.observe?.(characters.length);
-      pendingCharacters.push(...characters);
+      for (const character of characters) pendingCharacters.push(character);
       schedule();
     },
     replace(value) {
@@ -144,15 +156,17 @@ export function createStreamTypewriter({
         cancelFrame(scheduledFrame);
         scheduledFrame = null;
       }
-      visibleCharacters.splice(0, visibleCharacters.length, ...Array.from(String(value ?? "")));
-      pendingCharacters.splice(0);
+      visibleText = String(value ?? "");
+      visibleCharacterCount = Array.from(visibleText).length;
+      pendingCharacters = [];
+      pendingOffset = 0;
       finishing = false;
       render();
       resolveIdle();
       return snapshot();
     },
     finish() {
-      if (!pendingCharacters.length && scheduledFrame === null) return Promise.resolve(snapshot());
+      if (!pendingCount() && scheduledFrame === null) return Promise.resolve(snapshot());
       finishing = true;
       const completed = new Promise((resolve) => idleResolvers.push(resolve));
       schedule();
@@ -163,7 +177,7 @@ export function createStreamTypewriter({
         cancelFrame(scheduledFrame);
         scheduledFrame = null;
       }
-      visibleCharacters.push(...pendingCharacters.splice(0));
+      takePending(pendingCount());
       finishing = false;
       render();
       resolveIdle();
