@@ -20366,7 +20366,13 @@ $("#platform-usage-pricing-refresh").addEventListener("click", async () => {
 });
 $("#user-management-button").addEventListener("click", openUsersDialog);
 $("#admin-ai-conversations-button").addEventListener("click", () => openAdminAiConversationsDialog().catch((error) => toast(error.message, "error")));
-$("#writing-progress-button").addEventListener("click", () => openWritingProgressDialog().catch((error) => toast(error.message, "error")));
+$("#writing-progress-button").addEventListener("click", () => {
+  void openWritingProgressDialog().catch((error) => toast(error.message, "error"));
+  if (isMobileViewport()) {
+    panelLayout.leftCollapsed = true;
+    applyPanelLayout(true);
+  }
+});
 $("#writing-progress-close").addEventListener("click", () => $("#writing-progress-dialog").close());
 $("#writing-progress-refresh").addEventListener("click", () => loadWritingProgress().catch((error) => toast(error.message, "error")));
 $("#writing-goal-form").addEventListener("submit", saveWritingGoal);
