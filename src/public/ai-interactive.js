@@ -186,9 +186,15 @@ export function normalizeAiQuestionItems(question) {
  * 会话内的最新审批详情缓存：确认/撤销之后写回，避免卡片在重渲染时回退到提交时刻的快照。
  */
 const livePlanDetails = new Map();
+const livePlanCardDefinitions = new WeakMap();
 
 export function cacheAiWritePlanDetail(detail) {
-  if (detail?.id) livePlanDetails.set(String(detail.id), detail);
+  if (!detail?.id) return;
+  const planId = String(detail.id);
+  const previous = livePlanDetails.get(planId);
+  // 审批中心列表只返回摘要，不能覆盖已加载详情中的操作明细。
+  livePlanDetails.set(planId, previous ? { ...previous, ...detail } : detail);
+  refreshAiWritePlanCards(planId);
 }
 
 export function cachedAiWritePlanDetail(planId) {
@@ -268,6 +274,18 @@ function actionButton(labelText, className, onClick) {
   return button;
 }
 
+/** 将审批中心或详情接口的最新状态同步到当前已显示的会话卡片。 */
+function refreshAiWritePlanCards(planId) {
+  if (typeof document === "undefined") return;
+  for (const card of document.querySelectorAll("[data-ai-write-plan-id]")) {
+    if (card.dataset.aiWritePlanId !== String(planId)) continue;
+    const definition = livePlanCardDefinitions.get(card);
+    if (!definition) continue;
+    const replacement = buildPlanCard(definition.model, definition.actions);
+    card.replaceWith(replacement);
+  }
+}
+
 function buildPlanCard(model, actions) {
   // 优先使用缓存中的最新详情（用户刚刚确认/撤销过），否则回退到工具结果摘要。
   const liveDetail = model.plan ? cachedAiWritePlanDetail(model.plan.id) : null;
@@ -312,6 +330,7 @@ function buildPlanCard(model, actions) {
   const actionsBar = document.createElement("div");
   actionsBar.className = "ai-interactive-actions";
   const planId = model.plan?.id ?? liveDetail?.id ?? "";
+  if (planId) card.dataset.aiWritePlanId = String(planId);
   actionsBar.append(actionButton("完整修改明细", "ghost-button ai-card-action", () => actions.openPlanDetail(planId)));
   if (status === "pending") {
     actionsBar.append(
@@ -329,6 +348,7 @@ function buildPlanCard(model, actions) {
     ? "确认后系统会重新校验权限、开关与目标版本，全部通过才原子执行；拒绝或过期都不会产生任何写入。"
     : (model.message || "详情与审计记录见 AI 操作审批中心。");
   card.append(note);
+  livePlanCardDefinitions.set(card, { model, actions });
   return card;
 }
 

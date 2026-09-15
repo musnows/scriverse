@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { aiFailureCode, aiQuestionDialogCanClose, normalizeAiQuestionItems, parseInteractiveToolPayload } from "../../src/public/ai-interactive.js";
+import { aiFailureCode, aiQuestionDialogCanClose, cacheAiWritePlanDetail, cachedAiWritePlanDetail, normalizeAiQuestionItems, parseInteractiveToolPayload } from "../../src/public/ai-interactive.js";
 
 describe("AI 提问工具前端载荷", () => {
   const questions = [
@@ -67,5 +67,26 @@ describe("AI 提问工具前端载荷", () => {
     expect(aiFailureCode("调用失败", { errorCode: "AI_QUESTION_PENDING" })).toBe("AI_QUESTION_PENDING");
     expect(aiFailureCode("调用失败：请先回答\n错误码：AI_QUESTION_PENDING\n服务端状态：HTTP 409")).toBe("AI_QUESTION_PENDING");
     expect(aiFailureCode("调用失败：网络错误")).toBe("");
+  });
+
+  it("审批中心的摘要状态更新不会丢失已加载的计划明细", () => {
+    const planId = "plan-status-sync-keeps-detail";
+    cacheAiWritePlanDetail({
+      id: planId,
+      status: "pending",
+      operations: [{ title: "待更新的世界设定" }]
+    });
+    cacheAiWritePlanDetail({
+      id: planId,
+      status: "executed",
+      statusLabel: "执行成功",
+      executedAt: "2026-09-15T08:00:00.000Z"
+    });
+
+    expect(cachedAiWritePlanDetail(planId)).toMatchObject({
+      status: "executed",
+      statusLabel: "执行成功",
+      operations: [{ title: "待更新的世界设定" }]
+    });
   });
 });
