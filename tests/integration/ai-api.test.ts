@@ -4693,15 +4693,22 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId,
       onToolCall: (toolCall) => toolEvents.push({ arguments: toolCall.arguments })
     }, (delta) => deltas.push(delta));
-    const safetyRelease = setTimeout(releaseFirstRound, 1_000);
-    for (let index = 0; index < 100 && firstRoundFinished === false; index += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 2));
+    try {
+      await vi.waitFor(
+        () => {
+          expect(deltas).toEqual(["我先读取目录。"]);
+        },
+        {
+          timeout: 5_000,
+          interval: 10
+        }
+      );
+
+      expect(toolEvents).toHaveLength(0);
+      expect(firstRoundFinished).toBe(false);
+    } finally {
+      releaseFirstRound();
     }
-    expect(deltas).toEqual(["我先读取目录。"]);
-    expect(toolEvents).toHaveLength(0);
-    expect(firstRoundFinished).toBe(false);
-    releaseFirstRound();
-    clearTimeout(safetyRelease);
 
     const generated = await generatedPromise;
     expect(deltas).toEqual(["我先读取目录。", "已读取", "目录。"]);
