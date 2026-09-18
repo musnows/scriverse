@@ -6,6 +6,10 @@ import sharp, { type Metadata } from "sharp";
 import { AppError } from "./errors.js";
 import { DEFAULT_ATTACHMENT_IMAGE_MAX_BYTES, formatUploadLimit } from "./upload-limits.js";
 
+if (process.platform === "win32") {
+  sharp.cache({ files: 0 });
+}
+
 const maximumPixels = 25_000_000;
 const maximumAnimationFrames = 100;
 const maximumAnimationPixels = 50_000_000;
