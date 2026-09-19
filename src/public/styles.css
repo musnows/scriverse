@@ -3129,15 +3129,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-actions { display: flex; gap: 7px; margin-top: 10px; }
 .message-actions button { border: 1px solid rgba(139,61,44,.25); background: var(--surface); color: var(--accent-dark); font-size: 10px; padding: 5px 8px; border-radius: 3px; }
 .prompt-box { border-top: 1px solid var(--line); padding-top: 12px; }
-.ai-prompt-queue { display: grid; gap: 8px; margin-bottom: 8px; padding: 8px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+.ai-prompt-queue { display: grid; gap: 6px; margin-bottom: 8px; }
 .ai-prompt-queue.hidden { display: none; }
-.ai-prompt-queue-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
-.ai-prompt-queue-header > div { display: grid; min-width: 0; gap: 2px; }
-.ai-prompt-queue-header strong { color: var(--accent-dark); font-size: 10px; }
-.ai-prompt-queue-header small { color: var(--muted); font-size: 8px; line-height: 1.45; }
-.ai-prompt-queue-count { flex: 0 0 auto; min-width: 18px; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 16%, var(--surface)); color: var(--accent-dark); font: 9px/1.4 var(--font-latin), monospace; text-align: center; }
 .ai-prompt-queue-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.ai-prompt-queue-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); }
+.ai-prompt-queue-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 7px 8px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent) 6%, var(--paper)); box-shadow: 0 8px 20px rgba(36, 30, 24, .1); }
 .ai-prompt-queue-preview { min-width: 0; margin: 0; color: var(--ink); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
 .ai-prompt-queue-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
 .ai-prompt-queue-steer, .ai-prompt-queue-send { min-height: 24px; padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 4px; background: var(--surface); color: var(--accent-dark); font-size: 9px; }

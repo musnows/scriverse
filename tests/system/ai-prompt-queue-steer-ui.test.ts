@@ -16,11 +16,15 @@ describe("AI 策略栏排队与执行流引导 UI", () => {
 
     expect(page).toContain('id="ai-prompt-queue"');
     expect(page).toContain('id="ai-prompt-queue-list"');
+    expect(page).toContain('aria-label="排队 Prompt"');
+    expect(page).not.toContain('id="ai-prompt-queue-title"');
+    expect(page).not.toContain("ai-prompt-queue-header");
+    expect(page).not.toContain("当前回复结束后按顺序发送，不会打断正在执行的回复");
     expect(page).toContain('id="ai-steer" class="ai-steer-button hidden"');
     expect(page).toContain('id="ai-stop" class="ai-stop-button hidden"');
     expect(page).toContain('aria-label="发送为引导"');
     expect(page).toContain("Enter 发送或排队，Ctrl+Enter 发送为引导");
-    expect(page).toContain("&feature=ai-prompt-queue-steer-v1");
+    expect(page).toContain("&feature=ai-prompt-queue-steer-v2");
     expect(application).toContain("/ai-prompt-queue.js?v=20260919-ai-prompt-queue-v1");
     expect(application).toContain("function queueActiveComposerPrompt()");
     expect(application).toContain("function sendQueuedPromptAsSteer(itemId)");
@@ -35,6 +39,9 @@ describe("AI 策略栏排队与执行流引导 UI", () => {
     expect(application).not.toContain("promoteNow");
     expect(keyboard).toContain("export function shouldSteerAiPrompt(event)");
     expect(styles).toContain(".ai-prompt-queue ");
+    expect(styles).toContain(".ai-prompt-queue-item ");
+    expect(styles).not.toContain(".ai-prompt-queue-header");
+    expect(styles).not.toContain(".ai-prompt-queue-count");
     expect(styles).toContain(".ai-steer-button ");
     expect(styles).toContain(".ai-stop-button ");
     expect(styles).toContain(".ai-send-button.is-queue");
@@ -60,7 +67,8 @@ describe("AI 策略栏排队与执行流引导 UI", () => {
       expect(queue.text).toContain("export function canSendQueuedPromptAsSteer");
       expect(keyboard.text).toContain("export function shouldSteerAiPrompt");
       expect(page.text).toContain('id="ai-prompt-queue"');
-      expect(page.text).toContain("&feature=ai-prompt-queue-steer-v1");
+      expect(page.text).not.toContain('id="ai-prompt-queue-title"');
+      expect(page.text).toContain("&feature=ai-prompt-queue-steer-v2");
     } finally {
       await runtime.close();
     }

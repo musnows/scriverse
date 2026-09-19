@@ -835,13 +835,11 @@ function renderAiPromptQueue() {
   const tab = activeAiChatTab();
   const panel = $("#ai-prompt-queue");
   const list = $("#ai-prompt-queue-list");
-  const count = $("#ai-prompt-queue-count");
-  if (!panel || !list || !count) return;
+  if (!panel || !list) return;
   const items = tab ? aiPromptQueue.list(tab.id) : [];
   const streaming = Boolean(tab && aiRequestManager.hasActive(tab.id));
   const aiReadOnly = Boolean(state.work) && !canWritePermissionModule(state.work, "ai-chat");
   panel.classList.toggle("hidden", items.length === 0);
-  count.textContent = String(items.length);
   list.replaceChildren(...items.map((item) => {
     const row = document.createElement("li");
     row.className = "ai-prompt-queue-item";
