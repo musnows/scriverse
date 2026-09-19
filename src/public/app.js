@@ -39,7 +39,8 @@ import {
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260822-ai-model-thinking-label-v3&feature=ai-provider-responses-v1&feature=semantic-search-v6";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260822-private-ai-endpoint-hint-v1";
-import { shouldSendAiPrompt, shouldSteerAiPrompt } from "/ai-prompt-keyboard.js?v=20260919-ai-steer-v1";
+import { shouldActivateAiSendControl, shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260919-ai-send-mode-v1";
+import { aiSendModeAction, normalizeAiSendMode, readStoredAiSendMode, writeStoredAiSendMode } from "/ai-send-mode.js?v=20260919-ai-send-mode-v1";
 import {
   aiPromptQueueDragPayload,
   aiPromptQueuePreview,
@@ -549,7 +550,7 @@ function applyWorkAccessMode() {
   }
   applyChapterEditorMode();
   $("#ai-stop").classList.toggle("permission-hidden", aiReadOnly);
-  $("#ai-steer").classList.toggle("permission-hidden", aiReadOnly);
+  syncAiSendModeControl();
 }
 
 const $ = (selector) => document.querySelector(selector);
@@ -699,6 +700,29 @@ function aiSendButtonIconMarkup(stateName) {
     : '<svg class="ai-send-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 3 9.5 14.5M21 3l-7 18-4.5-6.5L3 10l18-7Z"></path></svg>';
 }
 
+function applyAiSendModeFromStorage() {
+  const select = $("#ai-send-mode");
+  if (!select) return;
+  select.value = readStoredAiSendMode(localStorage);
+  syncAiSendModeControl();
+}
+
+function aiComposerSendMode() {
+  return normalizeAiSendMode($("#ai-send-mode")?.value);
+}
+
+function syncAiSendModeControl() {
+  const select = $("#ai-send-mode");
+  if (!select) return;
+  const mode = normalizeAiSendMode(select.value);
+  if (select.value !== mode) select.value = mode;
+  const aiReadOnly = Boolean(state.work) && !canWritePermissionModule(state.work, "ai-chat");
+  select.disabled = aiReadOnly;
+  select.title = mode === "steer"
+    ? "引导发送：生成中点击发送会立即作用于当前执行流，不会打断本轮"
+    : "排队发送：生成中点击发送会加入队列，当前回复结束后按顺序发送，不会打断正在执行的回复";
+}
+
 function syncAiRequestControls() {
   const activeTabId = activeAiChatTab()?.id;
   const continuingQuestion = activeTabId ? aiQuestionContinuationTabIds.has(activeTabId) : false;
@@ -706,24 +730,30 @@ function syncAiRequestControls() {
   const switching = aiConversationNavigationPending !== null;
   const button = $("#ai-send");
   const stopButton = $("#ai-stop");
-  const steerButton = $("#ai-steer");
-  const stateName = sending ? "queue" : (switching || continuingQuestion) ? "switching" : "send";
-  const label = sending
+  const sendAction = aiSendModeAction(aiComposerSendMode(), sending);
+  const stateName = sendAction === "queue" || sendAction === "steer"
+    ? sendAction
+    : (switching || continuingQuestion) ? "switching" : "send";
+  const label = sendAction === "queue"
     ? "排队发送"
-    : continuingQuestion ? "AI 正在根据回答继续处理"
-      : switching ? "正在切换对话" : "发送消息";
+    : sendAction === "steer" ? "引导发送"
+      : continuingQuestion ? "AI 正在根据回答继续处理"
+        : switching ? "正在切换对话" : "发送消息";
   button.disabled = switching || continuingQuestion;
   button.dataset.state = stateName;
   button.classList.toggle("is-stop", false);
-  button.classList.toggle("is-queue", sending);
+  button.classList.toggle("is-queue", sendAction === "queue");
   button.setAttribute("aria-label", label);
-  button.title = sending ? "排队发送，当前回复结束后按顺序发送，不会打断正在执行的回复" : label;
-  button.innerHTML = aiSendButtonIconMarkup(stateName);
+  button.title = sendAction === "queue"
+    ? "排队发送，当前回复结束后按顺序发送，不会打断正在执行的回复"
+    : sendAction === "steer"
+      ? "引导发送，立即作用于当前执行流，不会打断本轮"
+      : label;
+  button.innerHTML = aiSendButtonIconMarkup(stateName === "steer" ? "send" : stateName);
   stopButton.disabled = switching || continuingQuestion;
   stopButton.classList.toggle("hidden", !sending);
-  steerButton.disabled = switching || continuingQuestion;
-  steerButton.classList.toggle("hidden", !sending);
   $(".prompt-composer")?.classList.toggle("is-streaming", sending);
+  syncAiSendModeControl();
   syncAiTaskOptions();
   renderAiRoleplayCharacterSelect();
   syncAiImageAttachmentControl();
@@ -739,6 +769,10 @@ function cancelActiveAiRequest(reason) {
 function activateAiSendControl() {
   const tab = activeAiChatTab();
   if (aiRequestManager.hasActive(tab?.id)) {
+    if (aiComposerSendMode() === "steer") {
+      void sendActiveComposerAsSteer();
+      return;
+    }
     queueActiveComposerPrompt();
     return;
   }
@@ -21889,7 +21923,11 @@ $("#ai-context-popover-close").addEventListener("click", () => setAiContextDistr
 $("#ai-citation-popover-close").addEventListener("click", () => closeAiCitationPopover({ restoreFocus: true }));
 $("#ai-send").addEventListener("click", activateAiSendControl);
 $("#ai-stop").addEventListener("click", activateAiStopControl);
-$("#ai-steer").addEventListener("click", () => { void sendActiveComposerAsSteer(); });
+$("#ai-send-mode").addEventListener("change", (event) => {
+  writeStoredAiSendMode(localStorage, event.currentTarget.value);
+  syncAiRequestControls();
+});
+applyAiSendModeFromStorage();
 $("#ai-conversation-switcher").addEventListener("click", () => {
   setAiConversationSwitcherVisible($("#ai-conversation-switcher-menu").classList.contains("hidden"));
 });
@@ -22233,18 +22271,9 @@ $("#ai-prompt").addEventListener("keydown", (event) => {
       return;
     }
   }
-  if (shouldSteerAiPrompt(event)) {
+  if (shouldActivateAiSendControl(event)) {
     event.preventDefault();
-    if (!$("#ai-steer").disabled && !$("#ai-steer").classList.contains("hidden")) void sendActiveComposerAsSteer();
-    else if (!$("#ai-send").disabled) void sendAi();
-    return;
-  }
-  if (shouldSendAiPrompt(event)) {
-    event.preventDefault();
-    if (!$("#ai-send").disabled) {
-      if (aiRequestManager.hasActive(activeAiChatTab()?.id)) queueActiveComposerPrompt();
-      else void sendAi();
-    }
+    if (!$("#ai-send").disabled) activateAiSendControl();
   }
 });
 $(".quick-actions").addEventListener("click", (event) => {

@@ -15,10 +15,11 @@ describe("AI 对话发送与终止按钮", () => {
     expect(page).toContain("&feature=phone-client-entry-v1");
     expect(page).toContain('class="ai-send-button-icon"');
     expect(application).toContain("function aiSendButtonIconMarkup(stateName)");
-    expect(application).toContain('const stateName = sending ? "queue" : (switching || continuingQuestion) ? "switching" : "send";');
+    expect(application).toContain("const sendAction = aiSendModeAction(aiComposerSendMode(), sending)");
     expect(application).toContain("button.disabled = switching || continuingQuestion;");
-    expect(application).toContain('button.classList.toggle("is-queue", sending);');
+    expect(application).toContain('button.classList.toggle("is-queue", sendAction === "queue")');
     expect(application).toContain('? "排队发送"');
+    expect(application).toContain('? "引导发送"');
     expect(page).toContain('id="ai-stop" class="ai-stop-button hidden"');
     expect(application).toContain("function activateAiStopControl()");
     expect(styles).toContain(".ai-send-button-icon { width: 14px; height: 14px;");
@@ -53,6 +54,7 @@ describe("AI 对话发送与终止按钮", () => {
     expect(application).toContain('$("#ai-stop").addEventListener("click", activateAiStopControl);');
     expect(application).toContain("if (aiRequestManager.hasActive(tab.id)) return;");
     expect(application).toContain("queueActiveComposerPrompt()");
+    expect(application).toContain("if (aiComposerSendMode() === \"steer\")");
     expect(application).toContain('request.signal.reason.message === "用户已终止当前回复"');
     expect(application).toContain('const cancelledByClient = request.signal.reason?.code === "AI_REQUEST_CANCELLED";');
     expect(application).toContain('if (code === "AI_REQUEST_CANCELLED") return "已终止";');
