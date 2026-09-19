@@ -87,6 +87,28 @@ const mockAi = createServer(async (request, response) => {
     response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "已收到的部分回复会被保留。" } }] })}\n\n`);
     return;
   }
+  if (joined.includes("【执行流引导】")) {
+    sendCompletion(response, { content: "已按引导改成沈星视角，沈星站在甲板上继续写港口。" });
+    return;
+  }
+  if (
+    latestUserMessage.includes("浏览器排队引导测试")
+    || latestUserMessage.includes("浏览器执行流引导测试")
+  ) {
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive"
+    });
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "北港夜色铺开。" } }] })}\n\n`);
+    const keepAliveTimer = setInterval(() => {
+      if (!response.destroyed && !response.writableEnded) response.write(": keepalive\n\n");
+    }, 500);
+    const stop = () => clearInterval(keepAliveTimer);
+    request.once("aborted", stop);
+    response.once("close", stop);
+    return;
+  }
   if (latestUserMessage.includes("浏览器终止思考保留测试")) {
     response.writeHead(200, {
       "Content-Type": "text/event-stream",

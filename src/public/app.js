@@ -39,7 +39,13 @@ import {
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260822-ai-model-thinking-label-v3&feature=ai-provider-responses-v1&feature=semantic-search-v6";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260822-private-ai-endpoint-hint-v1";
-import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
+import { shouldSendAiPrompt, shouldSteerAiPrompt } from "/ai-prompt-keyboard.js?v=20260919-ai-steer-v1";
+import {
+  aiPromptQueuePreview,
+  canSendQueuedPromptAsSteer,
+  createAiPromptQueue,
+  queuedPromptSteerContent
+} from "/ai-prompt-queue.js?v=20260919-ai-prompt-queue-v1";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
 import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260912-stream-render-v2";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
@@ -251,6 +257,8 @@ const state = {
 let platformAiProtocolOptions = [];
 
 const aiRequestManager = createAiRequestManager();
+const aiPromptQueue = createAiPromptQueue();
+let pendingQueuedComposer = null;
 const aiChatTabManager = createAiChatTabManager(() => createAiIdempotencyKey());
 const moduleRequestCache = createModuleRequestCache();
 const cachedWorkModules = new Set([
@@ -533,6 +541,8 @@ function applyWorkAccessMode() {
     state.dirty = false;
   }
   applyChapterEditorMode();
+  $("#ai-stop").classList.toggle("permission-hidden", aiReadOnly);
+  $("#ai-steer").classList.toggle("permission-hidden", aiReadOnly);
 }
 
 const $ = (selector) => document.querySelector(selector);
@@ -674,6 +684,9 @@ function aiInteractionBusy() {
 }
 
 function aiSendButtonIconMarkup(stateName) {
+  if (stateName === "queue") {
+    return '<svg class="ai-send-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 7h11M5 12h8M5 17h11"></path><path d="M16 10v7M12.5 13.5H19.5"></path></svg>';
+  }
   return stateName === "stop"
     ? '<svg class="ai-send-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="6" y="6" width="12" height="12" rx="1.5"></rect></svg>'
     : '<svg class="ai-send-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 3 9.5 14.5M21 3l-7 18-4.5-6.5L3 10l18-7Z"></path></svg>';
@@ -685,17 +698,29 @@ function syncAiRequestControls() {
   const sending = aiRequestManager.hasActive(activeTabId) && !continuingQuestion;
   const switching = aiConversationNavigationPending !== null;
   const button = $("#ai-send");
-  const stateName = sending ? "stop" : (switching || continuingQuestion) ? "switching" : "send";
-  const label = sending ? "终止当前回复" : continuingQuestion ? "AI 正在根据回答继续处理" : switching ? "正在切换对话" : "发送消息";
+  const stopButton = $("#ai-stop");
+  const steerButton = $("#ai-steer");
+  const stateName = sending ? "queue" : (switching || continuingQuestion) ? "switching" : "send";
+  const label = sending
+    ? "排队发送"
+    : continuingQuestion ? "AI 正在根据回答继续处理"
+      : switching ? "正在切换对话" : "发送消息";
   button.disabled = switching || continuingQuestion;
   button.dataset.state = stateName;
-  button.classList.toggle("is-stop", sending);
+  button.classList.toggle("is-stop", false);
+  button.classList.toggle("is-queue", sending);
   button.setAttribute("aria-label", label);
-  button.title = label;
+  button.title = sending ? "排队发送，当前回复结束后按顺序发送，不会打断正在执行的回复" : label;
   button.innerHTML = aiSendButtonIconMarkup(stateName);
+  stopButton.disabled = switching || continuingQuestion;
+  stopButton.classList.toggle("hidden", !sending);
+  steerButton.disabled = switching || continuingQuestion;
+  steerButton.classList.toggle("hidden", !sending);
+  $(".prompt-composer")?.classList.toggle("is-streaming", sending);
   syncAiTaskOptions();
   renderAiRoleplayCharacterSelect();
   syncAiImageAttachmentControl();
+  renderAiPromptQueue();
 }
 
 function cancelActiveAiRequest(reason) {
@@ -707,13 +732,155 @@ function cancelActiveAiRequest(reason) {
 function activateAiSendControl() {
   const tab = activeAiChatTab();
   if (aiRequestManager.hasActive(tab?.id)) {
-    if (cancelActiveAiRequest("用户已终止当前回复")) {
-      toast("已终止当前回复，可以重新发送");
-      $("#ai-prompt").focus();
-    }
+    queueActiveComposerPrompt();
     return;
   }
   void sendAi();
+}
+
+function activateAiStopControl() {
+  if (cancelActiveAiRequest("用户已终止当前回复")) {
+    toast("已终止当前回复，排队 Prompt 仍会保留");
+    $("#ai-prompt").focus();
+  }
+}
+
+function activeAiConversationId(tab = activeAiChatTab()) {
+  return String(tab?.conversationId ?? state.aiConversationId ?? "").trim();
+}
+
+function queueActiveComposerPrompt() {
+  const tab = activeAiChatTab();
+  if (!tab) return toast("Agent 对话页签尚未就绪", "error");
+  const snapshot = captureAiPromptComposer();
+  try {
+    aiPromptQueue.enqueue(tab.id, snapshot);
+  } catch (error) {
+    return toast(error.message, "error");
+  }
+  clearAiPromptComposer({ collapseScenePanel: Boolean(snapshot.sceneDirection) });
+  persistActiveAiChatTab();
+  renderAiPromptQueue();
+  toast("已加入排队，当前回复结束后发送");
+  $("#ai-prompt").focus();
+}
+
+async function postAiConversationSteer(conversationId, content) {
+  const id = String(conversationId ?? "").trim();
+  if (!id) throw new Error("当前对话尚未开始，无法发送引导");
+  return api(`/api/ai-conversations/${encodeURIComponent(id)}/steer`, {
+    method: "POST",
+    body: { content }
+  });
+}
+
+async function sendActiveComposerAsSteer() {
+  const tab = activeAiChatTab();
+  if (!tab) return toast("Agent 对话页签尚未就绪", "error");
+  if (!aiRequestManager.hasActive(tab.id)) return toast("当前没有正在执行的回复，无法发送引导", "error");
+  const snapshot = captureAiPromptComposer();
+  const content = queuedPromptSteerContent(snapshot);
+  if (!content) {
+    return toast($("#ai-task").value === "roleplay" ? "请输入台词或场景旁白" : "请输入引导内容", "error");
+  }
+  try {
+    await postAiConversationSteer(activeAiConversationId(tab), content);
+  } catch (error) {
+    return toast(error.message, "error");
+  }
+  clearAiPromptComposer({ collapseScenePanel: Boolean(snapshot.sceneDirection) });
+  toast("已发送执行流引导");
+  $("#ai-prompt").focus();
+}
+
+async function sendQueuedPromptAsSteer(itemId) {
+  const tab = activeAiChatTab();
+  if (!tab) return;
+  const item = aiPromptQueue.list(tab.id).find((entry) => entry.id === itemId);
+  if (!canSendQueuedPromptAsSteer(item, aiRequestManager.hasActive(tab.id))) {
+    return toast("当前没有正在执行的回复，无法发送引导", "error");
+  }
+  try {
+    await postAiConversationSteer(activeAiConversationId(tab), queuedPromptSteerContent(item));
+  } catch (error) {
+    return toast(error.message, "error");
+  }
+  aiPromptQueue.remove(tab.id, itemId);
+  renderAiPromptQueue();
+  toast("已将排队 Prompt 发送为引导");
+}
+
+function sendQueuedPromptNow(itemId) {
+  const tab = activeAiChatTab();
+  if (!tab || aiRequestManager.hasActive(tab.id)) return;
+  const item = aiPromptQueue.list(tab.id).find((entry) => entry.id === itemId);
+  if (!item) return;
+  pendingQueuedComposer = item;
+  void sendAiWithOptions();
+}
+
+function flushNextQueuedPrompt(tab) {
+  if (!tab || !isActiveAiChatTab(tab) || aiRequestManager.hasActive(tab.id) || aiQuestionContinuationTabIds.has(tab.id)) {
+    renderAiPromptQueue();
+    return;
+  }
+  const next = aiPromptQueue.list(tab.id)[0];
+  renderAiPromptQueue();
+  if (!next) return;
+  pendingQueuedComposer = next;
+  void sendAiWithOptions();
+}
+
+function renderAiPromptQueue() {
+  const tab = activeAiChatTab();
+  const panel = $("#ai-prompt-queue");
+  const list = $("#ai-prompt-queue-list");
+  const count = $("#ai-prompt-queue-count");
+  if (!panel || !list || !count) return;
+  const items = tab ? aiPromptQueue.list(tab.id) : [];
+  const streaming = Boolean(tab && aiRequestManager.hasActive(tab.id));
+  const aiReadOnly = Boolean(state.work) && !canWritePermissionModule(state.work, "ai-chat");
+  panel.classList.toggle("hidden", items.length === 0);
+  count.textContent = String(items.length);
+  list.replaceChildren(...items.map((item) => {
+    const row = document.createElement("li");
+    row.className = "ai-prompt-queue-item";
+    row.dataset.queueId = item.id;
+    const preview = document.createElement("p");
+    preview.className = "ai-prompt-queue-preview";
+    const previewText = aiPromptQueuePreview(queuedPromptSteerContent(item) || item.text);
+    preview.textContent = previewText;
+    preview.title = queuedPromptSteerContent(item) || item.text;
+    const actions = document.createElement("div");
+    actions.className = "ai-prompt-queue-actions";
+    const primary = document.createElement("button");
+    primary.type = "button";
+    if (streaming) {
+      primary.className = "ai-prompt-queue-steer";
+      primary.textContent = "发送为引导";
+      primary.disabled = aiReadOnly || !canSendQueuedPromptAsSteer(item, true);
+      primary.setAttribute("aria-label", `将排队 Prompt 发送为引导：${previewText}`);
+      primary.addEventListener("click", () => { void sendQueuedPromptAsSteer(item.id); });
+    } else {
+      primary.className = "ai-prompt-queue-send";
+      primary.textContent = "现在发送";
+      primary.disabled = aiReadOnly;
+      primary.setAttribute("aria-label", `现在发送排队 Prompt：${previewText}`);
+      primary.addEventListener("click", () => sendQueuedPromptNow(item.id));
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ai-prompt-queue-remove";
+    remove.setAttribute("aria-label", `移除排队 Prompt：${previewText}`);
+    remove.textContent = "×";
+    remove.addEventListener("click", () => {
+      aiPromptQueue.remove(tab.id, item.id);
+      renderAiPromptQueue();
+    });
+    actions.append(primary, remove);
+    row.append(preview, actions);
+    return row;
+  }));
 }
 
 function beginAiConversationNavigation(reason, action = "切换会话") {
@@ -18505,6 +18672,8 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
   if (!tab) return toast("Agent 对话页签尚未就绪", "error");
   if (aiRequestManager.hasActive(tab.id)) return;
   if (aiQuestionContinuationTabIds.has(tab.id)) return toast("AI 正在根据你的回答继续处理，请稍候");
+  const queuedComposer = pendingQueuedComposer;
+  pendingQueuedComposer = null;
   const composerSnapshot = captureAiPromptComposer();
   const requestComposerSnapshot = retry
     ? {
@@ -18516,7 +18685,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
       sceneDirection: retry.sceneDirection ?? "",
       scenePin: captureAiScenePin()
     }
-    : composerSnapshot;
+    : queuedComposer ?? composerSnapshot;
   const instruction = String(requestComposerSnapshot.markup ?? requestComposerSnapshot.text).trim();
   const instructionText = String(requestComposerSnapshot.text ?? "").trim();
   const sceneDirection = $("#ai-task").value === "roleplay"
@@ -18531,6 +18700,10 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
   if ($("#ai-task").value === "roleplay" && !state.aiRoleplayCharacter) return toast("请先选择角色卡", "error");
   const requestScope = currentAiRequestScope();
   if (!requestScope) return toast("请先选择章节", "error");
+  if (queuedComposer) {
+    aiPromptQueue.remove(tab.id, queuedComposer.id);
+    renderAiPromptQueue();
+  }
   const { scope } = requestScope;
   const citations = requestComposerSnapshot.citations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
   const selectedTaskType = $("#ai-task").value;
@@ -18541,7 +18714,8 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
       tabId: tab.id,
       workId: state.work.id,
       conversationId: state.aiConversationId
-    })
+    }),
+    preserveComposer: Boolean(queuedComposer)
   };
   if (retry?.userMessageId) {
     requestHolder.snapshot = aiRequestManager.bind(requestHolder.snapshot, { userMessageId: retry.userMessageId });
@@ -18549,6 +18723,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
   setAiChatTabStatus(tab, "streaming");
   syncAiRequestControls();
   scrollAiFeedToBottom(tab.feed, { force: true });
+  let shouldFlushQueuedPrompt = false;
   try {
     try {
       await ensureAiModelsLoaded();
@@ -18593,6 +18768,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
     const streamedRequest = assertAiRequestCurrent(requestHolder.snapshot);
     if (streamed.action === "warn") return;
     assistantContent = streamed.content;
+    shouldFlushQueuedPrompt = true;
     assistantMessage = streamed.message;
     assistantMetadata = streamed.metadata;
     persistedStreamMessage = streamed.messageId ? { id: streamed.messageId, createdAt: streamed.createdAt } : null;
@@ -18723,6 +18899,18 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
     if (tab.status === "streaming") setAiChatTabStatus(tab, "ready");
     else renderAiChatTabs();
     if (isActiveAiChatTab(tab)) syncAiRequestControls();
+    if (queuedComposer && !shouldFlushQueuedPrompt) {
+      const stillQueued = aiPromptQueue.list(tab.id).some((item) => item.id === queuedComposer.id);
+      if (!stillQueued) {
+        try {
+          aiPromptQueue.restore(tab.id, queuedComposer, 0);
+        } catch {
+          /* 失败时尽量把未发出的排队 Prompt 放回队首，超限则保留当前队列。 */
+        }
+        renderAiPromptQueue();
+      }
+    }
+    if (shouldFlushQueuedPrompt) flushNextQueuedPrompt(tab);
   }
 }
 
@@ -18742,13 +18930,13 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
   const tab = aiChatTabForRequest(requestHolder.snapshot);
   if (!tab) throw createAiRequestAbortError("Agent 对话页签已关闭");
   const feed = tab.feed;
-  const message = document.createElement("div");
+  let message = document.createElement("div");
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
   const streamConnectionStartedAt = Date.now();
   message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流…… <span class="ai-stream-connection-seconds" data-testid="ai-stream-connection-seconds"></span> 秒</div>';
-  const content = message.querySelector(".message-body");
-  const meta = message.querySelector(".message-meta");
+  let content = message.querySelector(".message-body");
+  let meta = message.querySelector(".message-meta");
   const connectionSeconds = message.querySelector(".ai-stream-connection-seconds");
   const renderStreamConnectionElapsed = () => {
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - streamConnectionStartedAt) / 1000));
@@ -18773,7 +18961,7 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
     scrollAiFeedToBottom(feed);
     return true;
   };
-  const typewriter = createStreamTypewriter({
+  const createAssistantTypewriter = () => createStreamTypewriter({
     speedController: streamSpeedController,
     shouldAnimate: () => aiStreamTargetVisible(feed),
     onRender: (text, progress) => {
@@ -18786,6 +18974,7 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
       });
     }
   });
+  let typewriter = createAssistantTypewriter();
   let streamedText = "";
   let streamedPendingText = "";
   let generatedMetadata = {};
@@ -18806,8 +18995,9 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
   const processStepVisibleContents = new Map();
   const renderStreamingProcessSteps = (completed, durationMs = elapsedProcessTime()) => {
     if (!aiRequestTargetsCurrentState(requestHolder.snapshot)) return;
-    aiStreamRenders.enqueue(message, () => {
-      renderAiProcessSteps(message, processSteps, completed, durationMs, processStepVisibleContents);
+    const target = message;
+    aiStreamRenders.enqueue(target, () => {
+      renderAiProcessSteps(target, processSteps, completed, durationMs, processStepVisibleContents);
       scrollAiFeedToBottom(feed);
     });
   };
@@ -18832,6 +19022,45 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
   const revealProcessStepTypewriters = () => {
     for (const typewriter of processStepTypewriters.values()) typewriter.reveal();
   };
+  const beginSteeredAssistantSegment = async (steerPayload) => {
+    await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
+    if (messageMounted) {
+      message.classList.remove("is-streaming");
+      content.setAttribute("aria-busy", "false");
+      const headingRole = message.querySelector(".message-heading > span");
+      if (headingRole) headingRole.textContent = aiAssistantLabel("", tab.roleplayCharacter);
+      renderStreamingProcessSteps(true);
+      if (streamedText) attachAssistantCopyAction(message, streamedText);
+    }
+    const steerMessage = steerPayload?.message;
+    if (steerMessage?.id) {
+      updateAiConversationSummaryFromMessage(steerMessage);
+      const existingSteerMessage = [...tab.feed.querySelectorAll(".user-message[data-message-id]")]
+        .find((candidate) => candidate.dataset.messageId === String(steerMessage.id));
+      if (!existingSteerMessage) {
+        appendMessage("user", steerMessage.content, steerMessage.citations, steerMessage.createdAt, {
+          ...steerMessage.metadata,
+          kind: "steer"
+        }, steerMessage.id, { tab });
+      }
+    }
+    streamedText = "";
+    streamedPendingText = "";
+    toolCalls = [];
+    processSteps = [];
+    processStepTypewriters.clear();
+    processStepVisibleContents.clear();
+    message = document.createElement("div");
+    message.className = "assistant-message is-streaming";
+    message.dataset.testid = "ai-stream-message";
+    message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">已收到执行流引导，正在继续生成</div>';
+    content = message.querySelector(".message-body");
+    meta = message.querySelector(".message-meta");
+    messageMounted = false;
+    typewriter = createAssistantTypewriter();
+    mountAssistantMessage();
+    scrollAiFeedToBottom(feed);
+  };
   try {
     const request = assertAiRequestCurrent(requestHolder.snapshot);
     const response = await fetch(endpoint ?? `/api/works/${encodeURIComponent(request.workId)}/chat/stream`, {
@@ -18848,7 +19077,7 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
     let streamError = null;
     const consume = async (eventName, payload) => {
       assertAiRequestCurrent(requestHolder.snapshot);
-      if (streamConnectionEstablishedEvents.has(eventName)) stopStreamConnectionTimer();
+      if (streamConnectionEstablishedEvents.has(eventName) || eventName === "steer") stopStreamConnectionTimer();
       if (eventName === "continuation") {
         if (String(payload.conversationId ?? "") !== requestHolder.snapshot.conversationId) throw new Error("流式续接返回了其他对话");
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : [];
@@ -18898,7 +19127,7 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
           tab.hasImageAttachments = tab.hasImageAttachments === true || aiConversationMessageHasImages(persistedUserMessage);
           tab.selectedModelId = lockedModelId;
           tab.promptSent = true;
-          clearAiChatTabComposer(tab);
+          if (!requestHolder.preserveComposer) clearAiChatTabComposer(tab);
           const existingUserMessage = [...tab.feed.querySelectorAll(".user-message[data-message-id]")]
             .find((candidate) => candidate.dataset.messageId === String(persistedUserMessage.id));
           if (!existingUserMessage) {
@@ -18911,10 +19140,14 @@ async function streamChat(requestHolder, body, idempotencyKey, { endpoint = null
             syncAiTaskOptions();
             renderAiRoleplayCharacterSelect();
             renderAiQuickActions();
-            clearAiPromptComposer({ collapseScenePanel: Boolean(String(body.sceneDirection ?? "").trim()) });
+            if (!requestHolder.preserveComposer) {
+              clearAiPromptComposer({ collapseScenePanel: Boolean(String(body.sceneDirection ?? "").trim()) });
+            }
           }
           mountAssistantMessage();
         }
+      } else if (eventName === "steer") {
+        await beginSteeredAssistantSegment(payload);
       } else if (eventName === "delta") {
         mountAssistantMessage();
         const delta = typeof payload.delta === "string" ? payload.delta : "";
@@ -19125,6 +19358,14 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     failureBadge.textContent = isInterrupted ? "中断" : "失败";
     failureBadge.setAttribute("aria-label", `消息状态：${isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : "失败"}`);
     heading.firstElementChild?.append(failureBadge);
+  }
+  if (role === "user" && metadata?.kind === "steer") {
+    message.classList.add("is-steer");
+    const steerBadge = document.createElement("strong");
+    steerBadge.className = "ai-message-status is-steer";
+    steerBadge.textContent = "引导";
+    steerBadge.setAttribute("aria-label", "消息类型：执行流引导");
+    heading.firstElementChild?.append(steerBadge);
   }
   if (parsedUserTurn?.hasMarkup && parsedUserTurn.sceneDirection) {
     const scene = document.createElement("div");
@@ -21426,6 +21667,8 @@ $("#ai-context-meter").addEventListener("click", () => {
 $("#ai-context-popover-close").addEventListener("click", () => setAiContextDistributionVisible(false));
 $("#ai-citation-popover-close").addEventListener("click", () => closeAiCitationPopover({ restoreFocus: true }));
 $("#ai-send").addEventListener("click", activateAiSendControl);
+$("#ai-stop").addEventListener("click", activateAiStopControl);
+$("#ai-steer").addEventListener("click", () => { void sendActiveComposerAsSteer(); });
 $("#ai-conversation-switcher").addEventListener("click", () => {
   setAiConversationSwitcherVisible($("#ai-conversation-switcher-menu").classList.contains("hidden"));
 });
@@ -21769,9 +22012,18 @@ $("#ai-prompt").addEventListener("keydown", (event) => {
       return;
     }
   }
+  if (shouldSteerAiPrompt(event)) {
+    event.preventDefault();
+    if (!$("#ai-steer").disabled && !$("#ai-steer").classList.contains("hidden")) void sendActiveComposerAsSteer();
+    else if (!$("#ai-send").disabled) void sendAi();
+    return;
+  }
   if (shouldSendAiPrompt(event)) {
     event.preventDefault();
-    if (!$("#ai-send").disabled && !aiRequestManager.hasActive(activeAiChatTab()?.id)) void sendAi();
+    if (!$("#ai-send").disabled) {
+      if (aiRequestManager.hasActive(activeAiChatTab()?.id)) queueActiveComposerPrompt();
+      else void sendAi();
+    }
   }
 });
 $(".quick-actions").addEventListener("click", (event) => {
