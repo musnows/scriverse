@@ -24,14 +24,20 @@ describe("AI 策略栏排队与执行流引导 UI", () => {
     expect(page).toContain('id="ai-stop" class="ai-stop-button hidden"');
     expect(page).toContain('aria-label="发送为引导"');
     expect(page).toContain("Enter 发送或排队，Ctrl+Enter 发送为引导");
-    expect(page).toContain("&feature=ai-prompt-queue-steer-v2");
-    expect(application).toContain("/ai-prompt-queue.js?v=20260919-ai-prompt-queue-v1");
+    expect(page).toContain("&feature=ai-prompt-queue-steer-v3");
+    expect(application).toContain("/ai-prompt-queue.js?v=20260919-ai-prompt-queue-v2");
     expect(application).toContain("function queueActiveComposerPrompt()");
     expect(application).toContain("function sendQueuedPromptAsSteer(itemId)");
     expect(application).toContain("function sendActiveComposerAsSteer()");
     expect(application).toContain("aiPromptQueue.restore(tab.id, queuedComposer, 0)");
-    expect(application).toContain('primary.textContent = "发送为引导"');
+    expect(application).toContain('primary.textContent = "立即引导"');
+    expect(application).not.toContain('primary.textContent = "发送为引导"');
     expect(application).toContain('primary.textContent = "现在发送"');
+    expect(application).toContain("function beginAiPromptQueueEdit(item)");
+    expect(application).toContain("function moveAiPromptQueueItem(sourceId, targetId, placeAfter)");
+    expect(application).toContain("ai-prompt-queue-editor");
+    expect(application).toContain("aiPromptQueue.update(tab.id, itemId, queuedPromptEditPatch(item, value))");
+    expect(application).toContain("aiPromptQueue.move(tab.id, sourceId, targetId, placeAfter)");
     expect(application).toContain('const stateName = sending ? "queue"');
     expect(application).not.toContain('const stateName = sending ? "stop"');
     expect(application).toContain("queueActiveComposerPrompt()");
@@ -39,7 +45,9 @@ describe("AI 策略栏排队与执行流引导 UI", () => {
     expect(application).not.toContain("promoteNow");
     expect(keyboard).toContain("export function shouldSteerAiPrompt(event)");
     expect(styles).toContain(".ai-prompt-queue ");
-    expect(styles).toContain(".ai-prompt-queue-item ");
+    expect(styles).toContain(".ai-prompt-queue-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;");
+    expect(styles).toContain(".ai-prompt-queue-item.is-drag-over");
+    expect(styles).toContain(".ai-prompt-queue-editor ");
     expect(styles).not.toContain(".ai-prompt-queue-header");
     expect(styles).not.toContain(".ai-prompt-queue-count");
     expect(styles).toContain(".ai-steer-button ");
@@ -65,10 +73,12 @@ describe("AI 策略栏排队与执行流引导 UI", () => {
         request(runtime.app).get("/").expect(200)
       ]);
       expect(queue.text).toContain("export function canSendQueuedPromptAsSteer");
+      expect(queue.text).toContain("export function moveQueuedPromptItem");
+      expect(queue.text).toContain("export function queuedPromptEditPatch");
       expect(keyboard.text).toContain("export function shouldSteerAiPrompt");
       expect(page.text).toContain('id="ai-prompt-queue"');
       expect(page.text).not.toContain('id="ai-prompt-queue-title"');
-      expect(page.text).toContain("&feature=ai-prompt-queue-steer-v2");
+      expect(page.text).toContain("&feature=ai-prompt-queue-steer-v3");
     } finally {
       await runtime.close();
     }

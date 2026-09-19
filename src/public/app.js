@@ -41,11 +41,15 @@ import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260822-private-ai-endpoint-hint-v1";
 import { shouldSendAiPrompt, shouldSteerAiPrompt } from "/ai-prompt-keyboard.js?v=20260919-ai-steer-v1";
 import {
+  aiPromptQueueDragPayload,
   aiPromptQueuePreview,
   canSendQueuedPromptAsSteer,
   createAiPromptQueue,
+  parseAiPromptQueueDragPayload,
+  queuedPromptEditContent,
+  queuedPromptEditPatch,
   queuedPromptSteerContent
-} from "/ai-prompt-queue.js?v=20260919-ai-prompt-queue-v1";
+} from "/ai-prompt-queue.js?v=20260919-ai-prompt-queue-v2";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
 import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260912-stream-render-v2";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
@@ -259,6 +263,9 @@ let platformAiProtocolOptions = [];
 const aiRequestManager = createAiRequestManager();
 const aiPromptQueue = createAiPromptQueue();
 let pendingQueuedComposer = null;
+let aiPromptQueueDidDrag = false;
+let aiPromptQueueEditorState = null;
+let aiPromptQueueEditorBlurTimer = 0;
 const aiChatTabManager = createAiChatTabManager(() => createAiIdempotencyKey());
 const moduleRequestCache = createModuleRequestCache();
 const cachedWorkModules = new Set([
@@ -807,7 +814,7 @@ async function sendQueuedPromptAsSteer(itemId) {
   }
   aiPromptQueue.remove(tab.id, itemId);
   renderAiPromptQueue();
-  toast("已将排队 Prompt 发送为引导");
+  toast("已将排队 Prompt 立即引导");
 }
 
 function sendQueuedPromptNow(itemId) {
@@ -831,6 +838,144 @@ function flushNextQueuedPrompt(tab) {
   void sendAiWithOptions();
 }
 
+function clearAiPromptQueueEditorState(itemId = null) {
+  if (!itemId || aiPromptQueueEditorState?.itemId === itemId) aiPromptQueueEditorState = null;
+  if (aiPromptQueueEditorBlurTimer) {
+    window.clearTimeout(aiPromptQueueEditorBlurTimer);
+    aiPromptQueueEditorBlurTimer = 0;
+  }
+}
+
+function captureAiPromptQueueEditorState() {
+  if (!aiPromptQueueEditorState) return null;
+  const editor = document.querySelector("#ai-prompt-queue-list .ai-prompt-queue-editor");
+  if (!(editor instanceof HTMLTextAreaElement)) return aiPromptQueueEditorState;
+  const itemId = editor.closest("[data-queue-id]")?.dataset.queueId;
+  if (!itemId || itemId !== aiPromptQueueEditorState.itemId) return aiPromptQueueEditorState;
+  return {
+    itemId,
+    value: editor.value,
+    selectionStart: editor.selectionStart,
+    selectionEnd: editor.selectionEnd
+  };
+}
+
+function commitAiPromptQueueEdit(itemId, nextValue = null, { render = true } = {}) {
+  const tab = activeAiChatTab();
+  if (!tab || !itemId) return false;
+  const item = aiPromptQueue.list(tab.id).find((entry) => entry.id === itemId);
+  if (!item) {
+    clearAiPromptQueueEditorState(itemId);
+    return false;
+  }
+  const value = nextValue == null ? queuedPromptEditContent(item) : nextValue;
+  if (value === queuedPromptEditContent(item)) {
+    clearAiPromptQueueEditorState(itemId);
+    if (render) renderAiPromptQueue();
+    return true;
+  }
+  try {
+    aiPromptQueue.update(tab.id, itemId, queuedPromptEditPatch(item, value));
+  } catch (error) {
+    toast(error.message, "error");
+    return false;
+  }
+  clearAiPromptQueueEditorState(itemId);
+  if (render) renderAiPromptQueue();
+  return true;
+}
+
+function beginAiPromptQueueEdit(item) {
+  const tab = activeAiChatTab();
+  if (!tab || !item || (state.work && !canWritePermissionModule(state.work, "ai-chat"))) return;
+  if (aiPromptQueueEditorState && aiPromptQueueEditorState.itemId !== item.id) {
+    const previous = document.querySelector("#ai-prompt-queue-list .ai-prompt-queue-editor");
+    const previousValue = previous instanceof HTMLTextAreaElement ? previous.value : aiPromptQueueEditorState.value;
+    if (!commitAiPromptQueueEdit(aiPromptQueueEditorState.itemId, previousValue)) return;
+  }
+  aiPromptQueueEditorState = {
+    itemId: item.id,
+    value: queuedPromptEditContent(item),
+    selectionStart: 0,
+    selectionEnd: queuedPromptEditContent(item).length
+  };
+  renderAiPromptQueue();
+  const editor = document.querySelector(`#ai-prompt-queue-list [data-queue-id="${CSS.escape(item.id)}"] .ai-prompt-queue-editor`);
+  if (editor instanceof HTMLTextAreaElement) {
+    editor.focus();
+    editor.setSelectionRange(0, editor.value.length);
+  }
+}
+
+function moveAiPromptQueueItem(sourceId, targetId, placeAfter) {
+  const tab = activeAiChatTab();
+  if (!tab || !sourceId || !targetId) return;
+  aiPromptQueue.move(tab.id, sourceId, targetId, placeAfter);
+  renderAiPromptQueue();
+}
+
+function moveAiPromptQueueItemByOffset(itemId, offset) {
+  const tab = activeAiChatTab();
+  if (!tab || !itemId) return;
+  aiPromptQueue.moveByOffset(tab.id, itemId, offset);
+  renderAiPromptQueue();
+}
+
+function bindAiPromptQueueItemDrag(row, item, aiReadOnly, editing) {
+  if (aiReadOnly || editing) {
+    row.draggable = false;
+    row.removeAttribute("aria-grabbed");
+    return;
+  }
+  row.draggable = true;
+  row.setAttribute("aria-grabbed", "false");
+  row.addEventListener("dragstart", (event) => {
+    if (event.target.closest("button, textarea, .ai-prompt-queue-editor")) {
+      event.preventDefault();
+      return;
+    }
+    aiPromptQueueDidDrag = true;
+    event.dataTransfer?.setData("text/plain", aiPromptQueueDragPayload(item.id));
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    row.classList.add("is-dragging");
+    row.setAttribute("aria-grabbed", "true");
+  });
+  row.addEventListener("dragend", () => {
+    row.classList.remove("is-dragging");
+    row.setAttribute("aria-grabbed", "false");
+    listAiPromptQueueDropTargets().forEach((node) => node.classList.remove("is-drag-over", "drop-after"));
+    window.setTimeout(() => { aiPromptQueueDidDrag = false; }, 0);
+  });
+  row.addEventListener("dragover", (event) => {
+    if (!event.dataTransfer?.types.includes("text/plain")) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    const after = event.clientY >= row.getBoundingClientRect().top + row.offsetHeight / 2;
+    listAiPromptQueueDropTargets().forEach((node) => {
+      if (node !== row) node.classList.remove("is-drag-over", "drop-after");
+    });
+    row.classList.toggle("drop-after", after);
+    row.classList.add("is-drag-over");
+  });
+  row.addEventListener("dragleave", (event) => {
+    if (row.contains(event.relatedTarget)) return;
+    row.classList.remove("is-drag-over", "drop-after");
+  });
+  row.addEventListener("drop", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const sourceId = parseAiPromptQueueDragPayload(event.dataTransfer?.getData("text/plain"));
+    const after = row.classList.contains("drop-after");
+    row.classList.remove("is-drag-over", "drop-after");
+        if (!sourceId || sourceId === item.id) return;
+    moveAiPromptQueueItem(sourceId, item.id, after);
+  });
+}
+
+function listAiPromptQueueDropTargets() {
+  return [...document.querySelectorAll("#ai-prompt-queue-list .ai-prompt-queue-item")];
+}
+
 function renderAiPromptQueue() {
   const tab = activeAiChatTab();
   const panel = $("#ai-prompt-queue");
@@ -839,31 +984,98 @@ function renderAiPromptQueue() {
   const items = tab ? aiPromptQueue.list(tab.id) : [];
   const streaming = Boolean(tab && aiRequestManager.hasActive(tab.id));
   const aiReadOnly = Boolean(state.work) && !canWritePermissionModule(state.work, "ai-chat");
+  const editorState = captureAiPromptQueueEditorState();
+  if (editorState && !items.some((item) => item.id === editorState.itemId)) clearAiPromptQueueEditorState(editorState.itemId);
+  const activeEditor = items.some((item) => item.id === (editorState?.itemId ?? aiPromptQueueEditorState?.itemId))
+    ? editorState ?? aiPromptQueueEditorState
+    : null;
+  if (activeEditor) aiPromptQueueEditorState = activeEditor;
+  else if (!items.length) clearAiPromptQueueEditorState();
   panel.classList.toggle("hidden", items.length === 0);
   list.replaceChildren(...items.map((item) => {
+    const editing = Boolean(!aiReadOnly && activeEditor?.itemId === item.id);
     const row = document.createElement("li");
-    row.className = "ai-prompt-queue-item";
+    row.className = `ai-prompt-queue-item${editing ? " is-editing" : ""}`;
     row.dataset.queueId = item.id;
-    const preview = document.createElement("p");
-    preview.className = "ai-prompt-queue-preview";
+    row.title = aiReadOnly ? "" : "拖拽调整顺序；点击文字可编辑";
     const previewText = aiPromptQueuePreview(queuedPromptSteerContent(item) || item.text);
-    preview.textContent = previewText;
-    preview.title = queuedPromptSteerContent(item) || item.text;
+    const fullText = queuedPromptSteerContent(item) || item.text;
+    let preview;
+    if (editing) {
+      preview = document.createElement("textarea");
+      preview.className = "ai-prompt-queue-editor";
+      preview.value = activeEditor.value ?? queuedPromptEditContent(item);
+      preview.rows = Math.min(6, Math.max(1, preview.value.split("\n").length));
+      preview.setAttribute("aria-label", `编辑排队 Prompt：${previewText}`);
+      preview.addEventListener("click", (event) => event.stopPropagation());
+      preview.addEventListener("pointerdown", (event) => event.stopPropagation());
+      preview.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.key === "Escape") {
+          event.preventDefault();
+          clearAiPromptQueueEditorState(item.id);
+          renderAiPromptQueue();
+          return;
+        }
+        if (shouldSendAiPrompt(event)) {
+          event.preventDefault();
+          commitAiPromptQueueEdit(item.id, preview.value);
+        }
+      });
+      preview.addEventListener("blur", () => {
+        aiPromptQueueEditorBlurTimer = window.setTimeout(() => {
+          aiPromptQueueEditorBlurTimer = 0;
+          if (aiPromptQueueEditorState?.itemId !== item.id) return;
+          if (document.activeElement?.classList.contains("ai-prompt-queue-editor")) return;
+          commitAiPromptQueueEdit(item.id, preview.value);
+        }, 0);
+      });
+    } else {
+      preview = document.createElement("p");
+      preview.className = "ai-prompt-queue-preview";
+      preview.textContent = previewText;
+      preview.title = aiReadOnly ? fullText : `${fullText}\n点击编辑`;
+      preview.tabIndex = aiReadOnly ? -1 : 0;
+      preview.setAttribute("role", "button");
+      preview.setAttribute("aria-label", `编辑排队 Prompt：${previewText}`);
+      const startEdit = (event) => {
+        if (aiReadOnly || aiPromptQueueDidDrag) return;
+        event.preventDefault();
+        beginAiPromptQueueEdit(item);
+      };
+      preview.addEventListener("click", startEdit);
+      preview.addEventListener("keydown", (event) => {
+        if (event.altKey && ["ArrowUp", "ArrowDown"].includes(event.key)) {
+          event.preventDefault();
+          moveAiPromptQueueItemByOffset(item.id, event.key === "ArrowDown" ? 1 : -1);
+          return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          startEdit(event);
+        }
+      });
+    }
     const actions = document.createElement("div");
     actions.className = "ai-prompt-queue-actions";
     const primary = document.createElement("button");
     primary.type = "button";
+    const flushEditorBeforeAction = () => {
+      if (!(preview instanceof HTMLTextAreaElement)) return;
+      commitAiPromptQueueEdit(item.id, preview.value, { render: false });
+    };
     if (streaming) {
       primary.className = "ai-prompt-queue-steer";
-      primary.textContent = "发送为引导";
+      primary.textContent = "立即引导";
       primary.disabled = aiReadOnly || !canSendQueuedPromptAsSteer(item, true);
-      primary.setAttribute("aria-label", `将排队 Prompt 发送为引导：${previewText}`);
+      primary.setAttribute("aria-label", `立即引导排队 Prompt：${previewText}`);
+      primary.addEventListener("pointerdown", flushEditorBeforeAction);
       primary.addEventListener("click", () => { void sendQueuedPromptAsSteer(item.id); });
     } else {
       primary.className = "ai-prompt-queue-send";
       primary.textContent = "现在发送";
       primary.disabled = aiReadOnly;
       primary.setAttribute("aria-label", `现在发送排队 Prompt：${previewText}`);
+      primary.addEventListener("pointerdown", flushEditorBeforeAction);
       primary.addEventListener("click", () => sendQueuedPromptNow(item.id));
     }
     const remove = document.createElement("button");
@@ -873,12 +1085,23 @@ function renderAiPromptQueue() {
     remove.textContent = "×";
     remove.addEventListener("click", () => {
       aiPromptQueue.remove(tab.id, item.id);
+      clearAiPromptQueueEditorState(item.id);
       renderAiPromptQueue();
     });
     actions.append(primary, remove);
     row.append(preview, actions);
+    bindAiPromptQueueItemDrag(row, item, aiReadOnly, editing);
     return row;
   }));
+  if (activeEditor) {
+    const editor = list.querySelector(`[data-queue-id="${CSS.escape(activeEditor.itemId)}"] .ai-prompt-queue-editor`);
+    if (editor instanceof HTMLTextAreaElement) {
+      const start = Number.isInteger(activeEditor.selectionStart) ? activeEditor.selectionStart : editor.value.length;
+      const end = Number.isInteger(activeEditor.selectionEnd) ? activeEditor.selectionEnd : editor.value.length;
+      editor.focus();
+      editor.setSelectionRange(start, end);
+    }
+  }
 }
 
 function beginAiConversationNavigation(reason, action = "切换会话") {
