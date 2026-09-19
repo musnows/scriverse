@@ -670,6 +670,7 @@ type AiConversationMessageInput = {
     reasoningContent?: string;
     anthropicContent?: unknown[];
     chatImageAttachmentIds?: string[];
+    kind?: "steer";
   };
 };
 

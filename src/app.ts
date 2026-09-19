@@ -3844,6 +3844,19 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const permissions = requestPermissions(request, String(conversation.workId));
     data(response, redactAiConversationMessage(message, permissions), 201);
   });
+  app.post("/api/ai-conversations/:conversationId/steer", (request, response) => {
+    const input = parse(z.object({
+      content: nonEmpty.max(100_000)
+    }).strict(), request.body ?? {});
+    const conversation = store.getAiConversationSummary(request.params.conversationId);
+    const workId = String(conversation.workId);
+    const permissions = requestPermissions(request, workId);
+    if (!canWriteWorkModule(permissions, "ai-chat")) {
+      throw new AppError(403, "WORK_MODULE_WRITE_DENIED", "你没有使用创作助手的权限");
+    }
+    const entry = ai.enqueueSteer(workId, request.params.conversationId, input.content);
+    data(response, { ...entry, status: "pending" }, 202);
+  });
   app.post("/api/ai-conversations/:conversationId/context/prepare", async (request, response) => {
     const input = parse(z.object({
       modelId: identifier.optional(),
@@ -4340,6 +4353,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       touchStreamLease();
       if (!response.writableEnded && !response.destroyed) response.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
     };
+    let releaseSteer = (): void => undefined;
     try {
       if (!existingRequest) {
         preparedChatImageAttachments = await ai.prepareChatImageAttachments(
@@ -4462,6 +4476,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           questionId: pendingQuestion.id
         });
       }
+      releaseSteer = ai.steerMailbox.begin(conversationId);
       const result = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: resolvedInstruction,
@@ -4473,6 +4488,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),
         onProcessStep: (step) => sendEvent("process_step", step),
         onContextCompacted: (event) => sendEvent("context_compacted", event),
+        onSteer: (event) => sendEvent("steer", {
+          message: redactAiConversationMessage(event.message, permissions),
+          applied: true
+        }),
         conversationId,
         excludeConversationMessageId: currentMessageId,
         ...(currentMessageId ? { assistantMessageRequestId: `assistant:${currentMessageId}` } : {}),
@@ -4526,6 +4545,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         sendEvent("error", publicAiStreamError(error));
       }
     } finally {
+      releaseSteer();
       stopStreamHeartbeat();
       if (streamRequestId && !streamRequestFinished && !stopping) {
         store.finishAiConversationStreamRequest(streamRequestId, "cancelled", "stream_closed");

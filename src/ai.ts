@@ -85,6 +85,13 @@ import {
 import type { AiWritePlanManager, AiWriteToolId, AnalysisTaskInput, ResolvedAnalysisTaskInput } from "./ai-write-plans.js";
 import { AI_WRITE_TOOL_IDS, aiWritePlanOperationToolSchemas, askAiUserQuestionInputSchema } from "./ai-write-plans.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
+import {
+  AiStreamSteerMailbox,
+  formatAiSteerInstruction,
+  isAiSteerRefreshError,
+  createAiSteerRefreshError,
+  type AiSteerEntry
+} from "./ai-stream-steer.js";
 import { AppError, notFound } from "./errors.js";
 import {
   assertOfficialGoogleVertexBaseUrl,
@@ -555,6 +562,7 @@ type GenerateInput = {
   runtime?: DesktopLocalAiGenerateRuntime;
   toolContinuation?: QuestionToolContinuation;
   onPrepared?: (contextUsage: Record<string, unknown>) => void;
+  onSteer?: (event: { id: string; content: string; message: Record<string, unknown> }) => void;
   im?: ImGenerationPrompt;
   retryPolicy?: Partial<AiRetryPolicy>;
   callTaskType?: string;
@@ -3339,10 +3347,19 @@ export class AiManager {
   private readonly remoteMcp: RemoteMcpManager;
   // 可写工具与用户提问的审批引擎：由应用装配层注入（app.ts），默认未注入 = 功能整体不可用。
   private aiWritePlanManager: AiWritePlanManager | null = null;
+  readonly steerMailbox = new AiStreamSteerMailbox();
 
   /** 注入 AI 写入审批管理器；注入后 propose_write_plan / ask_user_question 才可能被启用。 */
   attachWritePlanManager(manager: AiWritePlanManager): void {
     this.aiWritePlanManager = manager;
+  }
+
+  enqueueSteer(workId: string, conversationId: string, content: string): AiSteerEntry {
+    const conversation = this.store.getAiConversationSummary(conversationId);
+    if (String(conversation.workId) !== workId) {
+      throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    }
+    return this.steerMailbox.enqueue(conversationId, content);
   }
 
   constructor(
@@ -6350,12 +6367,13 @@ export class AiManager {
     const processStartedAt = process.hrtime.bigint();
     let persistedConversationMessage: Record<string, unknown> | null = null;
     let streamedConversationContent = "";
+    let assistantPersistRequestId = input.assistantMessageRequestId;
     const persistStreamDelta = (delta: string): void => {
-      if (input.conversationId && input.assistantMessageRequestId && delta.length > 0) {
+      if (input.conversationId && assistantPersistRequestId && delta.length > 0) {
         streamedConversationContent += delta;
         persistedConversationMessage = this.store.upsertAiConversationAssistantMessage(
           input.conversationId,
-          input.assistantMessageRequestId,
+          assistantPersistRequestId,
           streamedConversationContent
         );
       }
@@ -6363,13 +6381,32 @@ export class AiManager {
     };
     let generated: GenerateResult;
     try {
-      generated = await this.generate({ ...effectiveInput, taskType: "chat" }, persistStreamDelta);
+      generated = await this.generate({
+        ...effectiveInput,
+        taskType: "chat",
+        onSteer: (event) => {
+          if (input.conversationId && assistantPersistRequestId && streamedConversationContent.length > 0) {
+            persistedConversationMessage = this.store.upsertAiConversationAssistantMessage(
+              input.conversationId,
+              assistantPersistRequestId,
+              streamedConversationContent,
+              {},
+              true
+            );
+          }
+          assistantPersistRequestId = input.excludeConversationMessageId
+            ? `assistant:${input.excludeConversationMessageId}:after:${event.id}`
+            : `assistant:steer:${event.id}`;
+          streamedConversationContent = "";
+          input.onSteer?.(event);
+        }
+      }, persistStreamDelta);
     } catch (error) {
-      if (persistedConversationMessage && input.conversationId && input.assistantMessageRequestId) {
+      if (persistedConversationMessage && input.conversationId && assistantPersistRequestId) {
         const interruptionCode = error instanceof AppError ? error.code : "AI_STREAM_FAILED";
         persistedConversationMessage = this.store.upsertAiConversationAssistantMessage(
           input.conversationId,
-          input.assistantMessageRequestId,
+          assistantPersistRequestId,
           streamedConversationContent,
           { interrupted: true, interruptionCode },
           true
@@ -6408,10 +6445,10 @@ export class AiManager {
         ? streamedConversationContent
         : "已向你提出问题，等待回答后继续。";
       if (!streamedConversationContent.trim()) persistStreamDelta(suspendedContent);
-      const conversationMessage = input.conversationId && input.assistantMessageRequestId
+      const conversationMessage = input.conversationId && assistantPersistRequestId
         ? this.store.upsertAiConversationAssistantMessage(
           input.conversationId,
-          input.assistantMessageRequestId,
+          assistantPersistRequestId,
           suspendedContent,
           generatedMessageMetadata,
           true
@@ -6432,11 +6469,13 @@ export class AiManager {
         ...(conversationMessage ? { conversationMessage } : {})
       };
     }
-    const conversationMessage = input.conversationId && input.assistantMessageRequestId
+    const conversationMessage = input.conversationId && assistantPersistRequestId
       ? this.store.upsertAiConversationAssistantMessage(
         input.conversationId,
-        input.assistantMessageRequestId,
-        generated.content,
+        assistantPersistRequestId,
+        assistantPersistRequestId === input.assistantMessageRequestId
+          ? generated.content
+          : streamedConversationContent,
         {
           ...generatedMessageMetadata,
           ...(activeWritingSkillName && !generated.toolCallLimit ? { activeSkills: [activeWritingSkillName] } : {}),
@@ -10500,9 +10539,20 @@ export class AiManager {
                 }
               }
               const controller = new AbortController();
+              const steerRefreshController = new AbortController();
+              const detachSteerRefresh = input.conversationId && input.taskType === "chat"
+                ? this.steerMailbox.subscribe(input.conversationId, steerRefreshController)
+                : () => undefined;
               const forwardAbort = (): void => controller.abort(input.signal?.reason);
+              const forwardSteerRefresh = (): void => {
+                if (!controller.signal.aborted) {
+                  controller.abort(steerRefreshController.signal.reason ?? createAiSteerRefreshError());
+                }
+              };
               if (input.signal?.aborted) forwardAbort();
               else input.signal?.addEventListener("abort", forwardAbort, { once: true });
+              if (steerRefreshController.signal.aborted) forwardSteerRefresh();
+              else steerRefreshController.signal.addEventListener("abort", forwardSteerRefresh, { once: true });
               const streamWatchdog = streamResponse
                 ? new InteractiveStreamIdleWatchdog(controller, this.interactiveStreamIdleTimeoutMs)
                 : null;
@@ -10578,6 +10628,9 @@ export class AiManager {
                   }
                   throw interactiveStreamRequestCancelledError();
                 }
+                if (streamResponse && !input.signal?.aborted && isAiSteerRefreshError(controller.signal.reason)) {
+                  throw createAiSteerRefreshError();
+                }
                 if (streamWatchdog?.failure) throw streamWatchdog.failure;
                 if (streamResponse && !responseReceived) {
                   throw new AppError(502, "AI_STREAM_NETWORK_ERROR", "AI 上游流连接失败，尚未收到首个事件");
@@ -10587,6 +10640,7 @@ export class AiManager {
                 if (timeout) clearTimeout(timeout);
                 streamWatchdog?.dispose();
                 input.signal?.removeEventListener("abort", forwardAbort);
+                detachSteerRefresh();
               }
             }, input.beforeRequest);
             logger.info("ai.call.attempt_completed", {
@@ -10655,6 +10709,22 @@ export class AiManager {
               throw lastFailure;
             }
           } catch (error) {
+            if (isAiSteerRefreshError(error)) {
+              const parsed: CompletionPayload = {
+                choices: [{
+                  finish_reason: "stop",
+                  message: { content: streamedRoundContent || null }
+                }]
+              };
+              completionDelivery.set(parsed, streamResponse ? "sse" : "json");
+              if (streamResponse && purpose === "generation" && streamedRoundContent.length > 0) {
+                streamedContent += streamedRoundContent;
+              }
+              traceAttempt.completedAt = now();
+              traceAttempt.status = "completed";
+              saveTrace();
+              return parsed;
+            }
             lastFailure = error;
             if (requestAttemptLimit !== null && !failureCounted) requestFailureCount += 1;
             if (error instanceof AppError && error.code === "AI_STREAM_NETWORK_ERROR") {
@@ -10857,6 +10927,37 @@ export class AiManager {
       let suspendedQuestionId: string | null = null;
       let toolCallLimit: GenerateResult["toolCallLimit"];
       let toolCallLimitMessage = "";
+      const commitAssistantChoice = (): void => {
+        if (!choice?.message || choice.message.tool_calls?.length) return;
+        const content = typeof choice.message.content === "string" ? choice.message.content : "";
+        if (!content.trim() && !choice.message.reasoning_content) return;
+        completionMessages.push({
+          role: "assistant",
+          content: content || null,
+          reasoning_content: choice.message.reasoning_content ?? null
+        });
+      };
+      const applyPendingSteers = (): boolean => {
+        if (!input.conversationId || input.taskType !== "chat") return false;
+        const pending = this.steerMailbox.drain(input.conversationId);
+        if (!pending.length) return false;
+        commitAssistantChoice();
+        for (const steer of pending) {
+          const message = this.store.addAiConversationMessage(input.conversationId, {
+            role: "user",
+            content: steer.content,
+            requestId: `steer:${steer.id}`,
+            metadata: { kind: "steer" }
+          });
+          completionMessages.push({
+            role: "user",
+            content: formatAiSteerInstruction(steer.content)
+          });
+          input.onSteer?.({ id: steer.id, content: steer.content, message });
+        }
+        return true;
+      };
+      generationTurn: for (;;) {
       while (choice?.message?.tool_calls?.length) {
         const round = toolRound + 1;
         recordChoiceProcess(payload, round, true);
@@ -10991,9 +11092,15 @@ export class AiManager {
           await compactToolContext(currentRoundMessages, round);
         }
         toolRound += 1;
-        if (suspendedQuestionId) break;
+        if (suspendedQuestionId) break generationTurn;
+        applyPendingSteers();
         payload = await requestCompletion("auto");
         choice = payload.choices?.[0];
+      }
+      if (suspendedQuestionId || toolCallLimit) break;
+      if (!applyPendingSteers()) break;
+      payload = await requestCompletion("auto");
+      choice = payload.choices?.[0];
       }
       if (!suspendedQuestionId && !toolCallLimit) recordChoiceProcess(payload, toolRound + 1, false);
       const finalContent = suspendedQuestionId ? "" : toolCallLimitMessage || (choice?.message?.content ?? "");
