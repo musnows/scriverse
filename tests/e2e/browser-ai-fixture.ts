@@ -102,7 +102,9 @@ const mockAi = createServer(async (request, response) => {
     });
     response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "北港夜色铺开。" } }] })}\n\n`);
     const keepAliveTimer = setInterval(() => {
-      if (!response.destroyed && !response.writableEnded) response.write(": keepalive\n\n");
+      if (!response.destroyed && !response.writableEnded) {
+        response.write(`data: ${JSON.stringify({ choices: [{ delta: {} }] })}\n\n`);
+      }
     }, 500);
     const stop = () => clearInterval(keepAliveTimer);
     request.once("aborted", stop);
