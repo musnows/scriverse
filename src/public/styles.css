@@ -3287,16 +3287,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-prompt-reference button { width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font: 14px/1 var(--font-latin), monospace; }
 .ai-prompt-reference button:hover, .ai-prompt-reference button:focus-visible { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .prompt-composer-actions { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; align-items: center; }
-.prompt-composer.is-streaming .ai-prompt { padding-right: 128px; }
-.ai-stop-button { display: grid; flex: 0 0 24px; place-items: center; width: 24px; min-width: 24px; min-height: 24px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }
-.ai-stop-button:hover, .ai-stop-button:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: 0; }
-.ai-stop-button:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
-.ai-stop-button:disabled { cursor: wait; opacity: .56; }
-.ai-stop-button.hidden { display: none; }
-.ai-stop-button-icon { width: 12px; height: 12px; fill: currentColor; stroke: none; }
 @media (max-width: 540px) {
   .prompt-options { grid-template-columns: 1fr 1fr; }
-  .prompt-composer.is-streaming .ai-prompt { padding-right: 10px; padding-bottom: 64px; }
   .ai-prompt-queue-item { grid-template-columns: minmax(0, 1fr); }
   .ai-prompt-queue-actions { justify-content: flex-end; flex-wrap: wrap; }
 }

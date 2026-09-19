@@ -39,8 +39,8 @@ import {
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260822-ai-model-thinking-label-v3&feature=ai-provider-responses-v1&feature=semantic-search-v6";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260822-private-ai-endpoint-hint-v1";
-import { shouldActivateAiSendControl, shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260919-ai-send-mode-v1";
-import { aiSendModeAction, normalizeAiSendMode, readStoredAiSendMode, writeStoredAiSendMode } from "/ai-send-mode.js?v=20260919-ai-send-mode-v1";
+import { shouldActivateAiSendControl, shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260919-ai-send-mode-v2";
+import { aiSendModeAction, normalizeAiSendMode, readStoredAiSendMode, writeStoredAiSendMode } from "/ai-send-mode.js?v=20260919-ai-send-mode-v2";
 import {
   aiPromptQueueDragPayload,
   aiPromptQueuePreview,
@@ -549,7 +549,6 @@ function applyWorkAccessMode() {
     state.dirty = false;
   }
   applyChapterEditorMode();
-  $("#ai-stop").classList.toggle("permission-hidden", aiReadOnly);
   syncAiSendModeControl();
 }
 
@@ -719,8 +718,12 @@ function syncAiSendModeControl() {
   const aiReadOnly = Boolean(state.work) && !canWritePermissionModule(state.work, "ai-chat");
   select.disabled = aiReadOnly;
   select.title = mode === "steer"
-    ? "引导发送：生成中点击发送会立即作用于当前执行流，不会打断本轮"
-    : "排队发送：生成中点击发送会加入队列，当前回复结束后按顺序发送，不会打断正在执行的回复";
+    ? "引导发送：生成中再发送会立即作用于当前执行流，不会打断本轮。空输入时发送键用于终止"
+    : "排队发送：生成中再发送会加入队列，当前回复结束后按顺序发送，不会打断正在执行的回复。空输入时发送键用于终止";
+}
+
+function aiComposerHasSendablePrompt() {
+  return Boolean(queuedPromptSteerContent(captureAiPromptComposer()));
 }
 
 function syncAiRequestControls() {
@@ -729,29 +732,30 @@ function syncAiRequestControls() {
   const sending = aiRequestManager.hasActive(activeTabId) && !continuingQuestion;
   const switching = aiConversationNavigationPending !== null;
   const button = $("#ai-send");
-  const stopButton = $("#ai-stop");
-  const sendAction = aiSendModeAction(aiComposerSendMode(), sending);
-  const stateName = sendAction === "queue" || sendAction === "steer"
+  const sendAction = aiSendModeAction(aiComposerSendMode(), sending, aiComposerHasSendablePrompt());
+  const stateName = sendAction === "queue" || sendAction === "steer" || sendAction === "stop"
     ? sendAction
     : (switching || continuingQuestion) ? "switching" : "send";
-  const label = sendAction === "queue"
-    ? "排队发送"
-    : sendAction === "steer" ? "引导发送"
-      : continuingQuestion ? "AI 正在根据回答继续处理"
-        : switching ? "正在切换对话" : "发送消息";
+  const label = sendAction === "stop"
+    ? "终止当前回复"
+    : sendAction === "queue"
+      ? "排队发送"
+      : sendAction === "steer" ? "引导发送"
+        : continuingQuestion ? "AI 正在根据回答继续处理"
+          : switching ? "正在切换对话" : "发送消息";
   button.disabled = switching || continuingQuestion;
   button.dataset.state = stateName;
-  button.classList.toggle("is-stop", false);
+  button.classList.toggle("is-stop", sendAction === "stop");
   button.classList.toggle("is-queue", sendAction === "queue");
   button.setAttribute("aria-label", label);
-  button.title = sendAction === "queue"
-    ? "排队发送，当前回复结束后按顺序发送，不会打断正在执行的回复"
-    : sendAction === "steer"
-      ? "引导发送，立即作用于当前执行流，不会打断本轮"
-      : label;
+  button.title = sendAction === "stop"
+    ? "终止当前回复，排队 Prompt 仍会保留"
+    : sendAction === "queue"
+      ? "排队发送，当前回复结束后按顺序发送，不会打断正在执行的回复"
+      : sendAction === "steer"
+        ? "引导发送，立即作用于当前执行流，不会打断本轮"
+        : label;
   button.innerHTML = aiSendButtonIconMarkup(stateName === "steer" ? "send" : stateName);
-  stopButton.disabled = switching || continuingQuestion;
-  stopButton.classList.toggle("hidden", !sending);
   $(".prompt-composer")?.classList.toggle("is-streaming", sending);
   syncAiSendModeControl();
   syncAiTaskOptions();
@@ -766,7 +770,7 @@ function cancelActiveAiRequest(reason) {
   return cancelled;
 }
 
-function activateAiSendControl() {
+function submitAiComposerPrompt() {
   const tab = activeAiChatTab();
   if (aiRequestManager.hasActive(tab?.id)) {
     if (aiComposerSendMode() === "steer") {
@@ -777,6 +781,15 @@ function activateAiSendControl() {
     return;
   }
   void sendAi();
+}
+
+function activateAiSendControl() {
+  const tab = activeAiChatTab();
+  if (aiRequestManager.hasActive(tab?.id) && !aiComposerHasSendablePrompt()) {
+    activateAiStopControl();
+    return;
+  }
+  submitAiComposerPrompt();
 }
 
 function activateAiStopControl() {
@@ -801,7 +814,7 @@ function queueActiveComposerPrompt() {
   }
   clearAiPromptComposer({ collapseScenePanel: Boolean(snapshot.sceneDirection) });
   persistActiveAiChatTab();
-  renderAiPromptQueue();
+  syncAiRequestControls();
   toast("已加入排队，当前回复结束后发送");
   $("#ai-prompt").focus();
 }
@@ -830,6 +843,7 @@ async function sendActiveComposerAsSteer() {
     return toast(error.message, "error");
   }
   clearAiPromptComposer({ collapseScenePanel: Boolean(snapshot.sceneDirection) });
+  syncAiRequestControls();
   toast("已发送执行流引导");
   $("#ai-prompt").focus();
 }
@@ -21505,6 +21519,7 @@ $("#module-create-button").addEventListener("click", () => ({ drafts: openDraftD
     $(field)?.addEventListener("input", () => {
       syncAiSceneComposer();
       persistActiveAiChatTab();
+      syncAiRequestControls();
     });
   }
   $("#ai-attachment-input").addEventListener("change", (event) => {
@@ -21514,6 +21529,7 @@ $("#module-create-button").addEventListener("click", () => ({ drafts: openDraftD
 $("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
   setAiContextMeter(null);
+  syncAiRequestControls();
   const textBeforeCursor = aiPromptTextBeforeCursor();
   if ($("#ai-task").value !== "roleplay" && findAiSkillCommand(textBeforeCursor)) return;
   if (!findAiMention(textBeforeCursor)) return;
@@ -21922,7 +21938,6 @@ $("#ai-context-meter").addEventListener("click", () => {
 $("#ai-context-popover-close").addEventListener("click", () => setAiContextDistributionVisible(false));
 $("#ai-citation-popover-close").addEventListener("click", () => closeAiCitationPopover({ restoreFocus: true }));
 $("#ai-send").addEventListener("click", activateAiSendControl);
-$("#ai-stop").addEventListener("click", activateAiStopControl);
 $("#ai-send-mode").addEventListener("change", (event) => {
   writeStoredAiSendMode(localStorage, event.currentTarget.value);
   syncAiRequestControls();
@@ -22273,7 +22288,7 @@ $("#ai-prompt").addEventListener("keydown", (event) => {
   }
   if (shouldActivateAiSendControl(event)) {
     event.preventDefault();
-    if (!$("#ai-send").disabled) activateAiSendControl();
+    if (!$("#ai-send").disabled) submitAiComposerPrompt();
   }
 });
 $(".quick-actions").addEventListener("click", (event) => {

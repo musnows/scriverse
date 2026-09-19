@@ -24,7 +24,8 @@ export function writeStoredAiSendMode(storage, value) {
   return normalized;
 }
 
-export function aiSendModeAction(mode, streaming) {
+export function aiSendModeAction(mode, streaming, hasComposerContent = true) {
   if (!streaming) return "send";
+  if (!hasComposerContent) return "stop";
   return normalizeAiSendMode(mode) === AI_SEND_MODE_STEER ? "steer" : "queue";
 }

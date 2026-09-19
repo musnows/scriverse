@@ -22,14 +22,15 @@ describe("AI 策略栏排队与执行流引导 UI", () => {
     expect(page).not.toContain("ai-prompt-queue-header");
     expect(page).not.toContain('id="ai-steer"');
     expect(page).not.toContain("ai-steer-button");
+    expect(page).not.toContain('id="ai-stop"');
+    expect(page).not.toContain("ai-stop-button");
     expect(page).toContain('id="ai-send-mode" aria-label="发送方式"');
     expect(page).toContain('<option value="queue">排队发送</option>');
     expect(page).toContain('<option value="steer">引导发送</option>');
-    expect(page).toContain('id="ai-stop" class="ai-stop-button hidden"');
     expect(page).toContain("Enter 按策略栏发送方式发送，Shift+Enter 换行");
-    expect(page).toContain("&feature=ai-send-mode-v1");
+    expect(page).toContain("&feature=ai-send-mode-v2");
     expect(application).toContain("/ai-prompt-queue.js?v=20260919-ai-prompt-queue-v2");
-    expect(application).toContain("/ai-send-mode.js?v=20260919-ai-send-mode-v1");
+    expect(application).toContain("/ai-send-mode.js?v=20260919-ai-send-mode-v2");
     expect(application).toContain("function queueActiveComposerPrompt()");
     expect(application).toContain("function sendQueuedPromptAsSteer(itemId)");
     expect(application).toContain("function sendActiveComposerAsSteer()");
@@ -42,17 +43,19 @@ describe("AI 策略栏排队与执行流引导 UI", () => {
     expect(application).toContain("ai-prompt-queue-editor");
     expect(application).toContain("aiPromptQueue.update(tab.id, itemId, queuedPromptEditPatch(item, value))");
     expect(application).toContain("aiPromptQueue.move(tab.id, sourceId, targetId, placeAfter)");
-    expect(application).toContain("const sendAction = aiSendModeAction(aiComposerSendMode(), sending)");
+    expect(application).toContain("const sendAction = aiSendModeAction(aiComposerSendMode(), sending, aiComposerHasSendablePrompt())");
     expect(application).not.toContain('const stateName = sending ? "stop"');
-    expect(application).toContain("if (aiComposerSendMode() === \"steer\")");
+    expect(application).toContain("if (aiRequestManager.hasActive(tab?.id) && !aiComposerHasSendablePrompt())");
+    expect(application).toContain("function submitAiComposerPrompt()");
     expect(application).toContain("select.disabled = aiReadOnly;");
     expect(application).toContain("queueActiveComposerPrompt()");
-    expect(application).toContain("$(\"#ai-stop\").addEventListener(\"click\", activateAiStopControl);");
+    expect(application).toContain("$(\"#ai-send\").addEventListener(\"click\", activateAiSendControl);");
+    expect(application).not.toContain("$(\"#ai-stop\")");
     expect(application).not.toContain("$(\"#ai-steer\")");
     expect(application).not.toContain("promoteNow");
     expect(keyboard).toContain("export function shouldActivateAiSendControl(event)");
     expect(keyboard).not.toContain("shouldSteerAiPrompt");
-    expect(sendMode).toContain("export function aiSendModeAction(mode, streaming)");
+    expect(sendMode).toContain("export function aiSendModeAction(mode, streaming, hasComposerContent = true)");
     expect(styles).toContain(".ai-prompt-queue ");
     expect(styles).toContain(".ai-prompt-queue-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;");
     expect(styles).toContain(".ai-prompt-queue-item.is-drag-over");
@@ -60,12 +63,13 @@ describe("AI 策略栏排队与执行流引导 UI", () => {
     expect(styles).not.toContain(".ai-prompt-queue-header");
     expect(styles).not.toContain(".ai-prompt-queue-count");
     expect(styles).not.toContain(".ai-steer-button");
-    expect(styles).toContain(".ai-stop-button ");
+    expect(styles).not.toContain(".ai-stop-button");
+    expect(styles).toContain(".ai-send-button.is-stop .ai-send-button-icon");
     expect(styles).toContain(".ai-send-button.is-queue");
     expect(styles).toContain(".user-message.is-steer");
     expect(styles).toContain(".prompt-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));");
     expect(styles).toContain("@media (max-width: 540px)");
-    expect(styles).toContain(".prompt-composer.is-streaming .ai-prompt { padding-right: 128px; }");
+    expect(styles).not.toContain(".prompt-composer.is-streaming .ai-prompt { padding-right: 128px; }");
     expect(styles).not.toContain("emoji");
   });
 
@@ -92,7 +96,8 @@ describe("AI 策略栏排队与执行流引导 UI", () => {
       expect(page.text).toContain('id="ai-send-mode"');
       expect(page.text).not.toContain('id="ai-prompt-queue-title"');
       expect(page.text).not.toContain('id="ai-steer"');
-      expect(page.text).toContain("&feature=ai-send-mode-v1");
+      expect(page.text).not.toContain('id="ai-stop"');
+      expect(page.text).toContain("&feature=ai-send-mode-v2");
     } finally {
       await runtime.close();
     }

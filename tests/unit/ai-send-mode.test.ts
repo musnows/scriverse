@@ -12,6 +12,9 @@ describe("AI 全局发送方式", () => {
     expect(aiSendModeAction("steer", false)).toBe("send");
     expect(aiSendModeAction("queue", true)).toBe("queue");
     expect(aiSendModeAction("steer", true)).toBe("steer");
+    expect(aiSendModeAction("queue", true, false)).toBe("stop");
+    expect(aiSendModeAction("steer", true, false)).toBe("stop");
+    expect(aiSendModeAction("queue", true, true)).toBe("queue");
   });
 
   it("把发送方式记在本地，不把未知值写回去", () => {
